@@ -1,0 +1,73 @@
+# Acceptance catalogue 0.1
+
+Status: planned scenarios, **not tests already run**. Each scenario specifies observable behavior; implementation tests must exercise the behavior rather than mirror individual functions.
+
+P0 validation covers the planning artifacts only. P1 probes, P2 integration tests, P3 UI/MCP tests, and P4/P5 real execution evidence are separate milestones. Every result records software/host versions, environment, exact artifact, outcome, and sanitized evidence.
+
+## 1. Mandatory scenarios
+
+| ID | Given / action | Expected observable result |
+| --- | --- | --- |
+| AC01 | Open project A in each supported harness; resolve workspace, create a draft, then list it from another entry | One logical workspace and the same immutable issue ID are observed; no duplicate project or cross-workspace mutation |
+| AC02 | Missing roots, multiple roots, nested repos, linked worktree, independent same-remote clone, moved root, Windows case/junction variants | Explicit selection/repair where ambiguous; worktrees map only through validated identity; independent clones are not silently collapsed; no unrelated-drive scan |
+| AC03 | Human and lead/PM create parents/tasks, with no assignee or schedule; attempt to set active state during creation | Valid drafts remain `NOT_STARTED`; nullable fields preserved; active-state injection rejected |
+| AC04 | Submit design r1, approve as human, then inspect history and review view | Approval identifies exact revision/hash and human; approved content remains immutable and retrievable |
+| AC05 | Change approved criteria/design or replace a reviewed candidate, then attempt to reuse old approvals | Affected gates are stale and execution/completion is blocked; metadata-only schedule edits preserve relevant artifact approval |
+| AC06 | Claim work with unapproved design, unacknowledged/stale task scope, no assignment, blocked dependency, effective ancestor hold, or missing execution binding | Each attempt fails with named blockers and no lease/run starts; fully ready and acknowledged task succeeds |
+| AC07 | PM proposes children with missing/duplicate criterion mappings and an integration-only criterion | Coverage report distinguishes unmapped/overlapping scope and explicit integration coverage; missing required coverage blocks ready plan |
+| AC08 | Add a cycle/self-edge/cross-workspace blocking dependency, or dispatch a dependent task prematurely | Invalid graph rejected atomically; valid plan preserved; blocked work cannot start; plan amendments expose affected active assignments |
+| AC09 | Create named child, rename parent, search/open old key and direct URL | Exact two-em-dash delimiter and validated suffix; updated rendered prefix; stable ID/key/URL; prior title remains in history |
+| AC10 | Submit worker implementation and attempt to jump directly to QA pass/user acceptance/done or self-approve as lead | Only initial lead review is entered; lead stage is explicit; skipped/unauthorized/self-review transitions rejected |
+| AC11 | Run QA using worker's run/session/credential, then a fresh QA assignment at the exact snapshot | Self-QA rejected; independent QA accepted only with current criterion-level evidence and allowed reviewer identity |
+| AC12 | Lead fails initial/final review, QA fails testing, user rejects delivery; worker claims rework | Correct rejection state/owner/reason preserved for each route; new submission repeats initial lead → QA → final lead gates |
+| AC13 | Attempt hold/abandon/resume/reopen with invalid and valid authority, including active descendants | Unauthorized action denied; valid action records reason, saved state and child effects; run stopping/uncertainty remains visible; resume never restores an expired lease |
+| AC14 | Agent supplies fake human/role fields, calls approval tooling, reuses/revokes an action grant, or submits a batch with one changed digest | No human impersonation/elevation; exact valid grant works only within scope/use/expiry; stale/revoked grants rejected; batch decision cannot silently accept changed items |
+| AC15 | Two workers simultaneously claim the same issue; issue/plan versions also change | Exactly one claim succeeds; stale command fails deterministically; no lost update or double assignment |
+| AC16 | Lease expires/reassigns; old worker renews/submits with stale fence while its process may still run | Stale run cannot advance issue state; old execution is reconciled before replacement; isolated directory not reused while old process is uncertain |
+| AC17 | PM dispatches two independent children through each supported execution adapter, with roles/cwd/budgets | Actual provider IDs and scoped work packets recorded; separate execution directories; statuses reflect actual start/observe/interrupt capability |
+| AC18 | Kill connection/service after external spawn but before acknowledgement, then restart and retry dispatch | Attempt becomes/reconciles from uncertain; no blind duplicate execution; unsupported resume is explicit; operator recovery available when provider lookup is unavailable |
+| AC19 | QA finds a real defect, one blocked check, and one not-run check; worker later fixes it | Reproducible defect linked to task/criterion/snapshot; blocked/not-run are not passes; fresh QA and defect resolution required; residual risk waiver obeys policy |
+| AC20 | Alter artifact manifest, squash/rebase submission, or replace evidence after reviews | Affected review/acceptance digest becomes stale; new candidate checks required; old evidence remains readable |
+| AC21 | Complete Git work with missing/short SHA, branch/PR URL, wrong repository, nonexistent commit, or changed candidate | Closure blocked with specific reason; canonical full final commit and issue mapping required for each changed repo |
+| AC22 | Resolve valid GitHub commit, then experience provider outage before closure; later recover | No invented verification; human acceptance may remain saved with closure blocked; retry closes unchanged accepted snapshot; completed work keeps historical verification timestamp |
+| AC23 | Complete non-Git document/design work, or attempt to switch Git mode to evade commit requirements | Reviewed non-Git mode accepts immutable artifact evidence; mode change after work starts requires human scope approval; no fabricated commit |
+| AC24 | Inspect history after planning, assignment, rejection, rename, acceptance, close, reopen, and export | Stable links and complete actor/reason/time/version/evidence lineage; append-only decisions; paginated history; no raw credentials |
+| AC25 | Queue ready tasks beyond configured active-run cap; dependencies clear; QA waits; budget is reached | Capacity/budget limits enforced, parent wait consumes no worker slot, review can progress, queue/wait owner visible, no hidden model/provider fallback |
+| AC26 | Use workspace tree/list/board/details and update from another entry; disconnect/reconnect the UI | Shared state displayed; updates within NF03 budget when healthy; current snapshot and event cursor recovered; optimistic UI does not invent a committed transition |
+| AC27 | Operate critical create/review/accept/reject flows with keyboard at 1280×720 and 390×844 | Labeled controls, focus/error feedback, no color-only state, no blocked critical action or horizontal loss of evidence/actions |
+| AC28 | Agent requests default brief, list, gaps, and expands evidence using all three hosts | Same semantics in structured/text outputs; <=20 default compact rows; brief meets <=2,000-token recorded budget; legal next actions and precise blockers included |
+| AC29 | Clean documented connection/install for Codex local, Claude Code, and DSH; create/update/read the same test requirement | Recorded versions/transport/configuration; common commands work with real daemon storage; unsupported fields/capabilities fail clearly; no global permission relaxation |
+| AC30 | Open plugin overview/review in each target; inspect embedded capability, browser fallback, and human action attribution | Tested UI mode disclosed per surface; shared service data; human decision cannot be triggered by agent tool call; required missing embedded capability is resolved or explicitly rescoped |
+| AC31 | Start first child, finish all children without parent integration/user acceptance, then satisfy parent guards; also try empty aggregate | Parent aggregation progress consumes no worker slot; completion-ready until guards pass, then done with causal event; empty aggregate never completes vacuously |
+| AC32 | Abandon an in-scope child, approve explicit exclusion/replacement, reopen delivered child, or add child to closed parent | Abandonment does not count as delivery; scope coverage updated with human decision; affected completed parent reopens atomically; closed parent cannot accept a silent new child |
+| AC33 | Back up live data/evidence, restore separately, and run a migration failure/recovery drill | Consistent issue/audit counts, relationships and blob hashes; original installation preserved until explicit switch; matching backup/runtime restores after failed migration |
+| AC34 | Seed missing criteria/assignment/schedule, stale review, blocked dependency, expired lease, uncertain run, absent commit, repeated rejections | Gaps have category, blocking/advisory severity, exact related IDs, age/reason, and concrete next action; no invented productivity metric |
+| AC35 | Replay same command/callback, reuse key with changed input, interrupt transaction, lose event stream, contend for SQLite writes | One committed logical mutation; changed payload conflict; no partial event/state/outbox update; resync correct; bounded busy retry; no false complete |
+| AC36 | Attempt cross-workspace access, path/junction escape, untrusted Origin, CSRF, URL token leakage, malicious rendered Markdown, and public-data export | Rejected/sanitized as appropriate; loopback-only local service; private data/credentials excluded; human/agent scopes separate; same-user OS isolation limits documented |
+| AC37 | Load 10,000 issues/100,000 events; run four concurrent jobs and representative reads/writes | NF01/NF02 budgets met with reported p95/error rates and machine details; no correctness failures hidden by averages |
+| AC38 | Fresh Windows installation, daemon restart, native package install/update, uninstall adapter, restore/reconnect | Reproducible supported setup without developer dependencies; one daemon; local links/data work; adapter removal preserves project records; version/migration constraints explained |
+
+## 2. End-to-end release scenario
+
+Use a disposable GitHub repository and a deliberately small product requirement with two implementation tasks and one parent integration criterion. This scenario is not run against the user's production projects.
+
+1. Lead creates the requirement and design. PM prepares unstarted, initially unassigned tasks. Attempting early execution fails.
+2. Human approves the exact design revision. PM maps coverage, assigns two workers, and dispatches concurrently in isolated worktrees.
+3. Worker A submits a correct candidate. Worker B submits a candidate with a controlled defect that is not merely an asserted fixture pass.
+4. Lead performs initial reviews; independent QA detects B's defect and rejects the correct task/criterion with reproduction evidence.
+5. Worker B fixes a new candidate. Previous review evidence cannot approve it. Initial lead review and fresh QA run again.
+6. Lead performs final reviews. Human accepts exact task snapshots, and Git verification allows task closure.
+7. Parent remains open for integration. Run integration QA at a recorded assembled snapshot, then final lead and human acceptance. The parent completes after all guards pass.
+8. Reopen one child. Verify parent completion is invalidated with history intact. Show how an approved scope change or corrected delivery restores it.
+9. During the run, inject one duplicate callback, one uncertain spawn, and one Git verification outage. Demonstrate recovery without duplicate worker execution or false closure.
+10. Observe/update the same workspace through Codex, Claude Code, and DSH, then restore a backup and verify provenance.
+
+P5 requires each harness to perform a real worker/QA handoff in at least one run of this scenario. A single harness doing all execution while the others only read issues proves tool compatibility, not full execution compatibility. Mixed-harness dispatch is tested for at least one worker-to-QA handoff.
+
+## 3. Required result format
+
+Each phase's evidence summary must include scenario ID, status (`PASS`, `FAIL`, `BLOCKED`, `NOT_RUN`), code/spec commit, exact host/runtime/OS versions, fixture/repository identity, reproduction command or human steps, actual output/artifact references, and remaining limitations.
+
+Sanitize credentials, private paths, account data, and transcripts before public publication. Keep sensitive originals local with content hashes where needed. Do not replace actual output with a description of what should have happened.
+
+P0 completion report distinguishes document validation from runtime testing. P1 records capability probes. P2 uses real database/transaction behavior. P3 tests actual browser/human interactions and MCP contracts. P4/P5 require real runner evidence at exact delivery snapshots. Mock-provider tests are useful for failures but do not prove host integration.
