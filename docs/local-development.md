@@ -17,6 +17,8 @@ Review package lifecycle scripts before enabling any that your npm policy blocks
 
 The default endpoint is `http://127.0.0.1:43170`. The user-scoped data directory is `%LOCALAPPDATA%/AgileDev` on Windows, containing the SQLite database, single-daemon lock, and a private owner descriptor. `AGILEDEV_DATA_DIR` and `AGILEDEV_PORT` override those locations. The descriptor contains an owner credential and must never be committed, shared with agents, or copied into a harness configuration.
 
+The daemon now consumes approved `work_dispatch` records automatically. `AGILEDEV_RUNNER_ENABLED=0` disables execution for a tool-only development session. `AGILEDEV_CONCURRENCY` defaults to 2 and accepts 1–4; `AGILEDEV_MAX_RUN_MS` defaults to 1,800,000 ms per run. These limits apply to coordinator-managed runs and record their effective values on each run. They are elapsed-time limits, not a monetary/token spending cap.
+
 Keep the service running in one terminal; run commands in another. Stop with Ctrl+C. A live daemon lock prevents a second instance. A stale lock can be recovered only when its recorded process no longer exists. Do not delete a live lock to force another writer.
 
 ## Register a workspace and enroll agents
@@ -100,6 +102,27 @@ The doctor can find Codex on PATH or its npm entry, Claude Code inside its Deskt
 
 The service enforces unstarted creation, task title suffixes, exact design approval, task assignment, dependency cycle checks, optimistic versions, idempotent writes, scope acknowledgment, worker lease/fences, initial lead review, artifact hashing, and QA rejection. Artifact reads reject traversal and junction escapes. Human hold/resume/abandon/reopen actions retain their history.
 
-`work_dispatch` creates a durable `QUEUED` intent for the assigned harness. A queue record is not a running agent: the managed runner/coordinator is still being built. `review_submit` deliberately rejects a QA pass until trusted test-run evidence exists. Completion/Git closure is not exposed yet. Future work must implement those real capabilities rather than remove these guards to make a demo pass.
+`work_dispatch` creates a durable `QUEUED` intent for the assigned harness. The coordinator reserves capacity, creates a run-scoped worker credential, prepares an isolated directory, claims the exact approved scope, and launches that harness. A successful provider exit without an authenticated `work_submit` is a failed run, not a delivered task. Submitted files are hashed from the execution directory and remain available for review. Review waits until the producer has stopped; QA pass still requires trusted independent test evidence. Completion/Git closure is not exposed yet.
+
+Git jobs use detached worktrees from the source's committed HEAD; uncommitted source changes are rejected instead of silently dropped. Nested workspace roots remain nested in the worktree. Non-Git jobs use independent copies excluding symlinks, `.git`, `node_modules`, `.agiledev`, and `.env` files. Dependencies are not automatically installed. Execution directories are retained under the private service data directory, and no automatic merge or source-checkout cleanup is performed.
+
+Codex uses native `exec --json` with `workspace-write` and per-invocation AgileDev MCP configuration. Only the AgileDev MCP tool group is explicitly approved; API role/scope checks still apply and human-only commands are absent from the agent tool surface. Claude uses its native print/stream-JSON mode with session-only `acceptEdits` and the scoped MCP configuration. DSH uses its SDK profile with approval forwarding; unanswered approval/user-input requests are denied or cancelled until a human UI is implemented. The DSH headless profile is not used because the inspected runtime disables its authorization plugin there.
+
+DSH honors a paired `AGILEDEV_DSH_PROVIDER` / `AGILEDEV_DSH_MODEL` override. When both are omitted, it reads the SDK profile's declared static `agent-default-model` route without printing the profile or evaluating embedded expressions in this application. An absent, disabled, dynamic, or incomplete route requires explicit configuration; there is no substitute-provider selection. Native adapters inherit their harness authentication and permitted user settings rather than copying credentials or editing global permission modes. This is not hostile-process/connector isolation under a shared OS account.
+
+`run_interrupt` requests a stop and reports `STOPPING` until termination is confirmed. Coordinator loss marks previously starting/running/stopping jobs `UNCERTAIN`, revokes their API credentials, and does not redispatch them. After inspecting and stopping external execution, the human may call `run_reconcile` with the current run version, reason, and `confirmStopped: true`. A still-existing recorded PID blocks that action. The confirmation is an operator attestation that related external work stopped, not an automatic process-tree discovery claim.
+
+## Real execution verification
+
+```powershell
+npm run build
+node dist/cli.js verify-execution codex
+node dist/cli.js verify-execution claude-code
+node dist/cli.js verify-execution dsh
+```
+
+Each command deliberately starts one model-driven worker using existing harness authentication, with a two-minute runtime budget. It creates a disposable Git fixture, test-only design approval, logical worker, queued task, and independent service/worktree. Success requires the actual expected file, authenticated submission into `LEAD_REVIEW`, a provider session ID, and an unchanged source checkout. No QA/human delivery acceptance is fabricated. The command retains its private evidence directory and reports the path. These are functional integration runs and may use provider quota.
+
+The current machine passes Codex and DSH execution verification. Claude Code's standalone runtime reports `Not logged in`; a logged-in Desktop application alone has not supplied CLI authentication. The application records that failure without changing login state or copying Desktop credentials. Full three-harness execution acceptance remains pending.
 
 For every mutation, use a unique `idempotencyKey` and current `expectedVersion`; child creation also requires `expectedParentVersion`. An exact retry returns the committed result with `replayed: true`. Reload after a version conflict. The prototype uses camelCase command fields; mapping/versioning against the earlier illustrative spec examples will be finalized before the command contract is frozen.

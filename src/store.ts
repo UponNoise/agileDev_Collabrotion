@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { Actor, DomainError, Issue, Workspace } from './contracts.js';
+import { Actor, DomainError, Issue, Run, Workspace } from './contracts.js';
 
 export const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export function canonical(value: unknown): string {
@@ -61,6 +61,7 @@ export class Store {
     if (!row) throw new DomainError('UNAUTHENTICATED', 'A valid scoped credential is required', 401);
     return this.get<Actor>('actor', row.actor_id);
   }
+  revokeActor(id: string) { this.db.prepare('DELETE FROM credentials WHERE actor_id=?').run(id); }
   workspace(actor: Actor, id: string): Workspace {
     if (actor.role !== 'human' && !actor.workspaceIds.includes(id)) throw new DomainError('SCOPE_DENIED', 'Workspace is outside credential scope', 403);
     return this.get<Workspace>('workspace', id);
@@ -69,7 +70,13 @@ export class Store {
     this.workspace(actor, workspaceId);
     const issue = this.get<Issue>('issue', id);
     if (issue.workspaceId !== workspaceId) throw new DomainError('SCOPE_DENIED', 'Issue belongs to another workspace', 403);
-    if (actor.role === 'worker' && issue.assignee !== actor.id && !this.list<Issue>('issue', workspaceId).some(child => child.parentId === issue.id && child.assignee === actor.id)) throw new DomainError('SCOPE_DENIED', 'Worker can only access assigned issues and their parent context', 403);
+    const principalId = actor.principalId ?? actor.id;
+    if (actor.runId) {
+      const run = this.get<Run>('run', actor.runId);
+      const assigned = this.get<Issue>('issue', run.issueId);
+      if (run.executionActorId !== actor.id || (issue.id !== assigned.id && issue.id !== assigned.parentId)) throw new DomainError('SCOPE_DENIED', 'Run credential is restricted to its task and parent context', 403);
+    }
+    if (actor.role === 'worker' && issue.assignee !== principalId && !this.list<Issue>('issue', workspaceId).some(child => child.parentId === issue.id && child.assignee === principalId)) throw new DomainError('SCOPE_DENIED', 'Worker can only access assigned issues and their parent context', 403);
     return issue;
   }
   event(workspaceId: string, actor: Actor, operation: string, targetId: string | null, data: unknown) {

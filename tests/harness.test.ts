@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { probeHarness } from '../src/harness.js';
 import { inside } from '../src/workflow.js';
+import { declaredDshRoute, decodeNativeEvent } from '../src/adapters.js';
 
 test('harness probes invoke an executable without a shell and distinguish failure', async () => {
   const good = await probeHarness({ id: 'codex', command: process.execPath, args: [] });
@@ -22,4 +23,20 @@ test('artifact paths cannot escape through traversal or directory junctions', ()
     symlinkSync(outside, join(root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
     assert.throws(() => inside(root, 'link/private.txt'), /escapes/);
   } finally { rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
+});
+
+test('DSH route detection reads the declared profile default without evaluating code or choosing another route', () => {
+  const profile = "- id: agent-default-model\n  name: '@deepseek-ai/dsh-agent-default-model'\n  config:\n    provider: deepseek-official\n    model: 'deepseek-flash'\n- id: tools\n  name: tools\n";
+  assert.deepEqual(declaredDshRoute(profile), { provider: 'deepseek-official', model: 'deepseek-flash' });
+  assert.equal(declaredDshRoute(profile.replace('deepseek-official', '!!js process.env.PROVIDER')), null);
+  assert.equal(declaredDshRoute(profile.replace('  config:', '  disabled: true\n  config:')), null);
+  assert.equal(declaredDshRoute('- id: unrelated\n  config:\n    provider: other\n    model: other'), null);
+});
+
+test('native terminal events distinguish completed work from failure and idle notifications', () => {
+  assert.equal(decodeNativeEvent('codex', { type: 'turn.failed', error: { message: 'Provider rejected request' } }).terminal, 'failed');
+  assert.equal(decodeNativeEvent('claude-code', { type: 'result', is_error: true, subtype: 'error_during_execution', session_id: 'fixture' }).terminal, 'failed');
+  assert.equal(decodeNativeEvent('dsh', { method: 'session.status', params: { status: 'idle' } }).terminal, undefined);
+  assert.equal(decodeNativeEvent('dsh', { method: 'session.event', params: { event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } }).terminal, 'succeeded');
+  assert.equal(decodeNativeEvent('dsh', { method: 'session.event', params: { event: { type: 'turn/end', data: { reason: { kind: 'error' } } } } }).terminal, 'failed');
 });

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { Actor, Design, DomainError, Issue, Operation, Workspace, schemas } from './contracts.js';
+import { Actor, Design, DomainError, Issue, Operation, Run, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 
 const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list']);
@@ -49,7 +49,7 @@ export class Workflow {
       requireRole(actor, 'human', 'lead', 'pm');
       return { connections: s.list('connection', a.workspaceId) };
     }
-    const issues = s.list<Issue>('issue', a.workspaceId).filter(i => actor.role !== 'worker' || i.assignee === actor.id);
+    const issues = s.list<Issue>('issue', a.workspaceId).filter(i => actor.role !== 'worker' || (i.assignee === (actor.principalId ?? actor.id) && (!actor.runId || s.get<Run>('run', actor.runId).issueId === i.id)));
     if (op === 'issue_get') {
       const issue = s.issue(actor, a.workspaceId, a.issueId);
       return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue) };
@@ -63,7 +63,7 @@ export class Workflow {
       requireRole(actor, 'human', 'lead', 'pm');
       return { events: s.db.prepare('SELECT sequence,actor_id AS actorId,operation,target_id AS targetId,data,at FROM events WHERE workspace_id=? AND sequence>? ORDER BY sequence LIMIT ?').all(a.workspaceId, a.after, a.limit).map((r: any) => ({ ...r, data: JSON.parse(r.data) })) };
     }
-    const runs = s.list<any>('run', a.workspaceId).filter(r => actor.role !== 'worker' || r.actorId === actor.id);
+    const runs = s.list<Run>('run', a.workspaceId).filter(r => actor.role !== 'worker' || (r.actorId === (actor.principalId ?? actor.id) && (!actor.runId || r.id === actor.runId)));
     if (op === 'run_list') return { runs: runs.slice(-a.limit).reverse() };
     const run = runs.find(r => r.id === a.runId);
     if (!run) throw new DomainError('NOT_FOUND', 'Run not found', 404);
@@ -124,6 +124,30 @@ export class Workflow {
       return { workspace: w };
     }
     const w = s.workspace(actor, a.workspaceId);
+    if (op === 'run_interrupt' || op === 'run_reconcile') {
+      requireRole(actor, ...(op === 'run_reconcile' ? ['human'] as const : ['human', 'lead', 'pm'] as const));
+      const run = s.get<Run>('run', a.runId);
+      if (run.workspaceId !== w.id) throw new DomainError('SCOPE_DENIED', 'Run belongs to another workspace', 403);
+      if ((run.version ?? 1) !== a.expectedVersion) throw new DomainError('VERSION_CONFLICT', 'Run changed; reload before retrying');
+      if (!(liveRunStates as readonly string[]).includes(run.state)) throw new DomainError('INVALID_TRANSITION', 'Run is already terminal');
+      if (op === 'run_reconcile' && run.state !== 'UNCERTAIN') throw new DomainError('INVALID_TRANSITION', 'Only uncertain execution requires external reconciliation');
+      if (op === 'run_reconcile') {
+        if (run.pid) {
+          let alive = true;
+          try { process.kill(run.pid, 0); } catch (error: any) { if (error.code === 'ESRCH') alive = false; }
+          if (alive) throw new DomainError('RUN_STILL_LIVE', 'Recorded process still exists; inspect and stop the owned execution first');
+        }
+        run.state = 'CANCELLED'; run.finishedAt = new Date(this.now()).toISOString();
+        if (run.executionActorId) s.revokeActor(run.executionActorId);
+        const issue = s.get<Issue>('issue', run.issueId);
+        if (issue.lease?.actorId === run.executionActorId) { issue.lease = null; if (issue.state === 'IN_PROGRESS') issue.state = 'NOT_STARTED'; this.save(actor, 'run_reconciled', issue, { runId: run.id, reason: a.reason }); }
+      } else if (run.state === 'QUEUED') { run.state = 'CANCELLED'; run.finishedAt = new Date(this.now()).toISOString(); }
+      else if (run.state !== 'UNCERTAIN') run.state = 'STOPPING';
+      else throw new DomainError('RUN_UNCERTAIN', 'Reconcile external execution before issuing a new stop request');
+      run.stopReason = a.reason; run.version = (run.version ?? 1) + 1;
+      s.put('run', run, w.id); s.event(w.id, actor, op, run.id, { state: run.state, reason: a.reason });
+      return { run };
+    }
     if (op === 'actor_enroll') {
       requireRole(actor, 'human');
       const enrolled: Actor = { id: randomUUID(), role: a.role, name: a.name, workspaceIds: [w.id], sessionId: randomUUID() };
@@ -150,6 +174,9 @@ export class Workflow {
     }
     const i = s.issue(actor, w.id, a.issueId);
     version(i, a.expectedVersion);
+    if (['issue_assign', 'dependency_add', 'design_set'].includes(op) || (op === 'issue_update' && a.description !== undefined)) {
+      if (s.list<Run>('run', w.id).some(r => (r.issueId === i.id || (op === 'design_set' && s.get<Issue>('issue', r.issueId).parentId === i.id)) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'Reconcile queued, live, or uncertain executions before changing their assignment or scope');
+    }
     if (op === 'issue_update') {
       requireRole(actor, 'human', 'lead', 'pm');
       if (['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('ISSUE_CLOSED', 'Reopen before editing');
@@ -186,7 +213,7 @@ export class Workflow {
       requireRole(actor, 'human', 'lead', 'pm');
       if (i.state !== 'NOT_STARTED' && !i.state.endsWith('REJECTED')) throw new DomainError('ASSIGNMENT_ACTIVE', 'Reconcile active work before reassigning');
       const assigned = s.get<Actor>('actor', a.actorId);
-      if (assigned.role !== 'worker' || !assigned.workspaceIds.includes(w.id)) throw new DomainError('SCOPE_DENIED', 'Assignment requires a worker in this workspace');
+      if (assigned.role !== 'worker' || assigned.runId || !assigned.workspaceIds.includes(w.id)) throw new DomainError('SCOPE_DENIED', 'Assignment requires a logical worker in this workspace');
       i.assignee = assigned.id; i.harness = a.harness; i.lease = null;
       return this.save(actor, op, i);
     }
@@ -211,12 +238,14 @@ export class Workflow {
       if (blockers.length) throw new DomainError('NOT_READY', 'Resolve readiness blockers first', 409, { blockers });
       if (this.design(i)?.id !== a.designId || i.scopeRevision !== a.scopeRevision) throw new DomainError('APPROVAL_STALE', 'Acknowledge the current design and task scope');
       if (op === 'work_dispatch') {
-        if (s.list<any>('run', w.id).some(r => r.issueId === i.id && ['QUEUED', 'STARTING', 'RUNNING', 'STOPPING', 'UNCERTAIN'].includes(r.state))) throw new DomainError('RUN_EXISTS', 'A live or uncertain dispatch already owns this task');
-        const run = { id: randomUUID(), issueId: i.id, workspaceId: w.id, actorId: i.assignee, harness: i.harness, state: 'QUEUED', createdAt: new Date(this.now()).toISOString(), designId: a.designId, scopeRevision: a.scopeRevision };
+        if (s.list<Run>('run', w.id).some(r => r.issueId === i.id && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'A live or uncertain dispatch already owns this task');
+        const run: Run = { id: randomUUID(), issueId: i.id, workspaceId: w.id, actorId: i.assignee!, harness: i.harness!, state: 'QUEUED', version: 1, createdAt: new Date(this.now()).toISOString(), designId: a.designId, scopeRevision: a.scopeRevision };
         s.put('run', run, w.id); this.save(actor, op, i, { runId: run.id });
         return { run, issue: this.display(i) };
       }
-      if (i.assignee !== actor.id) throw new DomainError('ROLE_DENIED', 'Only the assigned worker can claim this task', 403);
+      const live = s.list<Run>('run', w.id).find(r => r.issueId === i.id && (liveRunStates as readonly string[]).includes(r.state));
+      if (live && (live.id !== actor.runId || live.executionActorId !== actor.id || !live.executionRoot)) throw new DomainError('RUN_EXISTS', 'A managed execution already owns this task');
+      if (i.assignee !== (actor.principalId ?? actor.id)) throw new DomainError('ROLE_DENIED', 'Only the assigned worker can claim this task', 403);
       i.fence++; i.lease = { actorId: actor.id, expiresAt: this.now() + 300000, fence: i.fence }; i.state = 'IN_PROGRESS'; i.stage = null;
       if (i.parentId) { const parent = s.get<Issue>('issue', i.parentId); if (parent.state === 'NOT_STARTED') { parent.state = 'IN_PROGRESS'; this.save(actor, 'child_started', parent); } }
       return this.save(actor, op, i);
@@ -227,19 +256,23 @@ export class Workflow {
       if (i.lease.expiresAt <= this.now()) throw new DomainError('LEASE_EXPIRED', 'Reconcile execution before renewing or submitting');
       if (this.readiness(i).blocking.length) throw new DomainError('NOT_READY', 'Work is blocked by a changed requirement or hold');
       if (op === 'work_heartbeat') { i.lease.expiresAt = this.now() + 300000; return this.save(actor, op, i); }
+      const run = actor.runId ? s.get<Run>('run', actor.runId) : null;
+      if (run && (run.state !== 'RUNNING' || run.executionActorId !== actor.id || !run.executionRoot || run.scopeRevision !== i.scopeRevision || run.designId !== this.design(i)?.id)) throw new DomainError('RUN_UNCERTAIN', 'Run is not the current active execution');
+      const root = run?.executionRoot ?? w.root;
       const files = (a.files as string[]).map(path => {
         if (isAbsolute(path)) throw new DomainError('PATH_DENIED', 'Use workspace-relative artifact paths', 403);
-        const file = inside(w.root, path);
+        const file = inside(root, path);
         if (!statSync(file).isFile() || statSync(file).size > 2 * 1024 * 1024) throw new DomainError('ARTIFACT_LIMIT', 'Artifacts must be files of at most 2 MiB');
-        return { path: relative(w.root, file), hash: hash(readFileSync(file)) };
+        return { path: relative(root, file), hash: hash(readFileSync(file)) };
       });
-      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary };
+      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary, ...(run ? { executionRoot: root, runId: run.id, baseSha: run.baseSha } : {}) };
       i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.state = 'LEAD_REVIEW'; i.stage = 'PRE_QA';
       return this.save(actor, op, i, { candidateId: i.candidate.id, artifactHash: i.candidate.hash });
     }
     if (op === 'review_submit') {
       if (!i.candidate || i.candidate.id !== a.candidateId) throw new DomainError('EVIDENCE_STALE', 'Review must reference the current candidate');
-      for (const file of i.candidate.files) if (hash(readFileSync(inside(w.root, file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Submitted artifact changed; resubmit before review');
+      if (i.candidate.runId && (liveRunStates as readonly string[]).includes(s.get<Run>('run', i.candidate.runId).state)) throw new DomainError('RUN_STILL_LIVE', 'Confirm execution stopped before reviewing its artifacts');
+      for (const file of i.candidate.files) if (hash(readFileSync(inside(i.candidate.executionRoot ?? w.root, file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Submitted artifact changed; resubmit before review');
       if (i.candidate.sessionId === actor.sessionId) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED', 'Implementer cannot review its own delivery');
       if (i.state === 'LEAD_REVIEW') requireRole(actor, 'lead');
       else if (i.state === 'QA_TEST') requireRole(actor, 'qa');

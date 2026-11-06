@@ -6,10 +6,20 @@ export const harnesses = ['codex', 'claude-code', 'dsh'] as const;
 export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];
-export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string }
+export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string }
 export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null }
 export interface Design { id: string; issueId: string; content: string; criteria: string[]; status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'CHANGES_REQUESTED'; hash: string }
-export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string }
+export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string; executionRoot?: string; runId?: string; baseSha?: string }
+export const liveRunStates = ['QUEUED', 'STARTING', 'RUNNING', 'STOPPING', 'UNCERTAIN'] as const;
+export interface Run {
+  id: string; issueId: string; workspaceId: string; actorId: string; harness: Harness;
+  state: typeof liveRunStates[number] | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+  version: number; createdAt: string; designId: string; scopeRevision: number;
+  coordinatorId?: string; executionActorId?: string; executionRoot?: string; baseSha?: string;
+  providerSessionId?: string; pid?: number; startedAt?: string; finishedAt?: string;
+  budgetMs?: number; coordinatorConcurrency?: number;
+  lastHeartbeatAt?: string; summary?: string; errorCode?: string; stopReason?: string;
+}
 export interface Issue {
   id: string; workspaceId: string; key: string; parentId: string | null; title: string; description: string;
   state: State; stage: 'PRE_QA' | 'FINAL' | null; version: number; scopeRevision: number;
@@ -50,6 +60,8 @@ export const schemas = {
   work_dispatch: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive() }).strict(),
   run_list: z.object({ ...scoped, limit: z.number().int().min(1).max(100).default(20) }).strict(),
   run_get: z.object({ ...scoped, runId: id }).strict(),
+  run_interrupt: z.object({ ...scoped, ...mutation, runId: id, expectedVersion: z.number().int().positive(), reason: text }).strict(),
+  run_reconcile: z.object({ ...scoped, ...mutation, runId: id, expectedVersion: z.number().int().positive(), reason: text, confirmStopped: z.literal(true) }).strict(),
   gap_list: z.object(scoped).strict(),
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
