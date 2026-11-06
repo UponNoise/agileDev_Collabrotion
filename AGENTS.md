@@ -2,7 +2,7 @@
 
 - Think, research, and author repository artifacts in English. Reply to the user in Chinese.
 - Prefer action and concise updates. Create files only when they serve the requested deliverable. Keep code comments to a strict minimum.
-- Current approved activity is P0 research, specification, and public repository synchronization. Do not treat the proposed specification as user-approved. Wait for explicit design acceptance before P1 implementation or feasibility code.
+- The user's 2026-11-06 active goal authorizes continued implementation through the local multi-harness product. Use the proposed specification as the working baseline, record deviations and verification honestly, and continue routine implementation without repeated permission requests. This authorization does not fabricate human approval of requirements managed by the product.
 - Read `docs/product-spec.md`, `docs/workflow.md`, and the relevant phase in `docs/delivery-plan.md` before implementation. Use `docs/acceptance.md` to determine completion.
 - Keep workflow rules in the service. Skills, prompts, UI code, hooks, runner callbacks, and Git integrations must not bypass the same authorization and transition checks.
 - Preserve the distinction between initial lead review and final lead review, and between implemented, abandoned, merged, and deployed.

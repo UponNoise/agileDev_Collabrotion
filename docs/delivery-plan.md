@@ -1,6 +1,6 @@
 # Delivery plan and phase gates
 
-Status: proposed. **Only P0 research/specification and repository synchronization are in scope for the current round.** P1 begins after user acceptance of the specification and its explicit policy decisions.
+Status: implementation authorized by the user's 2026-11-06 active goal to continue building the local cross-harness product. The specification is the working baseline; capability claims and phase completion still require evidence. Product-managed design/delivery decisions must retain their own human approval records.
 
 ## 1. Delivery strategy
 
