@@ -129,6 +129,9 @@ test('real native subprocess interruption stops its process tree; exit zero alon
     assert.throws(() => process.kill(pid, 0));
     writeFileSync(script, `process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'test-process'})+'\\n');`);
     const noTerminal = await adapter.start(context); assert.equal((await noTerminal.result).outcome, 'failed');
+    writeFileSync(script, `if(process.env.AGILEDEV_GITHUB_TOKEN)process.exit(9); process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'credential-boundary'})+'\\n'+JSON.stringify({type:'turn.completed'})+'\\n');`);
+    const credentialBoundary = new NativeAdapter(() => [{ id: 'codex',command: process.execPath,args: [script],env: { AGILEDEV_GITHUB_TOKEN: 'synthetic-service-credential' } }]);
+    const isolated = await credentialBoundary.start(context); assert.equal((await isolated.result).outcome,'succeeded');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -1,4 +1,4 @@
-import { Actor, CheckProfile, CheckRun, DomainError, Issue, QaReport, Run, Snapshot } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, DomainError, GitSubmission, Issue, QaReport, Run, Snapshot, Workspace } from './contracts.js';
 import { Store, canonical, hash } from './store.js';
 import { verifySnapshot } from './snapshots.js';
 import { randomUUID } from 'node:crypto';
@@ -53,5 +53,8 @@ export function acceptanceDigest(store: Store, issue: Issue) {
   const root = issue.parentId ? store.get<Issue>('issue',issue.parentId) : issue;
   const design = root.designId ? store.get<any>('design',root.designId) : null;
   if (!design || design.status !== 'APPROVED' || design.id !== issue.candidate!.designId) throw new DomainError('APPROVAL_STALE','The candidate must match the current approved design');
-  return hash(canonical({ policyVersion: 1, designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, candidateId: issue.candidate!.id, snapshotHash: snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode }));
+  const workspace = store.get<Workspace>('workspace',issue.workspaceId);
+  if (issue.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) throw new DomainError('DESIGN_BINDING_STALE','Approve the reopened scope against its current repository binding');
+  const git = issue.gitSubmissionId ? store.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
+  return hash(canonical({ policyVersion: 2, designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, candidateId: issue.candidate!.id, snapshotHash: snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: issue.artifactMode === 'artifact' ? null : workspace.gitBindingId ?? null, git: git ? { id: git.id,bindingId: git.bindingId,sha: git.sha,repository: git.repository,subdirectory: git.subdirectory } : null }));
 }

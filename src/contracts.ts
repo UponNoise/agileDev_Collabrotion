@@ -7,7 +7,10 @@ export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];
 export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string }
-export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null }
+export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null; gitBindingId?: string }
+export interface GitBinding { id: string; workspaceId: string; repository: string; subdirectory: string; remote: string; actorId: string; createdAt: string }
+export interface GitSubmission { id: string; workspaceId: string; issueId: string; candidateId: string; snapshotId: string; bindingId: string; repository: string; subdirectory: string; sha: string; url: string; actorId: string; createdAt: string; state: 'QUEUED' | 'VERIFYING' | 'VERIFIED' | 'UNAVAILABLE' | 'FAILED' | 'STALE'; attempt: number; currentAttemptId?: string; errorCode?: string; verifiedAt?: string; rootTreeSha?: string; treeSha?: string; expectedTreeSha?: string }
+export interface GitAttempt { id: string; submissionId: string; workspaceId: string; issueId: string; attempt: number; startedAt: string; finishedAt?: string; state: 'VERIFYING' | 'VERIFIED' | 'UNAVAILABLE' | 'FAILED' | 'STALE'; apiVersion: string; repository: string; sha: string; errorCode?: string; rootTreeSha?: string; treeSha?: string; expectedTreeSha?: string }
 export interface Design { id: string; issueId: string; content: string; criteria: string[]; status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'CHANGES_REQUESTED'; hash: string }
 export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string; executionRoot?: string; runId?: string; baseSha?: string; snapshotId?: string }
 export interface Snapshot { id: string; workspaceId: string; issueId: string; candidateId: string; root: string; files: { path: string; hash: string; bytes: number; mode: string }[]; hash: string; createdAt: string }
@@ -29,12 +32,12 @@ export interface Issue {
   id: string; workspaceId: string; key: string; parentId: string | null; title: string; description: string;
   state: State; stage: 'PRE_QA' | 'FINAL' | null; version: number; scopeRevision: number;
   criteria: string[]; assignee: string | null; harness: Harness | null; dependencies: string[];
-  priority: number; plannedStart: string | null; dueDate: string | null; designId: string | null;
+  priority: number; plannedStart: string | null; dueDate: string | null; designId: string | null; designBindingId?: string;
   fence: number; lease: { actorId: string; expiresAt: number; fence: number } | null;
   candidate: Candidate | null; initialReview: string | null; qaReview: string | null;
   finalReview: string | null; savedState: { state: State; stage: Issue['stage'] } | null;
   qaAssignee?: string; qaHarness?: Harness; checkProfileIds?: string[];
-  artifactMode?: 'git' | 'artifact'; artifactReason?: string; acceptedDigest?: string;
+  artifactMode?: 'git' | 'artifact'; artifactReason?: string; acceptedDigest?: string; gitSubmissionId?: string;
 }
 export class DomainError extends Error {
   constructor(public code: string, message: string, public statusCode = 409, public details?: unknown) { super(message); }
@@ -48,6 +51,7 @@ const change = { ...target, ...mutation, expectedVersion: z.number().int().posit
 export const schemas = {
   workspace_register: z.object({ ...mutation, root: text, name: z.string().min(1).max(120), prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/) }).strict(),
   workspace_list: z.object({}).strict(),
+  workspace_git_bind: z.object({ ...scoped, ...mutation, remote: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/).default('origin'), expectedBindingId: id.nullable().default(null) }).strict(),
   connection_list: z.object(scoped).strict(),
   actor_enroll: z.object({ ...scoped, ...mutation, role: z.enum(['lead', 'pm', 'worker', 'qa']), name: z.string().min(1).max(120) }).strict(),
   issue_create: z.object({ ...scoped, ...mutation, parentId: id.optional(), expectedParentVersion: z.number().int().positive().optional(), title: z.string().min(1).max(300), description: z.string().max(65536).default(''), criteria: z.array(id).max(100).default([]), artifactMode: z.enum(['git', 'artifact']).optional(), artifactReason: text.optional() }).strict(),
@@ -75,10 +79,13 @@ export const schemas = {
   qa_check_run: z.object({ ...change, profileId: id, testFiles: z.array(z.string().min(1).max(500)).min(1).max(20) }).strict(),
   qa_check_get: z.object({ ...scoped, checkId: id }).strict(),
   qa_report_submit: z.object({ ...change, candidateId: id, verdict: z.enum(['PASS','FAIL','BLOCKED']), summary: text, results: z.array(z.object({ criterionId: id, result: z.enum(['PASS','FAIL','BLOCKED','NOT_RUN']), evidenceIds: z.array(id).max(100), reason: text }).strict()).min(1).max(100), findings: z.array(z.object({ criterionId: id, severity: z.enum(['BLOCKER','MAJOR','MINOR','INFO']), expected: text, actual: text, reproduce: text }).strict()).max(100).default([]) }).strict(),
-  evidence_get: z.object({ ...target, kind: z.enum(['snapshot','qa_report','review']), evidenceId: id }).strict(),
+  evidence_get: z.object({ ...target, kind: z.enum(['snapshot','qa_report','review','git_submission','git_attempt','git_binding','defect']), evidenceId: id }).strict(),
   delivery_decide: z.object({ ...change, candidateId: id, digest: id, decision: z.enum(['ACCEPT','REJECT']), reason: text }).strict(),
+  git_submit: z.object({ ...change, candidateId: id, commitUrl: z.string().min(1).max(1000) }).strict(),
+  git_retry: z.object({ ...change, submissionId: id }).strict(),
+  delivery_complete: z.object(change).strict(),
   gap_list: z.object(scoped).strict(),
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !['actor_enroll', 'design_decide', 'workspace_register', 'check_profile_create', 'delivery_decide'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide'].includes(k)) as Operation[];

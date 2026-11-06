@@ -10,7 +10,8 @@ import { connectMcp } from './mcp.js';
 import { discoverHarnesses, probeHarness } from './harness.js';
 import { probeHosts } from './probe.js';
 import { Coordinator } from './runner.js';
-import { verifyExecution } from './verify-execution.js';
+import { GitVerifier } from './git-verifier.js';
+import { verifyExecution,verifyGit } from './verify-execution.js';
 import { harnesses, Harness } from './contracts.js';
 
 const dataDir = resolve(process.env.AGILEDEV_DATA_DIR ?? join(process.env.LOCALAPPDATA ?? join(homedir(), '.local/share'), 'AgileDev'));
@@ -18,6 +19,7 @@ const descriptorFile = join(dataDir, 'daemon.json');
 function descriptor() { return JSON.parse(readFileSync(descriptorFile, 'utf8')) as { endpoint: string; ownerToken: string; pid: number; instance: string }; }
 async function main() {
   const [command = 'help', ...args] = process.argv.slice(2);
+  if (command === 'verify-git') { console.log(JSON.stringify(await verifyGit(args[0] ?? process.cwd()),null,2)); return; }
   if (command === 'verify-execution' || command === 'verify-qa') {
     if (!(harnesses as readonly string[]).includes(args[0] ?? '')) throw new Error('Choose codex, claude-code, or dsh for the real execution verification.');
     if (command === 'verify-qa' && !(harnesses as readonly string[]).includes(args[1] ?? '')) throw new Error('Usage: verify-qa <worker harness> <QA harness>; this starts two real model runs.');
@@ -45,6 +47,7 @@ async function main() {
     const store = new Store(join(dataDir, 'workflow.sqlite'));
     const app = createServer(store);
     let coordinator: Coordinator | undefined;
+    let gitVerifier: GitVerifier | undefined;
     try {
       const endpoint = await app.listen({ host: '127.0.0.1', port: Number(process.env.AGILEDEV_PORT ?? 43170) });
       const old = existsSync(descriptorFile) ? descriptor() : null;
@@ -52,14 +55,15 @@ async function main() {
       try { if (!ownerToken || store.authenticate(ownerToken).role !== 'human') ownerToken = undefined; } catch { ownerToken = undefined; }
       ownerToken ??= store.bootstrap().token;
       writeFileSync(descriptorFile, JSON.stringify({ endpoint, ownerToken, pid: process.pid, instance }), { mode: 0o600 });
+      gitVerifier = new GitVerifier(store); gitVerifier.start();
       if (process.env.AGILEDEV_RUNNER_ENABLED !== '0') {
         coordinator = new Coordinator(store, { endpoint, directory: join(dataDir, 'runs'), bridgeScript: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), concurrency: Number(process.env.AGILEDEV_CONCURRENCY ?? 2), maxRunMs: Number(process.env.AGILEDEV_MAX_RUN_MS ?? 1800000) });
         await coordinator.start();
       }
       console.log(JSON.stringify({ endpoint, pid: process.pid, dataDir }));
-      const stop = async () => { await coordinator?.close(); await app.close(); store.close(); unlinkSync(lockFile); process.exit(0); };
+      const stop = async () => { await coordinator?.close(); await gitVerifier?.close(); await app.close(); store.close(); unlinkSync(lockFile); process.exit(0); };
       process.once('SIGINT', stop); process.once('SIGTERM', stop);
-    } catch (error) { await coordinator?.close(); await app.close(); store.close(); unlinkSync(lockFile); throw error; }
+    } catch (error) { await coordinator?.close(); await gitVerifier?.close(); await app.close(); store.close(); unlinkSync(lockFile); throw error; }
     return;
   }
   if (command === 'mcp') {
@@ -96,6 +100,6 @@ async function main() {
     } else throw new Error('Connection format must be codex, claude-code, or dsh.');
     return;
   }
-  console.log('agiledev: serve | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
+  console.log('agiledev: serve | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
 main().catch(error => { console.error(error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });

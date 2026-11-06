@@ -1,13 +1,39 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join,resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Actor, CheckRun, Harness, Issue, QaReport, Run, Snapshot } from './contracts.js';
+import { Actor, Candidate, CheckRun, DomainError, GitSubmission, Harness, Issue, QaReport, Run, Snapshot, Workspace } from './contracts.js';
 import { Store } from './store.js';
 import { Workflow } from './workflow.js';
 import { createServer } from './http.js';
 import { Coordinator } from './runner.js';
+import { GitHubProvider, githubRepository, inspectGitBinding, snapshotGitTree } from './git.js';
+import { sealSnapshot,snapshotManifest } from './snapshots.js';
+import { hash } from './store.js';
+
+export async function verifyGit(sourceRoot: string) {
+  const source = resolve(sourceRoot);
+  const git = (cwd: string,args: string[]) => execFileSync('git',args,{ cwd,windowsHide: true,encoding: 'utf8',timeout: 30000,maxBuffer: 16777216,stdio: ['ignore','pipe','ignore'] }).replace(/\r?\n$/,'');
+  const repository = githubRepository(git(source,['remote','get-url','origin']));
+  const sha = git(source,['rev-parse','HEAD']);
+  const root = mkdtempSync(join(tmpdir(),'agiledev-git-verification-')); const checkout = join(root,'source');
+  git(root,['clone','--shared','--no-checkout','--',source,checkout]);
+  git(checkout,['remote','set-url','origin',`https://github.com/${repository}.git`]);
+  git(checkout,['-c','core.autocrlf=false','-c','core.hooksPath=/dev/null','checkout','--detach',sha]);
+  const workspace: Workspace = { id: randomUUID(),name: 'Remote Git verification fixture',root: checkout,prefix: 'GIT',sequence: 0,commonDir: resolve(checkout,git(checkout,['rev-parse','--git-common-dir'])) };
+  const binding = inspectGitBinding(workspace,'origin','verification-fixture');
+  const manifest = snapshotManifest(checkout,[],true); if (!manifest.length) throw new DomainError('EMPTY_FIXTURE','Choose a repository with at least one committed file');
+  const first = manifest[0]!;
+  const candidate: Candidate = { id: randomUUID(),workerId: 'verification-fixture',sessionId: randomUUID(),designId: 'provider-boundary-only',files: [{ path: first.path,hash: hash(readFileSync(join(checkout,first.path))) }],hash: 'provider-boundary-only',summary: 'Read-only provider verification of a published commit',executionRoot: checkout };
+  const snapshot = sealSnapshot(candidate,workspace.id,randomUUID(),join(root,'snapshots'),true);
+  const expectedTreeSha = snapshotGitTree(snapshot);
+  const submission: GitSubmission = { id: randomUUID(),workspaceId: workspace.id,issueId: snapshot.issueId,candidateId: candidate.id,snapshotId: snapshot.id,bindingId: binding.id,repository,subdirectory: '',sha,url: `https://github.com/${repository}/commit/${sha}`,actorId: 'verification-fixture',createdAt: new Date().toISOString(),state: 'QUEUED',attempt: 0 };
+  try {
+    const result = await new GitHubProvider().resolve(submission,AbortSignal.timeout(30000));
+    return { status: result.treeSha === expectedTreeSha ? 'GIT_COMMIT_VERIFIED' : 'GIT_COMMIT_NOT_VERIFIED',repository,sha,...result,expectedTreeSha,snapshotFileCount: snapshot.files.length,retainedEvidenceDirectory: root,limitations: ['Read-only remote-provider boundary check; does not create approvals, verify independent QA, close a real issue, merge, or deploy.'] };
+  } catch (error) { return { status: 'GIT_COMMIT_NOT_VERIFIED',repository,sha,expectedTreeSha,errorCode: error instanceof DomainError ? error.code : 'VERIFICATION_FAILED',retainedEvidenceDirectory: root }; }
+}
 
 export async function verifyExecution(harness: Harness, bridgeScript: string, qaHarness?: Harness) {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-native-execution-'));

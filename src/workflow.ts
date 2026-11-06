@@ -4,9 +4,10 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
-import { Actor, CheckProfile, CheckRun, Design, DomainError, Issue, Operation, QaReport, Run, Workspace, liveRunStates, schemas } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Issue, Operation, QaReport, Run, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, queueQa, validateQaReport } from './qa-policy.js';
+import { githubCommitUrl, inspectGitBinding } from './git.js';
 
 const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
@@ -57,18 +58,20 @@ export class Workflow {
       const issue = s.issue(actor, a.workspaceId, a.issueId);
       let deliveryDigest: string | null = null;
       if (issue.state === 'USER_ACCEPTANCE') { try { deliveryDigest = acceptanceDigest(s,issue); } catch {} }
-      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest };
+      const git = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
+      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [] };
     }
     if (op === 'evidence_get') {
-      s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
-      if (evidence.issueId !== a.issueId || (evidence.workspaceId && evidence.workspaceId !== a.workspaceId)) throw new DomainError('SCOPE_DENIED','Evidence belongs to another issue',403);
+      const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
+      const bindingAllowed = a.kind === 'git_binding' && (s.get<Workspace>('workspace',a.workspaceId).gitBindingId === evidence.id || (issue.gitSubmissionId && s.get<GitSubmission>('git_submission',issue.gitSubmissionId).bindingId === evidence.id));
+      if ((!bindingAllowed && evidence.issueId !== a.issueId) || (evidence.workspaceId && evidence.workspaceId !== a.workspaceId)) throw new DomainError('SCOPE_DENIED','Evidence belongs to another issue',403);
       return { evidence };
     }
     if (op === 'issue_list') {
       const filtered = issues.filter(i => !a.state || i.state === a.state);
       return { issues: filtered.slice(a.offset, a.offset + a.limit).map(i => this.display(i)), total: filtered.length, nextOffset: a.offset + a.limit < filtered.length ? a.offset + a.limit : null };
     }
-    if (op === 'gap_list') return { gaps: issues.flatMap(i => this.readiness(i).blocking.map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )) };
+    if (op === 'gap_list') return { gaps: issues.filter(i => !['DONE','ABANDONED'].includes(i.state)).flatMap(i => [...new Set([...this.readiness(i).blocking,...(i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [])])].map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )) };
     if (op === 'event_list') {
       requireRole(actor, 'human', 'lead', 'pm');
       return { events: s.db.prepare('SELECT sequence,actor_id AS actorId,operation,target_id AS targetId,data,at FROM events WHERE workspace_id=? AND sequence>? ORDER BY sequence LIMIT ?').all(a.workspaceId, a.after, a.limit).map((r: any) => ({ ...r, data: JSON.parse(r.data) })) };
@@ -88,6 +91,7 @@ export class Workflow {
     if (i.state === 'IN_PROGRESS' && i.lease?.actorId === actor.id) return ['work_heartbeat', 'work_submit'];
     if (i.state === 'LEAD_REVIEW' && actor.role === 'lead') return ['review_submit'];
     if (i.state === 'QA_TEST' && actor.role === 'qa') return ['qa_check_run', 'qa_check_get', 'qa_report_submit'];
+    if (i.state === 'USER_ACCEPTANCE' && ['human','lead','pm'].includes(actor.role)) return [...(actor.role === 'human' ? ['delivery_decide'] : []),'git_submit','git_retry','delivery_complete'];
     return [];
   }
   design(issue: Issue): Design | null {
@@ -96,6 +100,8 @@ export class Workflow {
   }
   readiness(i: Issue) {
     const blocking: string[] = [];
+    const workspace = this.store.get<Workspace>('workspace',i.workspaceId); const root = i.parentId ? this.store.get<Issue>('issue',i.parentId) : i;
+    if (i.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) blocking.push('DESIGN_BINDING_STALE');
     if (this.design(i)?.status !== 'APPROVED') blocking.push('DESIGN_APPROVAL_REQUIRED');
     if (!i.assignee) blocking.push('ASSIGNEE_REQUIRED');
     if (!i.criteria.length) blocking.push('CRITERIA_REQUIRED');
@@ -116,7 +122,7 @@ export class Workflow {
     return { issue: this.display(i) };
   }
   private invalidate(i: Issue) {
-    i.candidate = null; i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.stage = null; i.acceptedDigest = undefined;
+    i.candidate = null; i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.stage = null; i.acceptedDigest = undefined; i.gitSubmissionId = undefined;
     if (!['NOT_STARTED', 'ABANDONED'].includes(i.state)) i.state = 'NOT_STARTED';
   }
   completeQa(actor: Actor, runId: string) {
@@ -136,6 +142,51 @@ export class Workflow {
     } else if (report.verdict === 'FAIL') { issue.state = 'QA_REJECTED'; issue.stage = null; }
     return this.save(actor,'qa_review_completed',issue,{ reviewId: review.id, reportId: report.id, verdict: report.verdict });
   }
+  closureBlockers(issue: Issue) {
+    const s = this.store; const blockers: string[] = [];
+    let digest: string | undefined;
+    try { digest = acceptanceDigest(s,issue); } catch (error) { blockers.push(error instanceof DomainError ? error.code : 'EVIDENCE_STALE'); }
+    const approved = digest && issue.acceptedDigest === digest && s.list<any>('delivery_approval',issue.workspaceId).some(a => a.issueId === issue.id && a.candidateId === issue.candidate?.id && a.digest === digest && a.decision === 'ACCEPT' && s.get<Actor>('actor',a.actorId).role === 'human');
+    if (!approved) blockers.push('HUMAN_ACCEPTANCE_REQUIRED');
+    if (issue.parentId && ['ON_HOLD','ABANDONED'].includes(s.get<Issue>('issue',issue.parentId).state)) blockers.push('ANCESTOR_BLOCKED');
+    if (issue.state !== 'USER_ACCEPTANCE') blockers.push('DELIVERY_NOT_READY');
+    if (s.list<Issue>('issue',issue.workspaceId).some(c => c.parentId === issue.id && c.state !== 'DONE')) blockers.push('CHILDREN_INCOMPLETE');
+    if (issue.dependencies.some(id => s.get<Issue>('issue',id).state !== 'DONE')) blockers.push('DEPENDENCY_BLOCKED');
+    if (s.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && (liveRunStates as readonly string[]).includes(r.state))) blockers.push('RUN_STILL_LIVE');
+    if (s.list<any>('defect',issue.workspaceId).some(d => d.issueId === issue.id && d.state === 'OPEN' && d.severity !== 'INFO')) blockers.push('UNRESOLVED_DEFECTS');
+    const workspace = s.get<Workspace>('workspace',issue.workspaceId);
+    if ((issue.artifactMode ?? (workspace.commonDir ? 'git' : 'artifact')) === 'git') {
+      if (!issue.gitSubmissionId) blockers.push('GIT_VERIFICATION_REQUIRED');
+      else {
+        const git = s.get<GitSubmission>('git_submission',issue.gitSubmissionId);
+        if (git.workspaceId !== issue.workspaceId || git.issueId !== issue.id || git.candidateId !== issue.candidate?.id || git.snapshotId !== issue.candidate?.snapshotId || git.bindingId !== workspace.gitBindingId) blockers.push('GIT_EVIDENCE_STALE');
+        else if (git.state !== 'VERIFIED') blockers.push(git.errorCode ?? (['QUEUED','VERIFYING'].includes(git.state) ? 'GIT_VERIFICATION_PENDING' : 'GIT_VERIFICATION_REQUIRED'));
+        else {
+          const attempt = git.currentAttemptId ? s.get<GitAttempt>('git_attempt',git.currentAttemptId) : null;
+          if (!git.verifiedAt || !git.treeSha || git.treeSha !== git.expectedTreeSha || !attempt || attempt.state !== 'VERIFIED' || attempt.submissionId !== git.id || attempt.treeSha !== git.treeSha || attempt.expectedTreeSha !== git.expectedTreeSha) blockers.push('GIT_EVIDENCE_STALE');
+        }
+      }
+    }
+    return [...new Set(blockers)];
+  }
+  completeGit(attempt: GitAttempt) {
+    return this.store.db.transaction(() => {
+      const s = this.store; const git = s.get<GitSubmission>('git_submission',attempt.submissionId);
+      if (git.state !== 'VERIFYING' || git.currentAttemptId !== attempt.id || attempt.attempt !== git.attempt) return;
+      const issue = s.get<Issue>('issue',git.issueId); const workspace = s.get<Workspace>('workspace',git.workspaceId);
+      const current = issue.gitSubmissionId === git.id && issue.candidate?.id === git.candidateId && issue.candidate?.snapshotId === git.snapshotId && workspace.gitBindingId === git.bindingId;
+      if (!current) { attempt.state = 'STALE'; attempt.errorCode = 'GIT_EVIDENCE_STALE'; }
+      if (attempt.state === 'VERIFIED' && (!attempt.treeSha || attempt.treeSha !== attempt.expectedTreeSha || attempt.sha !== git.sha || attempt.repository !== git.repository)) { attempt.state = 'FAILED'; attempt.errorCode = 'COMMIT_SNAPSHOT_MISMATCH'; }
+      attempt.finishedAt ??= new Date(this.now()).toISOString();
+      s.put('git_attempt',attempt,git.workspaceId);
+      git.state = attempt.state; git.errorCode = attempt.errorCode; git.rootTreeSha = attempt.rootTreeSha; git.treeSha = attempt.treeSha; git.expectedTreeSha = attempt.expectedTreeSha;
+      if (attempt.state === 'VERIFIED') git.verifiedAt = attempt.finishedAt;
+      s.put('git_submission',git,git.workspaceId);
+      const actor = s.get<Actor>('actor',git.actorId);
+      s.event(git.workspaceId,actor,'git_verification_finished',git.id,{ attemptId: attempt.id,state: git.state,errorCode: git.errorCode,performedBy: 'git-verifier' });
+      if (current && issue.state === 'USER_ACCEPTANCE' && issue.acceptedDigest && !this.closureBlockers(issue).length) { issue.state = 'DONE'; this.save(actor,'delivery_closed',issue,{ submissionId: git.id,performedBy: 'git-verifier',cause: 'Current human acceptance and verified commit' }); }
+    }).immediate();
+  }
   private mutate(actor: Actor, op: Operation, a: Record<string, any>): Record<string, unknown> {
     const s = this.store;
     if (op === 'workspace_register') {
@@ -151,6 +202,22 @@ export class Workflow {
       return { workspace: w };
     }
     const w = s.workspace(actor, a.workspaceId);
+    if (op === 'workspace_git_bind') {
+      requireRole(actor,'human');
+      if ((w.gitBindingId ?? null) !== a.expectedBindingId) throw new DomainError('VERSION_CONFLICT','Workspace Git binding changed; reload it before retrying');
+      const binding = inspectGitBinding(w,a.remote,actor.id);
+      if (w.gitBindingId) {
+        const previous = s.get<GitBinding>('git_binding',w.gitBindingId);
+        if (previous.repository === binding.repository && previous.subdirectory === binding.subdirectory) return { workspace: w,binding: previous };
+        if (s.list<Issue>('issue',w.id).some(i => i.artifactMode !== 'artifact' && !['DONE','ABANDONED'].includes(i.state) && (i.candidate || i.state !== 'NOT_STARTED' || this.design(i)?.status === 'APPROVED'))) throw new DomainError('REBIND_REQUIRES_SCOPE_RESET','Reset approved or active Git work before selecting another repository binding');
+      }
+      s.put('git_binding',binding,w.id); w.gitBindingId = binding.id; s.put('workspace',w,w.id);
+      for (const issue of s.list<Issue>('issue',w.id).filter(i => i.artifactMode !== 'artifact' && !['DONE','ABANDONED'].includes(i.state))) {
+        if (!issue.parentId) issue.designBindingId = binding.id;
+        issue.acceptedDigest = undefined; this.save(actor,'scope_git_binding_set',issue,{ bindingId: binding.id,designId: this.design(issue)?.id });
+      }
+      s.event(w.id,actor,op,binding.id,{ repository: binding.repository,subdirectory: binding.subdirectory }); return { workspace: w,binding };
+    }
     if (op === 'check_profile_create') {
       requireRole(actor,'human');
       if (!isAbsolute(a.command) || !existsSync(a.command) || !statSync(a.command).isFile() || /\.(cmd|bat|ps1|sh)$/i.test(a.command)) throw new DomainError('COMMAND_INVALID','Approve an absolute native executable; shell shims are not executed');
@@ -211,6 +278,7 @@ export class Workflow {
       const i: Issue = { id: randomUUID(), workspaceId: w.id, key: `${w.prefix}-${String(w.sequence).padStart(4, '0')}`, parentId: a.parentId ?? null, title: a.title, description: a.description, criteria: [...new Set<string>(a.criteria)], version: 1, scopeRevision: 1, state: 'NOT_STARTED', stage: null, assignee: null, harness: null, dependencies: [], priority: 2, plannedStart: null, dueDate: null, designId: null, fence: 0, lease: null, candidate: null, initialReview: null, qaReview: null, finalReview: null, savedState: null };
       const parent = a.parentId ? s.get<Issue>('issue',a.parentId) : null;
       i.artifactMode = parent?.artifactMode ?? a.artifactMode ?? (w.commonDir ? 'git' : 'artifact'); i.artifactReason = parent?.artifactReason ?? a.artifactReason ?? (!w.commonDir ? 'Non-Git workspace delivery' : undefined);
+      i.designBindingId = i.artifactMode === 'artifact' ? undefined : parent?.designBindingId ?? w.gitBindingId;
       if (a.artifactMode && parent?.artifactMode && a.artifactMode !== parent.artifactMode) throw new DomainError('ARTIFACT_MODE_MISMATCH','Child delivery mode follows the approved parent scope');
       if (i.artifactMode === 'artifact' && w.commonDir && !i.artifactReason) throw new DomainError('ARTIFACT_REASON_REQUIRED','Non-Git delivery in a Git workspace needs an explicit reviewed reason');
       s.put('issue', i, w.id); s.event(w.id, actor, op, i.id, { key: i.key, version: 1 });
@@ -218,6 +286,35 @@ export class Workflow {
     }
     const i = s.issue(actor, w.id, a.issueId);
     version(i, a.expectedVersion);
+    if (op === 'git_submit' || op === 'git_retry') {
+      requireRole(actor,'human','lead','pm');
+      if (i.artifactMode === 'artifact' || !w.commonDir) throw new DomainError('GIT_MODE_REQUIRED','Commit evidence applies to Git-backed delivery');
+      if (!['LEAD_REVIEW','QA_TEST','USER_ACCEPTANCE'].includes(i.state)) throw new DomainError('INVALID_TRANSITION','Attach commit evidence to a current submitted delivery');
+      const snapshot = candidateSnapshot(s,i);
+      if (!w.gitBindingId) throw new DomainError('GIT_BINDING_REQUIRED','The owner must bind the workspace GitHub remote first');
+      const binding = s.get<GitBinding>('git_binding',w.gitBindingId);
+      if (op === 'git_retry') {
+        const git = s.get<GitSubmission>('git_submission',a.submissionId);
+        if (i.gitSubmissionId !== git.id || git.snapshotId !== snapshot.id || git.candidateId !== i.candidate!.id || git.bindingId !== binding.id || git.workspaceId !== w.id || git.issueId !== i.id) throw new DomainError('GIT_EVIDENCE_STALE','Retry only the current candidate and repository mapping');
+        if (!['FAILED','UNAVAILABLE'].includes(git.state)) throw new DomainError('INVALID_TRANSITION','Only failed or unavailable Git verification can be retried');
+        git.state = 'QUEUED'; git.errorCode = undefined; s.put('git_submission',git,w.id);
+        return { ...this.save(actor,op,i,{ submissionId: git.id }),git };
+      }
+      if (i.candidate!.id !== a.candidateId) throw new DomainError('EVIDENCE_STALE','Commit must map to the current candidate');
+      const target = githubCommitUrl(a.commitUrl);
+      if (target.repository !== binding.repository) throw new DomainError('COMMIT_REPOSITORY_MISMATCH','Commit repository differs from the owner-bound workspace remote');
+      if (i.gitSubmissionId) { const previous = s.get<GitSubmission>('git_submission',i.gitSubmissionId); if (previous.url === target.url && previous.snapshotId === snapshot.id && previous.bindingId === binding.id) return { issue: this.display(i),git: previous }; }
+      const git: GitSubmission = { id: randomUUID(),workspaceId: w.id,issueId: i.id,candidateId: i.candidate!.id,snapshotId: snapshot.id,bindingId: binding.id,subdirectory: binding.subdirectory,...target,actorId: actor.id,createdAt: new Date(this.now()).toISOString(),state: 'QUEUED',attempt: 0 };
+      s.put('git_submission',git,w.id); i.gitSubmissionId = git.id; i.acceptedDigest = undefined;
+      return { ...this.save(actor,op,i,{ submissionId: git.id,acceptanceInvalidated: true }),git };
+    }
+    if (op === 'delivery_complete') {
+      requireRole(actor,'human','lead','pm');
+      if (i.state !== 'USER_ACCEPTANCE') throw new DomainError('INVALID_TRANSITION','Completion requires the final user acceptance gate');
+      const blockers = this.closureBlockers(i);
+      if (!blockers.length) i.state = 'DONE';
+      return { ...this.save(actor,op,i,{ closureBlocked: blockers }),closureBlocked: blockers };
+    }
     if (op === 'qa_configure') {
       requireRole(actor,'human','lead','pm');
       if (['DONE','ABANDONED','USER_ACCEPTANCE'].includes(i.state) || (i.state === 'LEAD_REVIEW' && i.stage === 'FINAL')) throw new DomainError('INVALID_TRANSITION','QA assignment is frozen after acceptance gates');
@@ -260,9 +357,9 @@ export class Workflow {
         const children = s.list<Issue>('issue',w.id).filter(c => c.parentId === i.id);
         if (children.some(c => c.state !== 'DONE')) throw new DomainError('CHILDREN_INCOMPLETE','Parent acceptance requires every in-scope child to be implemented');
         if (!i.initialReview || !i.qaReview || !i.finalReview || this.design(i)?.status !== 'APPROVED') throw new DomainError('EVIDENCE_MISSING','Current design, lead reviews, and QA are required');
-        if ((i.artifactMode ?? (w.commonDir ? 'git' : 'artifact')) === 'artifact') i.state = 'DONE';
+        if (!this.closureBlockers(i).length) i.state = 'DONE';
       }
-      return { ...this.save(actor,op,i,{ approvalId: approval.id, reason: a.reason }), approval, closureBlocked: i.state === 'USER_ACCEPTANCE' ? ['GIT_VERIFICATION_REQUIRED'] : [] };
+      return { ...this.save(actor,op,i,{ approvalId: approval.id, reason: a.reason }), approval, closureBlocked: i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [] };
     }
     if (['issue_assign', 'dependency_add', 'design_set'].includes(op) || (op === 'issue_update' && a.description !== undefined)) {
       if (s.list<Run>('run', w.id).some(r => (r.issueId === i.id || (op === 'design_set' && s.get<Issue>('issue', r.issueId).parentId === i.id)) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'Reconcile queued, live, or uncertain executions before changing their assignment or scope');
@@ -279,7 +376,8 @@ export class Workflow {
       requireRole(actor, 'human', 'lead');
       if (i.parentId) throw new DomainError('PARENT_DESIGN_REQUIRED', 'Design revisions belong to the parent requirement');
       if (['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('ISSUE_CLOSED', 'Reopen before changing scope');
-      const design: Design = { id: randomUUID(), issueId: i.id, content: a.content, criteria: [...new Set<string>(a.criteria)], status: 'DRAFT', hash: hash(canonical({ content: a.content, criteria: a.criteria, artifactMode: i.artifactMode, artifactReason: i.artifactReason })) };
+      i.designBindingId = i.artifactMode === 'artifact' ? undefined : w.gitBindingId;
+      const design: Design = { id: randomUUID(), issueId: i.id, content: a.content, criteria: [...new Set<string>(a.criteria)], status: 'DRAFT', hash: hash(canonical({ content: a.content, criteria: a.criteria, artifactMode: i.artifactMode, artifactReason: i.artifactReason,gitBindingId: i.designBindingId })) };
       s.put('design', design, w.id); i.designId = design.id; i.criteria = design.criteria;
       this.invalidate(i);
       for (const child of s.list<Issue>('issue', w.id).filter(c => c.parentId === i.id && c.state !== 'ABANDONED')) { this.invalidate(child); this.save(actor, 'design_invalidated', child, { designId: design.id }); }
@@ -358,6 +456,7 @@ export class Workflow {
       i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary, ...(run ? { executionRoot: root, runId: run.id, baseSha: run.baseSha } : {}) };
       s.put('candidate',i.candidate,w.id);
       i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.state = 'LEAD_REVIEW'; i.stage = 'PRE_QA';
+      i.gitSubmissionId = undefined; i.acceptedDigest = undefined;
       return this.save(actor, op, i, { candidateId: i.candidate.id, artifactHash: i.candidate.hash });
     }
     if (op === 'review_submit') {

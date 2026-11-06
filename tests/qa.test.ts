@@ -12,6 +12,9 @@ import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
+import { GitHubProvider } from '../src/git.js';
+import { GitVerifier } from '../src/git-verifier.js';
+import { GitSubmission } from '../src/contracts.js';
 
 async function until(check: () => boolean, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -173,4 +176,70 @@ test('sealing includes unselected files and detects their later corruption befor
     const snapshot = f.store.get<Snapshot>('snapshot',candidate.snapshotId!); writeFileSync(join(snapshot.root,'contract.txt'),'corrupted immutable evidence');
     assert.throws(() => f.initialReview(),(e: any) => e.code === 'EVIDENCE_STALE'); assert.equal(f.current(f.issue.id).state,'LEAD_REVIEW');
   } finally { await f.close(); }
+});
+
+async function reviewedGitFixture() {
+  const f = await fixture('git');
+  try {
+    execFileSync('git',['remote','add','origin','https://github.com/fixture/delivery.git'],{ cwd: f.source,windowsHide: true,stdio: 'ignore' });
+    f.flow.execute(f.human,'workspace_git_bind',{ workspaceId: f.workspace.id,idempotencyKey: randomUUID() });
+    const worker = await f.context(0); await f.submit(worker,'delivered'); f.initialReview(); const qa = await f.context(1); const check = await f.check(qa); await f.report(qa,check.id); await f.complete(qa); f.finalReview();
+    const git = (...args: string[]) => execFileSync('git',args,{ cwd: worker.cwd,windowsHide: true,encoding: 'utf8',stdio: ['ignore','pipe','ignore'] }).trim();
+    git('add','source.txt'); git('-c','user.name=Fixture','-c','user.email=test@example.invalid','-c','core.hooksPath=/dev/null','commit','-m','Disposable delivery');
+    const sha = git('rev-parse','HEAD'); const tree = git('rev-parse','HEAD^{tree}');
+    const attach = (value = sha) => f.change('git_submit',f.issue.id,{ candidateId: f.current(f.issue.id).candidate!.id,commitUrl: `https://github.com/fixture/delivery/commit/${value}` }).git as GitSubmission;
+    return { ...f,sha,tree,attach };
+  } catch (error) { await f.close(); throw error; }
+}
+
+test('Git outage preserves exact human acceptance and successful retry closes without a second approval', { timeout: 20000 },async () => {
+  const f = await reviewedGitFixture(); let calls = 0;
+  const verifier = new GitVerifier(f.store,new GitHubProvider(async () => ++calls === 1 ? new Response('unavailable',{ status: 503 }) : Response.json({ sha: f.sha,tree: { sha: f.tree } }),() => undefined));
+  try {
+    const git = f.attach(); verifier.tick(); await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'UNAVAILABLE');
+    const accepted = f.delivery(); assert.equal(accepted.issue.state,'USER_ACCEPTANCE'); assert.deepEqual(accepted.closureBlocked,['PROVIDER_UNAVAILABLE']);
+    const digest = f.current(f.issue.id).acceptedDigest; assert.ok(digest); const count = f.store.list('delivery_approval',f.workspace.id).length;
+    f.change('git_retry',f.issue.id,{ submissionId: git.id },f.lead); assert.equal(f.current(f.issue.id).acceptedDigest,digest);
+    verifier.tick(); await until(() => f.current(f.issue.id).state === 'DONE');
+    const verified = f.store.get<GitSubmission>('git_submission',git.id); assert.equal(verified.state,'VERIFIED'); assert.equal(verified.treeSha,f.tree); assert.ok(verified.verifiedAt); assert.equal(verified.attempt,2);
+    assert.equal(f.store.list('delivery_approval',f.workspace.id).length,count); assert.equal(f.store.list('git_attempt',f.workspace.id).length,2); assert.equal(calls,2);
+    assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
+  } finally { await verifier.close(); await f.close(); }
+});
+
+test('an existing remote commit with a different complete tree cannot close a reviewed candidate', { timeout: 20000 },async () => {
+  const f = await reviewedGitFixture();
+  const verifier = new GitVerifier(f.store,new GitHubProvider(async () => Response.json({ sha: f.sha,tree: { sha: 'e'.repeat(40) } }),() => undefined));
+  try {
+    assert.throws(() => f.change('git_submit',f.issue.id,{ candidateId: f.current(f.issue.id).candidate!.id,commitUrl: `https://github.com/wrong/repository/commit/${f.sha}` }),(e: any) => e.code === 'COMMIT_REPOSITORY_MISMATCH');
+    const git = f.attach(); f.delivery(); verifier.tick(); await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'FAILED');
+    assert.equal(f.store.get<GitSubmission>('git_submission',git.id).errorCode,'COMMIT_SNAPSHOT_MISMATCH'); assert.equal(f.current(f.issue.id).state,'USER_ACCEPTANCE');
+    const result = f.change('delivery_complete',f.issue.id,{},f.lead); assert.deepEqual(result.closureBlocked,['COMMIT_SNAPSHOT_MISMATCH']); assert.equal(result.issue.state,'USER_ACCEPTANCE');
+  } finally { await verifier.close(); await f.close(); }
+});
+
+test('changing the final commit mapping invalidates acceptance and stale provider callbacks cannot close it', { timeout: 20000 },async () => {
+  const f = await reviewedGitFixture(); let resolveResponse!: (response: Response) => void;
+  const verifier = new GitVerifier(f.store,new GitHubProvider(async () => new Promise<Response>(done => { resolveResponse = done; }),() => undefined));
+  try {
+    const original = f.attach(); const accepted = f.delivery(); const digest = accepted.approval.digest;
+    verifier.tick(); await until(() => !!resolveResponse);
+    const replacement = f.attach('d'.repeat(40)); assert.notEqual(replacement.id,original.id); assert.equal(f.current(f.issue.id).acceptedDigest,undefined);
+    resolveResponse(Response.json({ sha: f.sha,tree: { sha: f.tree } }));
+    await until(() => f.store.get<GitSubmission>('git_submission',original.id).state === 'STALE');
+    assert.equal(f.current(f.issue.id).state,'USER_ACCEPTANCE'); assert.throws(() => f.delivery('ACCEPT',digest),(e: any) => e.code === 'APPROVAL_STALE');
+    const incomplete = f.change('delivery_complete',f.issue.id,{},f.lead); assert.ok(incomplete.closureBlocked.includes('HUMAN_ACCEPTANCE_REQUIRED'));
+  } finally { await verifier.close(); await f.close(); }
+});
+
+test('a hold blocks automatic Git closure and saved acceptance can complete after resume', { timeout: 20000 },async () => {
+  const f = await reviewedGitFixture(); let resolveResponse!: (response: Response) => void;
+  const verifier = new GitVerifier(f.store,new GitHubProvider(async () => new Promise<Response>(done => { resolveResponse = done; }),() => undefined));
+  try {
+    const git = f.attach(); f.delivery(); verifier.tick(); await until(() => !!resolveResponse);
+    f.change('issue_transition',f.issue.id,{ action: 'hold',reason: 'Fixture hold during remote verification' }); resolveResponse(Response.json({ sha: f.sha,tree: { sha: f.tree } }));
+    await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'VERIFIED'); assert.equal(f.current(f.issue.id).state,'ON_HOLD');
+    f.change('issue_transition',f.issue.id,{ action: 'resume',reason: 'Resume exact fixture delivery' });
+    const result = f.change('delivery_complete',f.issue.id,{},f.lead); assert.equal(result.issue.state,'DONE'); assert.equal(f.store.list('delivery_approval',f.workspace.id).length,1);
+  } finally { await verifier.close(); await f.close(); }
 });

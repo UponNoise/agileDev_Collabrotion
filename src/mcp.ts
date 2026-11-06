@@ -17,6 +17,9 @@ const descriptions: Record<string, string> = {
   qa_check_run: 'Queue a human-approved fixed test command against this QA copy of the sealed snapshot. Test sources must be under .qa.',
   qa_check_get: 'Read captured test status, command, exit code, output, and snapshot binding. Queued/running is not a pass.',
   qa_report_submit: 'Submit criterion-level independent QA results and reproducible findings using captured check IDs. Gate advancement waits for producer termination.',
+  git_submit: 'Attach a full GitHub commit URL to the current sealed candidate in the owner-bound repository. Queued verification is not a successful check; changed mappings invalidate human delivery acceptance.',
+  git_retry: 'Retry unavailable/failed read verification of the same current commit mapping. Preserves exact saved human acceptance; cannot change the target or assert success.',
+  delivery_complete: 'Recheck current saved human acceptance, independent reviews, children, and remote Git evidence before closure. This cannot create human approval.',
   gap_list: 'Find specific blocking readiness gaps and advisory unscheduled work.',
 };
 export async function connectMcp(client: LocalClient) {

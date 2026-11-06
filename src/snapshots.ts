@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { Candidate, DomainError, Snapshot } from './contracts.js';
 import { canonical, hash } from './store.js';
@@ -41,7 +41,9 @@ export function snapshotManifest(root: string, selected: string[], git: boolean)
   return names.map(path => {
     const { file, st } = safeArtifact(root, path); bytes += st.size;
     if (bytes > Number(process.env.AGILEDEV_MAX_SNAPSHOT_BYTES ?? 268435456)) throw new DomainError('SNAPSHOT_LIMIT', 'Snapshot exceeds the configured total size limit');
-    const mode = modes.get(path) ?? (process.platform !== 'win32' && (st.mode & 0o111) ? '100755' : '100644');
+    const indexedMode = modes.get(path);
+    if (indexedMode && !['100644','100755'].includes(indexedMode)) throw new DomainError('ARTIFACT_POLICY', 'Submodules and symbolic links require a separate delivery adapter');
+    const mode = process.platform !== 'win32' ? st.mode & 0o111 ? '100755' : '100644' : indexedMode ?? '100644';
     if (!['100644','100755'].includes(mode)) throw new DomainError('ARTIFACT_POLICY', 'Submodules and symbolic links require a separate delivery adapter');
     return { path, hash: hash(readFileSync(file)), bytes: st.size, mode };
   });
@@ -52,6 +54,7 @@ export function verifySnapshot(snapshot: Snapshot, root = snapshot.root, allowQa
   for (const file of snapshot.files) {
     const path = inside(root, file.path);
     if (statSync(path).size !== file.bytes || hash(readFileSync(path)) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Snapshot source file changed');
+    if (process.platform !== 'win32' && Boolean(statSync(path).mode & 0o111) !== (file.mode === '100755')) throw new DomainError('EVIDENCE_STALE','Snapshot executable mode changed');
   }
 }
 export function sealSnapshot(candidate: Candidate, workspaceId: string, issueId: string, destination: string, git: boolean): Snapshot {
@@ -60,7 +63,8 @@ export function sealSnapshot(candidate: Candidate, workspaceId: string, issueId:
   const rel = relative(source, root); if (!isAbsolute(rel) && !rel.startsWith('..')) throw new DomainError('SNAPSHOT_ROOT_INVALID', 'Snapshot storage must be outside producer storage');
   for (const file of candidate.files) if (hash(readFileSync(inside(source,file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Producer changed a submitted file');
   const files = snapshotManifest(source, candidate.files.map(f => f.path), git);
-  for (const file of files) { const dest = join(root,file.path); mkdirSync(resolve(dest,'..'), { recursive: true, mode: 0o700 }); copyFileSync(inside(source,file.path),dest); }
+  mkdirSync(root,{ recursive: true,mode: 0o700 });
+  for (const file of files) { const dest = join(root,file.path); mkdirSync(resolve(dest,'..'), { recursive: true, mode: 0o700 }); copyFileSync(inside(source,file.path),dest); if (process.platform !== 'win32') chmodSync(dest,file.mode === '100755' ? 0o755 : 0o644); }
   const snapshot: Snapshot = { id, workspaceId, issueId, candidateId: candidate.id, root, files, hash: hash(canonical(files)), createdAt: new Date().toISOString() };
   verifySnapshot(snapshot);
   if (canonical(snapshotManifest(source, candidate.files.map(f => f.path), git)) !== canonical(files)) throw new DomainError('EVIDENCE_STALE', 'Producer changed during snapshot capture');
@@ -69,6 +73,7 @@ export function sealSnapshot(candidate: Candidate, workspaceId: string, issueId:
 export function copySnapshot(snapshot: Snapshot, root: string) {
   verifySnapshot(snapshot);
   if (existsSync(root)) throw new DomainError('EXECUTION_ROOT_EXISTS', 'Never reuse a QA execution directory');
-  for (const file of snapshot.files) { const dest = join(root,file.path); mkdirSync(resolve(dest,'..'), { recursive: true, mode: 0o700 }); copyFileSync(inside(snapshot.root,file.path), dest); }
+  mkdirSync(root,{ recursive: true,mode: 0o700 });
+  for (const file of snapshot.files) { const dest = join(root,file.path); mkdirSync(resolve(dest,'..'), { recursive: true, mode: 0o700 }); copyFileSync(inside(snapshot.root,file.path), dest); if (process.platform !== 'win32') chmodSync(dest,file.mode === '100755' ? 0o755 : 0o644); }
   verifySnapshot(snapshot, root);
 }

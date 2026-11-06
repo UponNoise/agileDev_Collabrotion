@@ -49,7 +49,8 @@ export function decodeNativeEvent(harness: Harness, event: any) {
   return {};
 }
 function processSession(entry: HarnessEntry, args: string[], context: AdapterContext) {
-  const child = spawn(entry.command, [...entry.args, ...args], { cwd: context.cwd, env: { ...process.env, ...entry.env, AGILEDEV_ENDPOINT: context.endpoint, AGILEDEV_TOKEN: context.token }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+  const env = { ...harnessEnvironment(entry.env), AGILEDEV_ENDPOINT: context.endpoint, AGILEDEV_TOKEN: context.token };
+  const child = spawn(entry.command, [...entry.args, ...args], { cwd: context.cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
   child.once('spawn', () => { if (child.pid) context.onPid(child.pid); });
   child.stdin.on('error', () => {});
   const redact = (text: string) => text.replaceAll(context.token, '[redacted]').replaceAll(encodeURIComponent(context.token), '[redacted]');
@@ -91,10 +92,13 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
   };
   return { child, result, interrupt, setListener: (fn: (event: any) => void) => { listener = fn; }, complete: settle, setSession: (id: string) => { sessionId = id; context.onProvider(id); }, setTerminal: (state: 'succeeded' | 'failed') => { terminal = state; } };
 }
+function harnessEnvironment(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries({ ...process.env,...extra }).filter(([key]) => key.toUpperCase() !== 'AGILEDEV_GITHUB_TOKEN'));
+}
 async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSession> {
   let provider = process.env.AGILEDEV_DSH_PROVIDER; let model = process.env.AGILEDEV_DSH_MODEL;
   if (!provider && !model) {
-    const { stdout } = await promisify(execFile)(entry.command, [...entry.args, '--profile', 'sdk', '--dump-config'], { cwd: c.cwd, env: { ...process.env, ...entry.env }, windowsHide: true, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout } = await promisify(execFile)(entry.command, [...entry.args, '--profile', 'sdk', '--dump-config'], { cwd: c.cwd, env: harnessEnvironment(entry.env), windowsHide: true, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
     const declared = declaredDshRoute(stdout); provider = declared?.provider; model = declared?.model;
   }
   if (!provider || !model) throw new DomainError('PROVIDER_CONFIGURATION_REQUIRED', 'SDK profile has no readable static default route. Set both AGILEDEV_DSH_PROVIDER and AGILEDEV_DSH_MODEL; no substitute route is selected.');
