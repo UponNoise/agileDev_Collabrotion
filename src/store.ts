@@ -77,6 +77,7 @@ export class Store {
       if (run.executionActorId !== actor.id || (issue.id !== assigned.id && issue.id !== assigned.parentId)) throw new DomainError('SCOPE_DENIED', 'Run credential is restricted to its task and parent context', 403);
     }
     if (actor.role === 'worker' && issue.assignee !== principalId && !this.list<Issue>('issue', workspaceId).some(child => child.parentId === issue.id && child.assignee === principalId)) throw new DomainError('SCOPE_DENIED', 'Worker can only access assigned issues and their parent context', 403);
+    if (actor.role === 'qa' && issue.qaAssignee !== principalId && !this.list<Issue>('issue', workspaceId).some(child => child.parentId === issue.id && child.qaAssignee === principalId)) throw new DomainError('SCOPE_DENIED','QA can only access assigned reviews and their parent context',403);
     return issue;
   }
   event(workspaceId: string, actor: Actor, operation: string, targetId: string | null, data: unknown) {

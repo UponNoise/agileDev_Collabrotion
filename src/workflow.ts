@@ -2,21 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { Actor, Design, DomainError, Issue, Operation, Run, Workspace, liveRunStates, schemas } from './contracts.js';
+import { inside } from './paths.js';
+export { inside } from './paths.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, Issue, Operation, QaReport, Run, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
+import { acceptanceDigest, candidateSnapshot, queueQa, validateQaReport } from './qa-policy.js';
 
-const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list']);
+const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
 function version(issue: Issue, expected: number) {
   if (issue.version !== expected) throw new DomainError('VERSION_CONFLICT', 'Issue changed; reload before retrying', 409, { currentVersion: issue.version });
-}
-export function inside(root: string, path: string): string {
-  const resolved = realpathSync(resolve(root, path));
-  const rel = relative(root, resolved);
-  if (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) throw new DomainError('PATH_DENIED', 'Path escapes the workspace', 403);
-  return resolved;
 }
 export class Workflow {
   constructor(readonly store: Store, readonly now = () => Date.now()) {}
@@ -45,14 +42,27 @@ export class Workflow {
     const s = this.store;
     if (op === 'workspace_list') return { workspaces: s.list<Workspace>('workspace').filter(w => actor.role === 'human' || actor.workspaceIds.includes(w.id)) };
     s.workspace(actor, a.workspaceId);
+    if (op === 'check_profile_list') return { profiles: s.list<CheckProfile>('check_profile',a.workspaceId) };
+    if (op === 'qa_check_get') {
+      const check = s.get<CheckRun>('check',a.checkId); s.issue(actor,a.workspaceId,check.issueId);
+      if (check.workspaceId !== a.workspaceId || (actor.role === 'qa' && check.runId !== actor.runId && check.actorId !== actor.id)) throw new DomainError('SCOPE_DENIED','Check belongs to another QA execution',403);
+      return { check };
+    }
     if (op === 'connection_list') {
       requireRole(actor, 'human', 'lead', 'pm');
       return { connections: s.list('connection', a.workspaceId) };
     }
-    const issues = s.list<Issue>('issue', a.workspaceId).filter(i => actor.role !== 'worker' || (i.assignee === (actor.principalId ?? actor.id) && (!actor.runId || s.get<Run>('run', actor.runId).issueId === i.id)));
+    const issues = s.list<Issue>('issue', a.workspaceId).filter(i => !['worker','qa'].includes(actor.role) || ((actor.role === 'worker' ? i.assignee : i.qaAssignee) === (actor.principalId ?? actor.id) && (!actor.runId || s.get<Run>('run', actor.runId).issueId === i.id)));
     if (op === 'issue_get') {
       const issue = s.issue(actor, a.workspaceId, a.issueId);
-      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue) };
+      let deliveryDigest: string | null = null;
+      if (issue.state === 'USER_ACCEPTANCE') { try { deliveryDigest = acceptanceDigest(s,issue); } catch {} }
+      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest };
+    }
+    if (op === 'evidence_get') {
+      s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
+      if (evidence.issueId !== a.issueId || (evidence.workspaceId && evidence.workspaceId !== a.workspaceId)) throw new DomainError('SCOPE_DENIED','Evidence belongs to another issue',403);
+      return { evidence };
     }
     if (op === 'issue_list') {
       const filtered = issues.filter(i => !a.state || i.state === a.state);
@@ -63,7 +73,7 @@ export class Workflow {
       requireRole(actor, 'human', 'lead', 'pm');
       return { events: s.db.prepare('SELECT sequence,actor_id AS actorId,operation,target_id AS targetId,data,at FROM events WHERE workspace_id=? AND sequence>? ORDER BY sequence LIMIT ?').all(a.workspaceId, a.after, a.limit).map((r: any) => ({ ...r, data: JSON.parse(r.data) })) };
     }
-    const runs = s.list<Run>('run', a.workspaceId).filter(r => actor.role !== 'worker' || (r.actorId === (actor.principalId ?? actor.id) && (!actor.runId || r.id === actor.runId)));
+    const runs = s.list<Run>('run', a.workspaceId).filter(r => !['worker','qa'].includes(actor.role) || (r.actorId === (actor.principalId ?? actor.id) && (!actor.runId || r.id === actor.runId)));
     if (op === 'run_list') return { runs: runs.slice(-a.limit).reverse() };
     const run = runs.find(r => r.id === a.runId);
     if (!run) throw new DomainError('NOT_FOUND', 'Run not found', 404);
@@ -77,7 +87,7 @@ export class Workflow {
     if (i.state === 'NOT_STARTED' && actor.role === 'worker' && !this.readiness(i).blocking.length) return ['work_claim'];
     if (i.state === 'IN_PROGRESS' && i.lease?.actorId === actor.id) return ['work_heartbeat', 'work_submit'];
     if (i.state === 'LEAD_REVIEW' && actor.role === 'lead') return ['review_submit'];
-    if (i.state === 'QA_TEST' && actor.role === 'qa') return ['review_submit'];
+    if (i.state === 'QA_TEST' && actor.role === 'qa') return ['qa_check_run', 'qa_check_get', 'qa_report_submit'];
     return [];
   }
   design(issue: Issue): Design | null {
@@ -106,8 +116,25 @@ export class Workflow {
     return { issue: this.display(i) };
   }
   private invalidate(i: Issue) {
-    i.candidate = null; i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.stage = null;
+    i.candidate = null; i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.stage = null; i.acceptedDigest = undefined;
     if (!['NOT_STARTED', 'ABANDONED'].includes(i.state)) i.state = 'NOT_STARTED';
+  }
+  completeQa(actor: Actor, runId: string) {
+    requireRole(actor,'qa');
+    const run = this.store.get<Run>('run',runId); const issue = this.store.issue(actor,run.workspaceId,run.issueId);
+    if (issue.state !== 'QA_TEST' || run.state !== 'RUNNING' || run.executionActorId !== actor.id || !run.providerSessionId || !run.reportId) throw new DomainError('QA_REPORT_REQUIRED','A stopped independent producer must have submitted a report for this QA gate');
+    const report = this.store.get<QaReport>('qa_report',run.reportId); validateQaReport(this.store,issue,actor,report);
+    const review = { id: randomUUID(), issueId: issue.id, workspaceId: issue.workspaceId, actorId: actor.id, sessionId: actor.sessionId, candidateId: report.candidateId, snapshotId: report.snapshotId, stage: 'QA', verdict: report.verdict, reportId: report.id, reason: report.summary, at: new Date(this.now()).toISOString() };
+    this.store.put('review',review,issue.workspaceId);
+    for (const finding of report.findings) {
+      const defect = { id: randomUUID(), issueId: issue.id, workspaceId: issue.workspaceId, candidateId: report.candidateId, snapshotId: report.snapshotId, reportId: report.id, ownerId: issue.assignee, state: 'OPEN', ...finding };
+      this.store.put('defect',defect,issue.workspaceId);
+    }
+    if (report.verdict === 'PASS') {
+      for (const defect of this.store.list<any>('defect',issue.workspaceId).filter(d => d.issueId === issue.id && d.state === 'OPEN' && d.reportId !== report.id)) { defect.state = 'RESOLVED'; defect.resolutionReportId = report.id; this.store.put('defect',defect,issue.workspaceId); }
+      issue.qaReview = review.id; issue.state = 'LEAD_REVIEW'; issue.stage = 'FINAL';
+    } else if (report.verdict === 'FAIL') { issue.state = 'QA_REJECTED'; issue.stage = null; }
+    return this.save(actor,'qa_review_completed',issue,{ reviewId: review.id, reportId: report.id, verdict: report.verdict });
   }
   private mutate(actor: Actor, op: Operation, a: Record<string, any>): Record<string, unknown> {
     const s = this.store;
@@ -124,6 +151,12 @@ export class Workflow {
       return { workspace: w };
     }
     const w = s.workspace(actor, a.workspaceId);
+    if (op === 'check_profile_create') {
+      requireRole(actor,'human');
+      if (!isAbsolute(a.command) || !existsSync(a.command) || !statSync(a.command).isFile() || /\.(cmd|bat|ps1|sh)$/i.test(a.command)) throw new DomainError('COMMAND_INVALID','Approve an absolute native executable; shell shims are not executed');
+      const profile: CheckProfile = { id: randomUUID(), workspaceId: w.id, name: a.name, command: realpathSync(a.command), args: a.args, criteria: [...new Set<string>(a.criteria)], timeoutMs: a.timeoutMs, hash: hash(canonical({ command: realpathSync(a.command), args: a.args, criteria: a.criteria, timeoutMs: a.timeoutMs })) };
+      s.put('check_profile',profile,w.id); s.event(w.id,actor,op,profile.id,{ profileHash: profile.hash }); return { profile };
+    }
     if (op === 'run_interrupt' || op === 'run_reconcile') {
       requireRole(actor, ...(op === 'run_reconcile' ? ['human'] as const : ['human', 'lead', 'pm'] as const));
       const run = s.get<Run>('run', a.runId);
@@ -132,14 +165,21 @@ export class Workflow {
       if (!(liveRunStates as readonly string[]).includes(run.state)) throw new DomainError('INVALID_TRANSITION', 'Run is already terminal');
       if (op === 'run_reconcile' && run.state !== 'UNCERTAIN') throw new DomainError('INVALID_TRANSITION', 'Only uncertain execution requires external reconciliation');
       if (op === 'run_reconcile') {
-        if (run.pid) {
+        const checks = s.list<CheckRun>('check',w.id).filter(c => c.runId === run.id && ['RUNNING','UNCERTAIN'].includes(c.state));
+        for (const pid of [run.pid,...checks.map(c => c.pid)].filter((p): p is number => !!p)) {
           let alive = true;
-          try { process.kill(run.pid, 0); } catch (error: any) { if (error.code === 'ESRCH') alive = false; }
+          try { process.kill(pid, 0); } catch (error: any) { if (error.code === 'ESRCH') alive = false; }
           if (alive) throw new DomainError('RUN_STILL_LIVE', 'Recorded process still exists; inspect and stop the owned execution first');
         }
+        for (const check of checks) { check.state = 'FAILED'; check.errorCode = 'EXTERNAL_STOP_CONFIRMED'; check.finishedAt = new Date(this.now()).toISOString(); s.put('check',check,w.id); }
         run.state = 'CANCELLED'; run.finishedAt = new Date(this.now()).toISOString();
         if (run.executionActorId) s.revokeActor(run.executionActorId);
         const issue = s.get<Issue>('issue', run.issueId);
+        if (run.kind !== 'qa' && issue.candidate?.runId === run.id) {
+          s.put('candidate',issue.candidate,w.id); const held = issue.state === 'ON_HOLD'; const abandoned = issue.state === 'ABANDONED'; this.invalidate(issue);
+          if (held) { issue.state = 'ON_HOLD'; issue.savedState = { state: 'NOT_STARTED',stage: null }; } else if (abandoned) issue.state = 'ABANDONED';
+          this.save(actor,'candidate_invalidated',issue,{ runId: run.id,reason: a.reason });
+        }
         if (issue.lease?.actorId === run.executionActorId) { issue.lease = null; if (issue.state === 'IN_PROGRESS') issue.state = 'NOT_STARTED'; this.save(actor, 'run_reconciled', issue, { runId: run.id, reason: a.reason }); }
       } else if (run.state === 'QUEUED') { run.state = 'CANCELLED'; run.finishedAt = new Date(this.now()).toISOString(); }
       else if (run.state !== 'UNCERTAIN') run.state = 'STOPPING';
@@ -169,11 +209,61 @@ export class Workflow {
       }
       w.sequence++; s.put('workspace', w, w.id);
       const i: Issue = { id: randomUUID(), workspaceId: w.id, key: `${w.prefix}-${String(w.sequence).padStart(4, '0')}`, parentId: a.parentId ?? null, title: a.title, description: a.description, criteria: [...new Set<string>(a.criteria)], version: 1, scopeRevision: 1, state: 'NOT_STARTED', stage: null, assignee: null, harness: null, dependencies: [], priority: 2, plannedStart: null, dueDate: null, designId: null, fence: 0, lease: null, candidate: null, initialReview: null, qaReview: null, finalReview: null, savedState: null };
+      const parent = a.parentId ? s.get<Issue>('issue',a.parentId) : null;
+      i.artifactMode = parent?.artifactMode ?? a.artifactMode ?? (w.commonDir ? 'git' : 'artifact'); i.artifactReason = parent?.artifactReason ?? a.artifactReason ?? (!w.commonDir ? 'Non-Git workspace delivery' : undefined);
+      if (a.artifactMode && parent?.artifactMode && a.artifactMode !== parent.artifactMode) throw new DomainError('ARTIFACT_MODE_MISMATCH','Child delivery mode follows the approved parent scope');
+      if (i.artifactMode === 'artifact' && w.commonDir && !i.artifactReason) throw new DomainError('ARTIFACT_REASON_REQUIRED','Non-Git delivery in a Git workspace needs an explicit reviewed reason');
       s.put('issue', i, w.id); s.event(w.id, actor, op, i.id, { key: i.key, version: 1 });
       return { issue: this.display(i) };
     }
     const i = s.issue(actor, w.id, a.issueId);
     version(i, a.expectedVersion);
+    if (op === 'qa_configure') {
+      requireRole(actor,'human','lead','pm');
+      if (['DONE','ABANDONED','USER_ACCEPTANCE'].includes(i.state) || (i.state === 'LEAD_REVIEW' && i.stage === 'FINAL')) throw new DomainError('INVALID_TRANSITION','QA assignment is frozen after acceptance gates');
+      if (s.list<Run>('run',w.id).some(r => r.issueId === i.id && r.kind === 'qa' && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile the current QA run first');
+      const reviewer = s.get<Actor>('actor',a.actorId);
+      if (reviewer.role !== 'qa' || reviewer.runId || !reviewer.workspaceIds.includes(w.id) || reviewer.id === i.assignee) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED','Select an independent logical QA actor in this workspace');
+      for (const id of a.checkProfileIds) if (s.get<CheckProfile>('check_profile',id).workspaceId !== w.id) throw new DomainError('SCOPE_DENIED','Check profile belongs to another workspace',403);
+      i.qaAssignee = reviewer.id; i.qaHarness = a.harness; i.checkProfileIds = [...new Set<string>(a.checkProfileIds)];
+      const run = i.state === 'QA_TEST' ? queueQa(s,i) : null;
+      return { ...this.save(actor,op,i,{ runId: run?.id }), run };
+    }
+    if (op === 'qa_check_run' || op === 'qa_report_submit') {
+      requireRole(actor,'qa');
+      if (!actor.runId || i.state !== 'QA_TEST') throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED','Captured QA evidence requires a managed independent review');
+      const run = s.get<Run>('run',actor.runId); const snapshot = candidateSnapshot(s,i);
+      if (run.kind !== 'qa' || run.state !== 'RUNNING' || run.executionActorId !== actor.id || run.snapshotId !== snapshot.id || i.qaAssignee !== (actor.principalId ?? actor.id)) throw new DomainError('SCOPE_DENIED','QA execution does not own the current assignment',403);
+      if (op === 'qa_check_run') {
+        if (!(run.checkProfileIds ?? []).includes(a.profileId)) throw new DomainError('SCOPE_DENIED','Check profile is not approved for this run',403);
+        const profile = s.get<CheckProfile>('check_profile',a.profileId);
+        const testFiles = (a.testFiles as string[]).map(path => {
+          path = path.replaceAll('\\','/');
+          if (!path.startsWith('.qa/') || path.split('/').includes('..') || statSync(inside(run.executionRoot!,path)).size > 2097152) throw new DomainError('ARTIFACT_POLICY','QA test sources belong under .qa and must be at most 2 MiB');
+          return { path, hash: hash(readFileSync(inside(run.executionRoot!,path))) };
+        });
+        const check: CheckRun = { id: randomUUID(), workspaceId: w.id, issueId: i.id, runId: run.id, actorId: actor.id, sessionId: actor.sessionId, candidateId: i.candidate!.id, snapshotId: snapshot.id, profileId: profile.id, profileHash: profile.hash, state: 'QUEUED', criteria: profile.criteria, testFiles, createdAt: new Date(this.now()).toISOString() };
+        s.put('check',check,w.id); this.save(actor,op,i,{ checkId: check.id }); return { check, issue: this.display(i) };
+      }
+      const report: QaReport = { id: randomUUID(), workspaceId: w.id, issueId: i.id, runId: run.id, actorId: actor.id, sessionId: actor.sessionId, candidateId: a.candidateId, snapshotId: snapshot.id, verdict: a.verdict, results: a.results, findings: a.findings, summary: a.summary };
+      validateQaReport(s,i,actor,report); s.put('qa_report',report,w.id); run.reportId = report.id; run.version++; s.put('run',run,w.id);
+      return { ...this.save(actor,op,i,{ reportId: report.id }), report, reviewPendingStop: true };
+    }
+    if (op === 'delivery_decide') {
+      requireRole(actor,'human');
+      if (i.state !== 'USER_ACCEPTANCE' || i.candidate?.id !== a.candidateId || acceptanceDigest(s,i) !== a.digest) throw new DomainError('APPROVAL_STALE','Accept only the current reviewed delivery digest');
+      const approval = { id: randomUUID(), issueId: i.id, actorId: actor.id, candidateId: i.candidate!.id, digest: a.digest, decision: a.decision, reason: a.reason, at: new Date(this.now()).toISOString() };
+      s.put('delivery_approval',approval,w.id);
+      if (a.decision === 'REJECT') { i.state = 'USER_REJECTED'; i.acceptedDigest = undefined; }
+      else {
+        i.acceptedDigest = a.digest;
+        const children = s.list<Issue>('issue',w.id).filter(c => c.parentId === i.id);
+        if (children.some(c => c.state !== 'DONE')) throw new DomainError('CHILDREN_INCOMPLETE','Parent acceptance requires every in-scope child to be implemented');
+        if (!i.initialReview || !i.qaReview || !i.finalReview || this.design(i)?.status !== 'APPROVED') throw new DomainError('EVIDENCE_MISSING','Current design, lead reviews, and QA are required');
+        if ((i.artifactMode ?? (w.commonDir ? 'git' : 'artifact')) === 'artifact') i.state = 'DONE';
+      }
+      return { ...this.save(actor,op,i,{ approvalId: approval.id, reason: a.reason }), approval, closureBlocked: i.state === 'USER_ACCEPTANCE' ? ['GIT_VERIFICATION_REQUIRED'] : [] };
+    }
     if (['issue_assign', 'dependency_add', 'design_set'].includes(op) || (op === 'issue_update' && a.description !== undefined)) {
       if (s.list<Run>('run', w.id).some(r => (r.issueId === i.id || (op === 'design_set' && s.get<Issue>('issue', r.issueId).parentId === i.id)) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'Reconcile queued, live, or uncertain executions before changing their assignment or scope');
     }
@@ -189,7 +279,7 @@ export class Workflow {
       requireRole(actor, 'human', 'lead');
       if (i.parentId) throw new DomainError('PARENT_DESIGN_REQUIRED', 'Design revisions belong to the parent requirement');
       if (['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('ISSUE_CLOSED', 'Reopen before changing scope');
-      const design: Design = { id: randomUUID(), issueId: i.id, content: a.content, criteria: [...new Set<string>(a.criteria)], status: 'DRAFT', hash: hash(canonical({ content: a.content, criteria: a.criteria })) };
+      const design: Design = { id: randomUUID(), issueId: i.id, content: a.content, criteria: [...new Set<string>(a.criteria)], status: 'DRAFT', hash: hash(canonical({ content: a.content, criteria: a.criteria, artifactMode: i.artifactMode, artifactReason: i.artifactReason })) };
       s.put('design', design, w.id); i.designId = design.id; i.criteria = design.criteria;
       this.invalidate(i);
       for (const child of s.list<Issue>('issue', w.id).filter(c => c.parentId === i.id && c.state !== 'ABANDONED')) { this.invalidate(child); this.save(actor, 'design_invalidated', child, { designId: design.id }); }
@@ -266,23 +356,25 @@ export class Workflow {
         return { path: relative(root, file), hash: hash(readFileSync(file)) };
       });
       i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary, ...(run ? { executionRoot: root, runId: run.id, baseSha: run.baseSha } : {}) };
+      s.put('candidate',i.candidate,w.id);
       i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.state = 'LEAD_REVIEW'; i.stage = 'PRE_QA';
       return this.save(actor, op, i, { candidateId: i.candidate.id, artifactHash: i.candidate.hash });
     }
     if (op === 'review_submit') {
       if (!i.candidate || i.candidate.id !== a.candidateId) throw new DomainError('EVIDENCE_STALE', 'Review must reference the current candidate');
       if (i.candidate.runId && (liveRunStates as readonly string[]).includes(s.get<Run>('run', i.candidate.runId).state)) throw new DomainError('RUN_STILL_LIVE', 'Confirm execution stopped before reviewing its artifacts');
-      for (const file of i.candidate.files) if (hash(readFileSync(inside(i.candidate.executionRoot ?? w.root, file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Submitted artifact changed; resubmit before review');
+      if (i.candidate.runId) candidateSnapshot(s,i);
+      else for (const file of i.candidate.files) if (hash(readFileSync(inside(w.root, file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Submitted artifact changed; resubmit before review');
       if (i.candidate.sessionId === actor.sessionId) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED', 'Implementer cannot review its own delivery');
       if (i.state === 'LEAD_REVIEW') requireRole(actor, 'lead');
       else if (i.state === 'QA_TEST') requireRole(actor, 'qa');
       else throw new DomainError('INVALID_TRANSITION', 'Issue is not awaiting a review');
-      if (i.state === 'QA_TEST' && a.verdict === 'PASS') throw new DomainError('EVIDENCE_MISSING', 'A trusted independent test run is required; narrative approval cannot pass QA');
+      if (i.state === 'QA_TEST') throw new DomainError('EVIDENCE_MISSING', 'Use an assigned QA report with captured test evidence; narrative review cannot move the QA gate');
       if (i.state === 'LEAD_REVIEW' && i.stage === 'FINAL' && (!i.initialReview || !i.qaReview)) throw new DomainError('EVIDENCE_MISSING', 'Final review requires current initial and independent QA evidence');
-      const review = { id: randomUUID(), actorId: actor.id, sessionId: actor.sessionId, candidateId: i.candidate.id, stage: i.stage ?? 'QA', verdict: a.verdict, reason: a.reason, at: new Date(this.now()).toISOString() };
+      const review = { id: randomUUID(), issueId: i.id, workspaceId: w.id, actorId: actor.id, sessionId: actor.sessionId, candidateId: i.candidate.id, snapshotId: i.candidate.snapshotId, stage: i.stage ?? 'QA', verdict: a.verdict, reason: a.reason, at: new Date(this.now()).toISOString() };
       s.put('review', review, w.id);
-      if (a.verdict === 'FAIL') { i.state = i.state === 'QA_TEST' ? 'QA_REJECTED' : 'LEAD_REJECTED'; i.stage = null; }
-      else if (i.stage === 'PRE_QA') { i.initialReview = review.id; i.state = 'QA_TEST'; i.stage = null; }
+      if (a.verdict === 'FAIL') { i.state = 'LEAD_REJECTED'; i.stage = null; }
+      else if (i.stage === 'PRE_QA') { i.initialReview = review.id; i.state = 'QA_TEST'; i.stage = null; const run = queueQa(s,i); if (run) s.event(w.id,actor,'qa_dispatched',run.id,{ candidateId: i.candidate.id }); }
       else { i.finalReview = review.id; i.state = 'USER_ACCEPTANCE'; i.stage = null; }
       return this.save(actor, op, i, { reviewId: review.id, verdict: review.verdict, reason: review.reason });
     }
@@ -302,6 +394,10 @@ export class Workflow {
       } else {
         if (!['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('INVALID_TRANSITION', 'Only terminal issues can reopen');
         this.invalidate(i); i.state = 'NOT_STARTED';
+        if (i.parentId) {
+          const parent = s.get<Issue>('issue',i.parentId);
+          if (parent.state === 'DONE') { this.invalidate(parent); parent.state = 'IN_PROGRESS'; this.save(actor,'child_reopened',parent,{ childId: i.id }); }
+        }
       }
       return this.save(actor, op, i, { reason: a.reason });
     }

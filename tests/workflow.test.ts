@@ -104,9 +104,9 @@ test('lead review hands off to QA and narrative approval cannot fake independent
   assert.throws(() => f.change(f.worker.actor, 'review_submit', task.id, { candidateId, verdict: 'PASS', reason: 'self pass' }), rejects('REVIEW_INDEPENDENCE_REQUIRED'));
   f.change(f.lead.actor, 'review_submit', task.id, { candidateId, verdict: 'PASS', reason: 'Initial review' });
   assert.equal(f.current(task.id).state, 'QA_TEST');
-  assert.throws(() => f.change(f.qa.actor, 'review_submit', task.id, { candidateId, verdict: 'PASS', reason: 'untested claim' }), rejects('EVIDENCE_MISSING'));
-  f.change(f.qa.actor, 'review_submit', task.id, { candidateId, verdict: 'FAIL', reason: 'Output fails the boundary criterion; reproduce by opening output.txt' });
-  assert.equal(f.current(task.id).state, 'QA_REJECTED');
+  assert.throws(() => f.change(f.qa.actor, 'review_submit', task.id, { candidateId, verdict: 'PASS', reason: 'Unassigned reviewer' }), rejects('SCOPE_DENIED'));
+  assert.throws(() => f.change(f.qa.actor, 'review_submit', task.id, { candidateId, verdict: 'FAIL', reason: 'Unassigned narrative failure' }), rejects('SCOPE_DENIED'));
+  assert.equal(f.current(task.id).state, 'QA_TEST');
 });
 
 test('ancestor holds stop submission and material design changes invalidate active ownership', () => {

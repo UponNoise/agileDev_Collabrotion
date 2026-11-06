@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Actor, Harness, Issue, Run } from './contracts.js';
+import { Actor, CheckRun, Harness, Issue, QaReport, Run, Snapshot } from './contracts.js';
 import { Store } from './store.js';
 import { Workflow } from './workflow.js';
 import { createServer } from './http.js';
 import { Coordinator } from './runner.js';
 
-export async function verifyExecution(harness: Harness, bridgeScript: string) {
+export async function verifyExecution(harness: Harness, bridgeScript: string, qaHarness?: Harness) {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-native-execution-'));
   const source = join(root, 'source'); mkdirSync(source); writeFileSync(join(source, 'README.md'), 'Disposable AgileDev execution fixture.\n');
   const git = (...args: string[]) => execFileSync('git', args, { cwd: source, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -18,24 +18,50 @@ export async function verifyExecution(harness: Harness, bridgeScript: string) {
   const call = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(owner.actor, 'workspace_register', { root: source, name: 'Native execution verification', prefix: 'NAT' }).workspace;
   const run = (operation: string, input: object) => call(owner.actor, operation, { workspaceId: workspace.id, ...input });
-  const parent = run('issue_create', { title: 'Native execution fixture', description: 'Verify the selected native harness executes in an isolated directory and submits actual files', criteria: ['FILE-1'] }).issue;
+  const parent = run('issue_create', { title: 'Native execution fixture', description: 'Verify the selected native harness executes in an isolated directory and submits actual files', criteria: ['FILE-1'], ...(qaHarness ? { artifactMode: 'artifact', artifactReason: 'Disposable integration fixture for artifact acceptance; does not verify Git commit closure' } : {}) }).issue;
   const change = (operation: string, issueId: string, input: object = {}) => run(operation, { issueId, expectedVersion: store.get<Issue>('issue', issueId).version, ...input });
   change('design_set', parent.id, { content: 'Create delivery.txt containing exactly agiledev-native-ok followed by a newline. Do not change README.md. Submit delivery.txt through the workflow tool. This is a disposable integration fixture, not a user delivery acceptance.', criteria: ['FILE-1'] });
   change('design_submit', parent.id); change('design_decide', parent.id, { designId: store.get<Issue>('issue', parent.id).designId, decision: 'APPROVED', reason: 'Automated integration fixture setup; not approval of a real product requirement' });
   const task = run('issue_create', { parentId: parent.id, expectedParentVersion: store.get<Issue>('issue', parent.id).version, title: '[Test] Execution: write delivery.txt -> authenticated submission', description: 'Write delivery.txt containing exactly agiledev-native-ok and a newline, then use the provided MCP workflow tools to submit that file for initial lead review. Preserve README.md.', criteria: ['FILE-1'] }).issue;
   const worker = run('actor_enroll', { role: 'worker', name: `${harness} fixture worker` });
   change('issue_assign', task.id, { actorId: worker.actor.id, harness });
+  const lead = qaHarness ? run('actor_enroll',{ role: 'lead', name: 'Automated integration fixture lead' }).actor as Actor : undefined;
+  if (qaHarness) {
+    const qa = run('actor_enroll',{ role: 'qa',name: `${qaHarness} independent fixture reviewer` });
+    const profile = run('check_profile_create',{ name: 'Independent exact-file fixture check',command: process.execPath,args: ['.qa/check.mjs'],criteria: ['FILE-1'],timeoutMs: 10000 }).profile;
+    change('qa_configure',task.id,{ actorId: qa.actor.id,harness: qaHarness,checkProfileIds: [profile.id] });
+  }
   const job = change('work_dispatch', task.id, { designId: store.get<Issue>('issue', parent.id).designId, scopeRevision: 1 }).run as Run;
   const app = createServer(store); const endpoint = await app.listen({ host: '127.0.0.1', port: 0 });
   const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript, concurrency: 1, maxRunMs: 120000 });
   try {
     await coordinator.start(); const deadline = Date.now() + 140000;
     while (['QUEUED', 'STARTING', 'RUNNING', 'STOPPING'].includes(store.get<Run>('run', job.id).state) && Date.now() < deadline) await new Promise(done => setTimeout(done, 250));
-    await coordinator.close();
     const final = store.get<Run>('run', job.id); const issue = store.get<Issue>('issue', task.id);
     const delivered = issue.candidate?.executionRoot ? join(issue.candidate.executionRoot, 'delivery.txt') : null;
     const expectedContent = delivered && existsSync(delivered) ? readFileSync(delivered, 'utf8') === 'agiledev-native-ok\n' : false;
     const sourceIntact = !existsSync(join(source, 'delivery.txt')) && readFileSync(join(source, 'README.md'), 'utf8') === 'Disposable AgileDev execution fixture.\n';
+    if (qaHarness && final.state === 'SUCCEEDED' && expectedContent && sourceIntact) {
+      const initial = store.get<Issue>('issue',task.id);
+      call(lead!,'review_submit',{ workspaceId: workspace.id,issueId: task.id,expectedVersion: initial.version,candidateId: initial.candidate!.id,verdict: 'PASS',reason: 'Automated integration fixture initial review, not real product acceptance' });
+      const qaJob = store.list<Run>('run',workspace.id).find(r => r.kind === 'qa' && r.issueId === task.id)!;
+      const qaDeadline = Date.now() + 180000;
+      while (['QUEUED','STARTING','RUNNING','STOPPING'].includes(store.get<Run>('run',qaJob.id).state) && Date.now() < qaDeadline) await new Promise(done => setTimeout(done,250));
+      await coordinator.close();
+      const qaRun = store.get<Run>('run',qaJob.id); let afterQa = store.get<Issue>('issue',task.id);
+      if (qaRun.state === 'SUCCEEDED' && afterQa.state === 'LEAD_REVIEW' && afterQa.stage === 'FINAL') {
+        call(lead!,'review_submit',{ workspaceId: workspace.id,issueId: task.id,expectedVersion: afterQa.version,candidateId: afterQa.candidate!.id,verdict: 'PASS',reason: 'Automated integration fixture final review, not real product acceptance' });
+        afterQa = store.get<Issue>('issue',task.id);
+        const packet = flow.execute(owner.actor,'issue_get',{ workspaceId: workspace.id,issueId: task.id }) as any;
+        change('delivery_decide',task.id,{ candidateId: afterQa.candidate!.id,digest: packet.deliveryDigest,decision: 'ACCEPT',reason: 'Automated integration fixture owner decision only; not actual user acceptance or Git closure' });
+      }
+      const report = qaRun.reportId ? store.get<QaReport>('qa_report',qaRun.reportId) : null;
+      const snapshot = store.get<Snapshot>('snapshot',initial.candidate!.snapshotId!);
+      const checks = store.list<CheckRun>('check',workspace.id).filter(c => c.runId === qaRun.id);
+      const status = store.get<Issue>('issue',task.id).state;
+      return { workerHarness: harness,qaHarness,status: status === 'DONE' && qaRun.state === 'SUCCEEDED' ? 'QA_HANDOFF_VERIFIED' : 'QA_HANDOFF_NOT_VERIFIED',workerRunState: final.state,qaRunState: qaRun.state,qaErrorCode: qaRun.errorCode,issueState: status,workerProviderSessionRecorded: !!final.providerSessionId,qaProviderSessionRecorded: !!qaRun.providerSessionId,independentSessions: !!report && report.sessionId !== initial.candidate!.sessionId,independentDirectories: qaRun.executionRoot !== initial.candidate!.executionRoot,snapshotHash: snapshot.hash,snapshotFileCount: snapshot.files.length,checks: checks.map(c => ({ state: c.state,exitCode: c.exitCode,profileHash: c.profileHash,criteria: c.criteria,stdout: c.stdout?.replaceAll(root,'<fixture>').slice(-3000),stderr: c.stderr?.replaceAll(root,'<fixture>').slice(-3000),errorCode: c.errorCode })),qaVerdict: report?.verdict,expectedContent,sourceIntact,retainedEvidenceDirectory: root,diagnostic: qaRun.state !== 'SUCCEEDED' ? qaRun.summary?.replaceAll(root,'<fixture>').slice(-2500) : undefined,limitations: ['Provider execution and QA evidence are real. Human/design/lead decisions are automated fixture setup, not actual product acceptance.','Artifact mode deliberately excludes Git commit closure, merge, deployment, UI, and packaging acceptance.'] };
+    }
+    await coordinator.close();
     return { harness, status: final.state === 'SUCCEEDED' && expectedContent && sourceIntact && issue.state === 'LEAD_REVIEW' ? 'EXECUTION_VERIFIED' : 'EXECUTION_NOT_VERIFIED', runState: final.state, errorCode: final.errorCode, issueState: issue.state, providerSessionRecorded: !!final.providerSessionId, expectedContent, sourceIntact, retainedEvidenceDirectory: root, diagnostic: final.state !== 'SUCCEEDED' ? final.summary?.replaceAll(root, '<fixture>')?.slice(-2500) : undefined, limitations: ['This verifies worker execution and submission, not independent QA or user acceptance.'] };
   } finally { await coordinator.close(); await app.close(); store.close(); }
 }

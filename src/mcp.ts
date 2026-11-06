@@ -13,7 +13,10 @@ const descriptions: Record<string, string> = {
   work_dispatch: 'Queue a ready assignment for the selected harness. Queued is not running or completed.',
   work_claim: 'Acknowledge the current scope/design and atomically claim assigned work.',
   work_submit: 'Hash real workspace artifacts and submit them for initial lead review.',
-  review_submit: 'Record a role-checked review of the exact candidate. QA pass requires trusted test evidence.',
+  review_submit: 'Record an initial or final lead review of the exact sealed candidate. This cannot advance the independent QA gate.',
+  qa_check_run: 'Queue a human-approved fixed test command against this QA copy of the sealed snapshot. Test sources must be under .qa.',
+  qa_check_get: 'Read captured test status, command, exit code, output, and snapshot binding. Queued/running is not a pass.',
+  qa_report_submit: 'Submit criterion-level independent QA results and reproducible findings using captured check IDs. Gate advancement waits for producer termination.',
   gap_list: 'Find specific blocking readiness gaps and advisory unscheduled work.',
 };
 export async function connectMcp(client: LocalClient) {
@@ -25,7 +28,7 @@ export async function connectMcp(client: LocalClient) {
     if (clientInfo) void client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }).catch(() => process.stderr.write('Could not record MCP initialization metadata.\n'));
   };
   for (const name of agentOperations) {
-    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list'].includes(name);
+    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get'].includes(name);
     server.registerTool(name, { description: descriptions[name] ?? `Perform ${name} within authenticated role and workspace scope. Mutations require current versions and a unique idempotency key.`, inputSchema: schemas[name], annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: true, openWorldHint: false } }, async (args: any) => {
       try {
         const result = await client.command(name, args);

@@ -18,9 +18,10 @@ const descriptorFile = join(dataDir, 'daemon.json');
 function descriptor() { return JSON.parse(readFileSync(descriptorFile, 'utf8')) as { endpoint: string; ownerToken: string; pid: number; instance: string }; }
 async function main() {
   const [command = 'help', ...args] = process.argv.slice(2);
-  if (command === 'verify-execution') {
+  if (command === 'verify-execution' || command === 'verify-qa') {
     if (!(harnesses as readonly string[]).includes(args[0] ?? '')) throw new Error('Choose codex, claude-code, or dsh for the real execution verification.');
-    console.log(JSON.stringify(await verifyExecution(args[0] as Harness, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js')), null, 2));
+    if (command === 'verify-qa' && !(harnesses as readonly string[]).includes(args[1] ?? '')) throw new Error('Usage: verify-qa <worker harness> <QA harness>; this starts two real model runs.');
+    console.log(JSON.stringify(await verifyExecution(args[0] as Harness, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'),command === 'verify-qa' ? args[1] as Harness : undefined), null, 2));
     return;
   }
   if (command === 'probe-hosts') { console.log(JSON.stringify(await probeHosts(), null, 2)); return; }
@@ -95,6 +96,6 @@ async function main() {
     } else throw new Error('Connection format must be codex, claude-code, or dsh.');
     return;
   }
-  console.log('agiledev: serve | doctor | probe-hosts | verify-execution <codex|claude-code|dsh> | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
+  console.log('agiledev: serve | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
 main().catch(error => { console.error(error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
