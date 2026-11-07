@@ -8,11 +8,12 @@ import type {
   Issue,
   Plan,
   Run,
+  ScopeState,
   Snapshot,
   Workspace
 } from '../src/contracts';
 
-export type DisplayIssue = Issue & { url: string; titleSuffix: string };
+export type DisplayIssue = Issue & { url: string; titleSuffix: string; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
 export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings';
 export interface WorkspaceData {
   workspace: Workspace;
@@ -66,6 +67,14 @@ export interface PlanData {
   coverage: Coverage & { totalCriteria: number; nextOffset: number | null };
   children: DisplayIssue[];
   history: Pick<Plan, 'id' | 'mode' | 'createdAt' | 'hash'>[];
+}
+export interface ScopeData {
+  issue: DisplayIssue;
+  design: Design | null;
+  scopeHash: string;
+  children: { issue: DisplayIssue; scopeHash: string; scope: ScopeState }[];
+  total: number;
+  nextOffset: number | null;
 }
 export class ApiError extends Error {
   constructor(

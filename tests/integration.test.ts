@@ -39,7 +39,7 @@ class IntegrationProviderDouble implements ExecutionAdapter {
 }
 
 test(
-  'two accepted children require real assembled QA, fresh rework and exact parent acceptance; reopening preserves history and invalidates the parent',
+  'accepted replacements and explicit human exclusions require real assembled QA, fresh rework and exact parent acceptance; reopening invalidates the parent',
   { timeout: 60000 },
   async () => {
     const directory = mkdtempSync(join(tmpdir(), 'agiledev-integration-'));
@@ -86,12 +86,12 @@ test(
       decision: 'APPROVED',
       reason: 'Automated integration fixture approval only'
     });
-    const plan = change(
+    let plan = change(
       'plan_apply',
       parent.id,
       {
         designId: current(parent.id).designId,
-        mode: 'READY',
+        mode: 'DRAFT',
         tasks: [
           {
             ref: 'a',
@@ -108,6 +108,12 @@ test(
             criteria: ['B'],
             assigneeId: workers[1].actor.id,
             harness: 'claude-code'
+          },
+          {
+            ref: 'obsolete',
+            title: '[Feature] Legacy A: deliver text -> superseded route',
+            description: 'Superseded implementation route for a.txt',
+            criteria: ['A']
           }
         ],
         integrationCriteria: ['JOIN'],
@@ -116,6 +122,16 @@ test(
       pm
     );
     const ids = [plan.taskIds.a, plan.taskIds.b] as string[];
+    const obsoleteId = plan.taskIds.obsolete as string;
+    change('issue_transition',obsoleteId,{ action: 'abandon',reason: 'Automated fixture replaces the implementation route, not the requirement' });
+    const scope = flow.execute(human,'scope_get',{ workspaceId: workspace.id,issueId: parent.id,limit: 100 }) as any;
+    const target = scope.children.find((v: any) => v.issue.id === obsoleteId);
+    const replacement = scope.children.find((v: any) => v.issue.id === ids[0]);
+    const exclusion = change('scope_decide',obsoleteId,{ expectedParentVersion: scope.issue.version,designId: scope.design.id,scopeHash: scope.scopeHash,childScopeHash: target.scopeHash,action: 'REPLACE',replacements: [{ issueId: replacement.issue.id,expectedVersion: replacement.issue.version,scopeHash: replacement.scopeHash }],reason: 'Automated fixture human scope approval; not product acceptance' }).decision;
+    const ready = applyFixturePlan(flow,pm,parent.id);
+    plan = { ...plan,plan: ready.plan };
+    assert.equal(ready.coverage.children.excluded,1);
+    assert.equal(ready.coverage.children.inScope,2);
     const profiles = [['A'], ['B'], ['A', 'B', 'JOIN']].map(
       (criteria, index) =>
         run('check_profile_create', {
@@ -284,11 +300,15 @@ test(
           stderr: 'pipe'
         })
       );
+      const catalogue = await bridge.listTools();
+      assert.equal(catalogue.tools.some(t => t.name === 'scope_decide'),false);
+      assert.equal(catalogue.tools.find(t => t.name === 'scope_get')?.annotations?.readOnlyHint,true);
       const packet = (
         await bridge.callTool({ name: 'integration_get', arguments: { workspaceId: workspace.id, issueId: parent.id } })
       ).structuredContent as any;
       assert.equal(packet.manifest.children.length, 2);
       assert.equal(packet.manifest.planScopeHash, plan.plan.scopeHash);
+      assert.deepEqual(packet.manifest.excluded,[{ issueId: obsoleteId,decisionId: exclusion.id,decisionHash: exclusion.hash,replacementIds: [ids[0]] }]);
       for (let index = 0; index < 2; index++) {
         const entry = packet.manifest.children.find((child: any) => child.issueId === ids[index]);
         const path = index === 0 ? 'a.txt' : 'b.txt';
@@ -357,6 +377,7 @@ test(
       await submit(integration, parent.id, ['combined.txt', 'a.txt', 'b.txt']);
       const firstCandidate = current(parent.id).candidate!;
       assert.equal(firstCandidate.integration!.children.length, 2);
+      assert.equal(firstCandidate.integration!.excluded![0]!.decisionId,exclusion.id);
       await assert.rejects(
         new LocalClient(endpoint, workers[0].token).command('artifact_read', {
           workspaceId: workspace.id,

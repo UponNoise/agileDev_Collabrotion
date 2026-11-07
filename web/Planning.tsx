@@ -71,8 +71,9 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
               model runs. Create tasks in the workspace first; all existing tasks stay in the plan.
             </p>
             <p>
-              <Status value={data.coverage.status} /> · {data.coverage.children.done}/{data.coverage.children.total}{' '}
-              tasks implemented
+              <Status value={data.coverage.status} /> · {data.coverage.children.done}/{data.coverage.children.inScope}{' '}
+              in-scope tasks implemented · {data.coverage.children.excluded} excluded · {data.coverage.children.abandoned} unresolved abandoned
+              {' '}· {data.coverage.children.staleExclusions} stale exclusions
             </p>
             {data.coverage.blocking.length ? (
               <ul>

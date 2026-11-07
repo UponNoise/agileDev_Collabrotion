@@ -116,8 +116,8 @@ export function IssuePanel({
       !issue.candidate &&
       !issue.lease &&
       !!packet.planning?.ready &&
-      packet.planning.children.total > 0 &&
-      packet.planning.children.done === packet.planning.children.total);
+      packet.planning.children.inScope > 0 &&
+      packet.planning.children.done === packet.planning.children.inScope);
   return (
     <aside className="inspector" aria-label="Issue details">
       <button className="mobile-back text-button" onClick={onBack}>
@@ -197,6 +197,7 @@ export function IssuePanel({
               <dd>{issue.version}</dd>
               <dt>Scope revision</dt>
               <dd>{issue.scopeRevision}</dd>
+              {issue.scope ? <><dt>Delivery scope</dt><dd><Status value={issue.scope.status} />{issue.scope.decisionId ? <span> · Human decision recorded</span> : null}</dd></> : null}
             </dl>
             <section className="gap-panel" aria-label="Issue gaps">
               {packet.planning ? (
@@ -204,7 +205,7 @@ export function IssuePanel({
                   <h3>Requirement plan</h3>
                   <p>
                     <Status value={packet.planning.status} /> · {packet.planning.children.done}/
-                    {packet.planning.children.total} tasks implemented
+                    {packet.planning.children.inScope} in-scope tasks implemented · {packet.planning.children.excluded} excluded · {packet.planning.children.abandoned} unresolved abandoned · {packet.planning.children.staleExclusions} stale exclusions
                   </p>
                   <p className="muted">
                     Task counts describe delivery status. Parent integration and user acceptance remain separate gates.
@@ -423,6 +424,7 @@ export function IssuePanel({
             <button disabled={!online} onClick={() => dialog('grants')}>
               Manage authorization
             </button>
+            {issue.parentId && (issue.state === 'ABANDONED' || issue.scopeDecisionId && issue.scope?.action !== 'RESTORE') ? <button disabled={!online} onClick={() => dialog('scope-decision')}>Review delivery scope</button> : null}
             {packet.planning && tab !== 'Overview' ? (
               <button disabled={!online} onClick={() => dialog('decomposition')}>
                 Review decomposition
@@ -474,7 +476,7 @@ export function IssuePanel({
               : issue.state === 'ON_HOLD'
                 ? (['resume', 'abandon'] as const)
                 : (['hold', 'abandon'] as const)
-            ).map((action) => (
+            ).filter(action => action !== 'reopen' || !issue.scopeDecisionId || issue.scope?.action === 'RESTORE').map((action) => (
               <button disabled={!online} key={action} onClick={() => dialog('transition', { action })}>
                 {action[0].toUpperCase() + action.slice(1)}
               </button>

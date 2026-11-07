@@ -9,6 +9,7 @@ const descriptions: Record<string, string> = {
   issue_list: 'List scoped issues with pagination. Creation never starts work.',
   issue_create: 'Create an unstarted requirement or task. Child titles use [Type] Area: action -> outcome.',
   plan_get: 'Read current or historical decomposition, criterion coverage, overlap reasons and blockers. Default coverage is paginated; full explicitly expands task scope and versions.',
+  scope_get: 'Expand paginated child scope and human exclusion/replacement/restore decisions for planning. Human, lead or PM only. This cannot create scope authority or remove approved criteria.',
   plan_apply: 'Atomically create/update a complete requirement decomposition with exact parent/child versions, criterion coverage, dependencies and optional assignments/schedule. DRAFT may be incomplete; READY needs approved complete coverage. Existing children cannot be omitted. Applying a plan never starts a model run.',
   dependency_set: 'Replace the complete blocking dependency set for unstarted/rejected work. Rejects explicit and aggregate cycles and stales affected plan coverage.',
   integration_get: 'Read paginated current accepted child snapshot/commit references and the ready plan for parent integration. Managed workers/QA may expand only their assigned parent packet.',
@@ -38,7 +39,7 @@ export async function connectMcp(client: LocalClient) {
     if (clientInfo) void client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }).catch(() => process.stderr.write('Could not record MCP initialization metadata.\n'));
   };
   for (const name of agentOperations) {
-    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get','grant_list','plan_get','integration_get','artifact_read'].includes(name);
+    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get','grant_list','plan_get','integration_get','artifact_read','scope_get'].includes(name);
     server.registerTool(name, { description: descriptions[name] ?? `Perform ${name} within authenticated role and workspace scope. Mutations require current versions and a unique idempotency key.`, inputSchema: schemas[name], annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: true, openWorldHint: false } }, async (args: any) => {
       try {
         const result = await client.command(name, args);

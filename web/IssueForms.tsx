@@ -4,6 +4,7 @@ import { ApiError, command, dateText, errorText, formKey, harnessName, lines, mu
 import type { IssueData, WorkspaceData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
 import { PlanningForm } from './Planning';
+import { ScopeReview } from './ScopeReview';
 
 export type IssueDialog = {
   id: string;
@@ -20,6 +21,7 @@ export type IssueDialog = {
     | 'grants'
     | 'decomposition'
     | 'scope'
+    | 'scope-decision'
     | 'plan';
   packet?: IssueData;
   parent?: Issue;
@@ -128,6 +130,7 @@ export function IssueForm({
     );
   if (!packet || !issue || !root) return null;
   if (dialog.kind === 'decomposition') return <PlanningForm packet={packet} onClose={onClose} onSaved={onSaved} />;
+  if (dialog.kind === 'scope-decision') return <ScopeReview packet={packet} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'grants')
     return <GrantForm packet={packet} workspace={workspace} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'scope')
@@ -633,6 +636,10 @@ function DeliveryEvidence({ packet }: { packet: IssueData }) {
               ) : null}
             </section>
           ))}
+          {issue.candidate.integration.excluded?.map(child => <section className="evidence-block" key={child.issueId}>
+            <a href={`/w/${issue.workspaceId}/issues/${child.issueId}`}>Excluded abandoned task</a>
+            <dl className="metadata"><dt>Human decision</dt><dd className="mono">{child.decisionId}</dd><dt>Decision hash</dt><dd className="mono">{child.decisionHash}</dd><dt>Replacement tasks</dt><dd>{child.replacementIds.length ? child.replacementIds.map(id => <a key={id} href={`/w/${issue.workspaceId}/issues/${id}`}>{id} </a>) : 'Excluded without a named replacement; approved criteria remain required'}</dd></dl>
+          </section>)}
         </details>
       ) : null}
       <details>

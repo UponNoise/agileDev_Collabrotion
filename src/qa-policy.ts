@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { inside } from './paths.js';
 import { currentPlan, isAggregate, planChildren, planCoverage } from './planning.js';
+import { inScopeChildren, scopeState } from './scope.js';
 
 export function candidateSnapshot(store: Store, issue: Issue) {
   if (!issue.candidate?.snapshotId) throw new DomainError('SNAPSHOT_REQUIRED','Seal the complete delivery before QA or acceptance');
@@ -16,7 +17,7 @@ export function integrationManifest(store: Store, issue: Issue): IntegrationMani
   if (!isAggregate(store,issue)) return undefined;
   const coverage = planCoverage(store,issue); const plan = currentPlan(store,issue);
   if (!plan || !coverage.ready) throw new DomainError('PLAN_NOT_READY','Integration requires current complete criterion coverage',409,{ blockers: coverage.blocking });
-  const children = planChildren(store,issue);
+  const children = inScopeChildren(store,issue);
   if (children.some(child => child.state !== 'DONE')) throw new DomainError('CHILDREN_INCOMPLETE','Finish every in-scope child before preparing integration');
   const manifest = children.map(child => {
     const digest = acceptanceDigest(store,child);
@@ -26,11 +27,13 @@ export function integrationManifest(store: Store, issue: Issue): IntegrationMani
     if (child.artifactMode === 'git' && (!git || git.state !== 'VERIFIED' || git.candidateId !== child.candidate!.id || git.snapshotId !== snapshot.id)) throw new DomainError('GIT_EVIDENCE_STALE','Integration requires historical verified child commits');
     return { issueId: child.id,candidateId: child.candidate!.id,snapshotId: snapshot.id,snapshotHash: snapshot.hash,digest,...(git ? { commitUrl: git.url } : {}) };
   }).sort((a,b) => a.issueId.localeCompare(b.issueId));
-  return { planId: plan.id,planScopeHash: plan.scopeHash,children: manifest,hash: hash(canonical({ planScopeHash: plan.scopeHash,children: manifest })) };
+  const excluded = planChildren(store,issue).map(child => ({ child,scope: scopeState(store,child) })).filter(v => v.scope.status === 'EXCLUDED').map(({ child,scope }) => ({ issueId: child.id,decisionId: scope.decision!.id,decisionHash: scope.decision!.hash,replacementIds: scope.decision!.replacements.map(r => r.issueId).sort() })).sort((a,b) => a.issueId.localeCompare(b.issueId));
+  const body = { planScopeHash: plan.scopeHash,children: manifest,...(excluded.length ? { excluded } : {}) };
+  return { planId: plan.id,...body,hash: hash(canonical(body)) };
 }
 export function validateIntegration(store: Store, issue: Issue) {
   const current = integrationManifest(store,issue);
-  if (current && (!issue.candidate?.integration || issue.candidate.integration.hash !== current.hash || issue.candidate.integration.planScopeHash !== current.planScopeHash || hash(canonical({ planScopeHash: issue.candidate.integration.planScopeHash,children: issue.candidate.integration.children })) !== current.hash)) throw new DomainError('INTEGRATION_STALE','Integration must reference the current accepted child manifest and ready plan');
+  if (current && (!issue.candidate?.integration || issue.candidate.integration.hash !== current.hash || issue.candidate.integration.planScopeHash !== current.planScopeHash || hash(canonical({ planScopeHash: issue.candidate.integration.planScopeHash,children: issue.candidate.integration.children,...(issue.candidate.integration.excluded ? { excluded: issue.candidate.integration.excluded } : {}) })) !== current.hash)) throw new DomainError('INTEGRATION_STALE','Integration must reference the current accepted child manifest and ready plan');
   return current;
 }
 export function queueQa(store: Store, issue: Issue) {

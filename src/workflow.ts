@@ -4,14 +4,15 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
-import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, Snapshot, Workspace, liveRunStates, schemas } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, integrationManifest, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding } from './git.js';
 import { workspaceView,issueView,runsView } from './web-views.js';
 import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
+import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
 
-const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read']);
+const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -57,6 +58,13 @@ export class Workflow {
       const issue = s.issue(actor,a.workspaceId,a.issueId);
       const grants = s.list<Grant>('grant',a.workspaceId).filter(g => g.issueId === issue.id && (actor.role === 'human' || g.granteeId === actor.id)).reverse();
       return { grants: grants.slice(a.offset,a.offset+a.limit).map(g => ({ ...g,status: this.grantStatus(g,issue) })),total: grants.length,nextOffset: a.offset+a.limit < grants.length ? a.offset+a.limit : null };
+    }
+    if (op === 'scope_get') {
+      requireRole(actor,'human','lead','pm');
+      const issue = s.issue(actor,workspace.id,a.issueId);
+      const root = issue.parentId ? s.issue(actor,workspace.id,issue.parentId) : issue;
+      const children = planChildren(s,root);
+      return { issue: this.display(root),design: this.design(root),scopeHash: this.grantScope(root),children: children.slice(a.offset,a.offset+a.limit).map(i => ({ issue: this.display(i),scopeHash: taskScopeHash(s,i),scope: scopeState(s,i) })),total: children.length,nextOffset: a.offset+a.limit < children.length ? a.offset+a.limit : null };
     }
     if (op === 'plan_get') {
       requireRole(actor,'human','lead','pm');
@@ -116,7 +124,8 @@ export class Workflow {
     if (op === 'evidence_get') {
       const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
       const bindingAllowed = a.kind === 'git_binding' && (s.get<Workspace>('workspace',a.workspaceId).gitBindingId === evidence.id || (issue.gitSubmissionId && s.get<GitSubmission>('git_submission',issue.gitSubmissionId).bindingId === evidence.id));
-      if ((!bindingAllowed && evidence.issueId !== a.issueId) || (evidence.workspaceId && evidence.workspaceId !== a.workspaceId)) throw new DomainError('SCOPE_DENIED','Evidence belongs to another issue',403);
+      const childScopeAllowed = a.kind === 'scope_decision' && evidence.childId === issue.id && evidence.issueId === issue.parentId;
+      if ((!bindingAllowed && !childScopeAllowed && evidence.issueId !== a.issueId) || (evidence.workspaceId && evidence.workspaceId !== a.workspaceId)) throw new DomainError('SCOPE_DENIED','Evidence belongs to another issue',403);
       return { evidence };
     }
     if (op === 'issue_list') {
@@ -136,7 +145,8 @@ export class Workflow {
   }
   private display(issue: Issue) {
     const title = issue.parentId ? `${this.store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
-    return { ...issue, title, titleSuffix: issue.title, url: `/w/${issue.workspaceId}/issues/${issue.id}` };
+    const scope = issue.parentId ? scopeState(this.store,issue) : null;
+    return { ...issue, title, titleSuffix: issue.title, url: `/w/${issue.workspaceId}/issues/${issue.id}`,...(scope ? { scope: { status: scope.status,decisionId: scope.decision?.id ?? null,action: scope.decision?.action ?? null,blocking: scope.blocking } } : {}) };
   }
   private nextActions(actor: Actor, i: Issue): string[] {
     if (i.state === 'NOT_STARTED' && actor.role === 'worker' && !this.readiness(i).blocking.length) return ['work_claim'];
@@ -160,7 +170,8 @@ export class Workflow {
     if (!i.description.trim()) blocking.push('SCOPE_REQUIRED');
     if (i.state === 'ON_HOLD' || (i.parentId && this.store.get<Issue>('issue', i.parentId).state === 'ON_HOLD')) blocking.push('ON_HOLD');
     if (i.dependencies.some(id => this.store.get<Issue>('issue', id).state !== 'DONE')) blocking.push('DEPENDENCY_BLOCKED');
-    if (this.store.list<Issue>('issue', i.workspaceId).some(child => child.parentId === i.id && child.state !== 'DONE')) blocking.push('CHILDREN_INCOMPLETE');
+    if (inScopeChildren(this.store,i).some(child => child.state !== 'DONE')) blocking.push('CHILDREN_INCOMPLETE');
+    if (i.parentId) { const scope = scopeState(this.store,i); if (scope.status === 'EXCLUDED') blocking.push('SCOPE_EXCLUDED'); blocking.push(...scope.blocking); }
     const d = this.design(i);
     if (d && d.requirementDescription !== root.description) blocking.push('DESIGN_SCOPE_STALE');
     if (d && i.criteria.some(c => !d.criteria.includes(c))) blocking.push('CRITERIA_UNMAPPED');
@@ -278,8 +289,49 @@ export class Workflow {
     return { ...this.save(actor,'plan_apply',latest,{ planId: plan.id,mode: plan.mode,scopeHash: plan.scopeHash,reason: a.reason }),plan,coverage,taskIds: Object.fromEntries(refs) };
   }
   private grantScope(issue: Issue) {
-    const scope = (i: Issue) => ({ id: i.id,scopeRevision: i.scopeRevision,description: i.description,criteria: i.criteria,dependencies: i.dependencies,artifactMode: i.artifactMode,artifactReason: i.artifactReason });
+    const scope = (i: Issue) => ({ id: i.id,scopeRevision: i.scopeRevision,description: i.description,criteria: i.criteria,dependencies: i.dependencies,artifactMode: i.artifactMode,artifactReason: i.artifactReason,...(i.scopeDecisionId ? { scopeDecisionId: i.scopeDecisionId } : {}) });
     return hash(canonical({ issue: scope(issue),designId: this.design(issue)?.id ?? null,gitBindingId: issue.designBindingId,planScopeHash: !issue.parentId ? currentPlan(this.store,issue)?.scopeHash : undefined,children: this.store.list<Issue>('issue',issue.workspaceId).filter(i => i.parentId === issue.id).map(scope).sort((a,b) => a.id.localeCompare(b.id)) }));
+  }
+  private decideScope(actor: Actor, child: Issue, a: Record<string,any>) {
+    requireRole(actor,'human');
+    const s = this.store;
+    if (!child.parentId) throw new DomainError('CHILD_REQUIRED','Scope decisions apply to a child requirement');
+    const root = s.issue(actor,child.workspaceId,child.parentId);
+    version(root,a.expectedParentVersion);
+    const design = this.design(root);
+    if (!design || design.status !== 'APPROVED' || design.id !== a.designId || design.requirementDescription !== root.description) throw new DomainError('APPROVAL_STALE','Review scope against the current approved parent design');
+    if (root.artifactMode !== 'artifact' && root.designBindingId !== s.get<Workspace>('workspace',root.workspaceId).gitBindingId) throw new DomainError('DESIGN_BINDING_STALE','Approve the current repository binding before amending scope');
+    if ((child.scopeDecisionId ?? null) !== a.expectedDecisionId || this.grantScope(root) !== a.scopeHash || taskScopeHash(s,child) !== a.childScopeHash) throw new DomainError('SCOPE_CONTEXT_STALE','The displayed scope changed; reload the human review');
+    if (s.list<Run>('run',root.workspaceId).some(r => [root.id,child.id].includes(r.issueId) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile target and parent integration execution before amending scope');
+    if (['DONE','ABANDONED'].includes(root.state) && !a.reopenParent) throw new DomainError('PARENT_REOPEN_REQUIRED','Explicitly reopen the closed parent and repeat integration acceptance');
+    const previous = child.scopeDecisionId ? s.get<ScopeDecision>('scope_decision',child.scopeDecisionId) : null;
+    if (a.action === 'RESTORE') {
+      if (!previous || previous.action === 'RESTORE') throw new DomainError('SCOPE_RESTORE_UNAVAILABLE','This child has no current exclusion to restore');
+      if (a.replacements.length) throw new DomainError('INVALID_INPUT','Restoring scope cannot specify replacements',400);
+    } else {
+      if (child.state !== 'ABANDONED') throw new DomainError('CHILD_DISPOSITION_REQUIRED','Explicitly abandon the child before reviewing exclusion or replacement');
+      if (a.reopenChild) throw new DomainError('INVALID_INPUT','Only restoring scope may reopen a child',400);
+      if (a.action === 'EXCLUDE' && a.replacements.length || a.action === 'REPLACE' && !a.replacements.length) throw new DomainError('REPLACEMENT_REQUIRED','Replacement decisions require named sibling tasks; exclusions do not');
+    }
+    if (new Set(a.replacements.map((r: any) => r.issueId)).size !== a.replacements.length) throw new DomainError('INVALID_INPUT','List each replacement once',400);
+    const replacements = a.replacements.map((r: any) => {
+      const replacement = s.issue(actor,root.workspaceId,r.issueId);
+      if (replacement.parentId !== root.id || replacement.id === child.id || replacement.state === 'ABANDONED' || scopeState(s,replacement).status !== 'INCLUDED') throw new DomainError('REPLACEMENT_INVALID','Replacement must be an included sibling task');
+      version(replacement,r.expectedVersion);
+      if (taskScopeHash(s,replacement) !== r.scopeHash) throw new DomainError('SCOPE_CONTEXT_STALE','Replacement scope changed after review');
+      return scopeBinding(s,replacement);
+    });
+    if (a.action === 'REPLACE' && child.criteria.some(c => !replacements.some((r: any) => r.criteria.includes(c)))) throw new DomainError('REPLACEMENT_COVERAGE_REQUIRED','Named replacements must cover every target criterion');
+    const body = { id: randomUUID(),workspaceId: root.workspaceId,issueId: root.id,childId: child.id,designId: design.id,designHash: design.hash,action: a.action as ScopeDecision['action'],actorId: actor.id,reason: a.reason,createdAt: new Date(this.now()).toISOString(),previousDecisionId: child.scopeDecisionId ?? null,target: scopeBinding(s,child),replacements };
+    const decision: ScopeDecision = { ...body,hash: hash(canonical(body)) };
+    s.put('scope_decision',decision,root.workspaceId); child.scopeDecisionId = decision.id;
+    if (a.action === 'RESTORE' && a.reopenChild) { this.invalidate(child); child.state = 'NOT_STARTED'; child.savedState = null; child.fence++; }
+    const result = this.save(actor,'scope_decide',child,{ decisionId: decision.id,action: decision.action,reason: decision.reason });
+    const closed = ['DONE','ABANDONED'].includes(root.state);
+    this.invalidate(root);
+    if (root.state !== 'ON_HOLD' && (closed || root.state !== 'ABANDONED')) root.state = 'IN_PROGRESS';
+    this.save(actor,'scope_amended',root,{ childId: child.id,decisionId: decision.id,action: decision.action,reopened: closed,reason: decision.reason });
+    return { ...result,decision,parent: this.display(root),coverage: planCoverage(s,root) };
   }
   private grantStatus(grant: Grant, issue: Issue) {
     if (grant.revokedAt !== undefined) return 'REVOKED';
@@ -328,7 +380,7 @@ export class Workflow {
     if (!approved) blockers.push('HUMAN_ACCEPTANCE_REQUIRED');
     if (issue.parentId && ['ON_HOLD','ABANDONED'].includes(s.get<Issue>('issue',issue.parentId).state)) blockers.push('ANCESTOR_BLOCKED');
     if (issue.state !== 'USER_ACCEPTANCE') blockers.push('DELIVERY_NOT_READY');
-    if (s.list<Issue>('issue',issue.workspaceId).some(c => c.parentId === issue.id && c.state !== 'DONE')) blockers.push('CHILDREN_INCOMPLETE');
+    if (inScopeChildren(s,issue).some(c => c.state !== 'DONE')) blockers.push('CHILDREN_INCOMPLETE');
     if (issue.dependencies.some(id => s.get<Issue>('issue',id).state !== 'DONE')) blockers.push('DEPENDENCY_BLOCKED');
     if (s.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && (liveRunStates as readonly string[]).includes(r.state))) blockers.push('RUN_STILL_LIVE');
     if (s.list<any>('defect',issue.workspaceId).some(d => d.issueId === issue.id && d.state === 'OPEN' && d.severity !== 'INFO')) blockers.push('UNRESOLVED_DEFECTS');
@@ -470,6 +522,7 @@ export class Workflow {
     const i = s.issue(actor, w.id, a.issueId);
     version(i, a.expectedVersion);
     if (op === 'plan_apply') return this.applyPlan(actor,i,a);
+    if (op === 'scope_decide') return this.decideScope(actor,i,a);
     if (op === 'grant_create') {
       requireRole(actor,'human');
       const grantee = s.get<Actor>('actor',a.granteeId);
@@ -569,7 +622,7 @@ export class Workflow {
       if (a.decision === 'REJECT') { i.state = 'USER_REJECTED'; i.acceptedDigest = undefined; }
       else {
         i.acceptedDigest = a.digest;
-        const children = s.list<Issue>('issue',w.id).filter(c => c.parentId === i.id);
+        const children = inScopeChildren(s,i);
         if (children.some(c => c.state !== 'DONE')) throw new DomainError('CHILDREN_INCOMPLETE','Parent acceptance requires every in-scope child to be implemented');
         if (!i.initialReview || !i.qaReview || !i.finalReview || this.design(i)?.status !== 'APPROVED') throw new DomainError('EVIDENCE_MISSING','Current design, lead reviews, and QA are required');
         if (!this.closureBlockers(i).length) i.state = 'DONE';
@@ -703,6 +756,7 @@ export class Workflow {
         i.state = 'ABANDONED'; i.lease = null;
       } else {
         if (!['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('INVALID_TRANSITION', 'Only terminal issues can reopen');
+        if (i.scopeDecisionId && scopeState(s,i).decision?.action !== 'RESTORE') throw new DomainError('SCOPE_RESTORE_REQUIRED','A human must restore this excluded scope before reopening the child');
         this.invalidate(i); i.state = 'NOT_STARTED';
         if (i.parentId) {
           const parent = s.get<Issue>('issue',i.parentId);

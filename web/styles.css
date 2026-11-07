@@ -1396,3 +1396,9 @@ summary {
     font-size: 25px;
   }
 }
+.scope-label {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}

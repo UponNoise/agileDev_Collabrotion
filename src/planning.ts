@@ -1,5 +1,6 @@
 import { Coverage, Design, DomainError, Issue, Plan, Workspace } from './contracts.js';
 import { Store, canonical, hash } from './store.js';
+import { scopeState } from './scope.js';
 
 export function planChildren(store: Store, root: Issue) {
   return store.list<Issue>('issue', root.workspaceId).filter((i) => i.parentId === root.id);
@@ -25,17 +26,21 @@ export function planScope(store: Store, root: Issue, plan: Pick<Plan, 'integrati
           criteria: [...i.criteria].sort(),
           dependencies: [...i.dependencies].sort(),
           artifactMode: i.artifactMode,
-          artifactReason: i.artifactReason
+          artifactReason: i.artifactReason,
+          ...(i.scopeDecisionId ? { scopeDecisionId: i.scopeDecisionId,scopeStatus: scopeState(store,i).status } : {})
         }))
         .sort((a, b) => a.issueId.localeCompare(b.issueId))
     })
   );
 }
 export function planCoverage(store: Store, root: Issue, plan = currentPlan(store, root)): Coverage {
-  const children = planChildren(store, root);
+  const allChildren = planChildren(store, root);
+  const scoped = allChildren.map(i => ({ issue: i,scope: scopeState(store,i) }));
+  const children = scoped.filter(i => i.scope.status !== 'EXCLUDED').map(i => i.issue);
   const design = root.designId ? store.get<Design>('design', root.designId) : null;
   const criteria = design?.criteria ?? root.criteria;
   const blocking: string[] = [];
+  if (scoped.some(i => i.scope.status === 'STALE')) blocking.push('SCOPE_DECISION_STALE');
   if (!plan) blocking.push('PLAN_REQUIRED');
   else if (plan.scopeHash !== planScope(store, root, plan) || plan.designId !== root.designId)
     blocking.push('PLAN_STALE');
@@ -89,9 +94,12 @@ export function planCoverage(store: Store, root: Issue, plan = currentPlan(store
     criteria: rows,
     unknown,
     children: {
-      total: children.length,
+      total: allChildren.length,
+      inScope: children.length,
       done: children.filter((i) => i.state === 'DONE').length,
-      abandoned: children.filter((i) => i.state === 'ABANDONED').length
+      abandoned: children.filter((i) => i.state === 'ABANDONED').length,
+      excluded: allChildren.length-children.length,
+      staleExclusions: scoped.filter(i => i.scope.status === 'STALE').length
     },
     unassigned: children.filter((i) => !i.assignee).map((i) => i.id),
     unscheduled: children.filter((i) => !i.plannedStart).map((i) => i.id)

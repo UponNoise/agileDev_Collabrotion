@@ -118,6 +118,7 @@ export function Backlog({
                       value={stateLabel(issue, data.designs) === 'Design review' ? 'IN_REVIEW' : issue.state}
                       label={stateLabel(issue, data.designs)}
                     />
+                    {issue.scope?.status === 'EXCLUDED' ? <small className="scope-label">Excluded from delivery</small> : issue.scope?.status === 'STALE' ? <small className="scope-label">Scope decision stale</small> : null}
                   </td>
                   <td>{name(issue.state === 'QA_TEST' ? issue.qaAssignee : issue.assignee)}</td>
                   <td>{harnessName(issue.state === 'QA_TEST' ? issue.qaHarness : issue.harness)}</td>

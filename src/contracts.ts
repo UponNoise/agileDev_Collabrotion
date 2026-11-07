@@ -15,8 +15,11 @@ export interface Design { id: string; issueId: string; content: string; criteria
 export const grantActions = ['hold', 'resume', 'abandon', 'reopen', 'complete'] as const;
 export interface Grant { id: string; workspaceId: string; issueId: string; grantorId: string; granteeId: string; action: typeof grantActions[number]; scopeRevision: number; designId: string | null; scopeHash: string; candidateId?: string; digest?: string; expiresAt: string; maxUses: number; uses: number; version: number; reason: string; createdAt: string; revokedAt?: string; revokedBy?: string; revocationReason?: string }
 export interface Plan { id: string; workspaceId: string; issueId: string; designId: string | null; mode: 'DRAFT' | 'READY'; actorId: string; reason: string; createdAt: string; scopeHash: string; hash: string; integrationCriteria: string[]; overlapReasons: Record<string,string>; tasks: { issueId: string; scopeRevision: number; title: string; description: string; criteria: string[]; dependencies: string[] }[] }
-export interface Coverage { ready: boolean; status: string; blocking: string[]; criteria: { criterionId: string; tasks: { issueId: string; key: string; state: State }[]; integration: boolean; overlap: boolean; overlapReason: string | null; delivered: boolean }[]; unknown: string[]; children: { total: number; done: number; abandoned: number }; unassigned: string[]; unscheduled: string[] }
-export interface IntegrationManifest { planId: string; planScopeHash: string; hash: string; children: { issueId: string; candidateId: string; snapshotId: string; snapshotHash: string; digest: string; commitUrl?: string }[] }
+export interface ScopeBinding { issueId: string; parentId: string; version: number; scopeRevision: number; title: string; description: string; criteria: string[]; hash: string }
+export interface ScopeDecision { id: string; workspaceId: string; issueId: string; childId: string; designId: string; designHash: string; action: 'EXCLUDE' | 'REPLACE' | 'RESTORE'; actorId: string; reason: string; createdAt: string; previousDecisionId: string | null; target: ScopeBinding; replacements: ScopeBinding[]; hash: string }
+export interface ScopeState { status: 'INCLUDED' | 'EXCLUDED' | 'STALE'; decision: ScopeDecision | null; blocking: string[] }
+export interface Coverage { ready: boolean; status: string; blocking: string[]; criteria: { criterionId: string; tasks: { issueId: string; key: string; state: State }[]; integration: boolean; overlap: boolean; overlapReason: string | null; delivered: boolean }[]; unknown: string[]; children: { total: number; inScope: number; done: number; excluded: number; abandoned: number; staleExclusions: number }; unassigned: string[]; unscheduled: string[] }
+export interface IntegrationManifest { planId: string; planScopeHash: string; hash: string; children: { issueId: string; candidateId: string; snapshotId: string; snapshotHash: string; digest: string; commitUrl?: string }[]; excluded?: { issueId: string; decisionId: string; decisionHash: string; replacementIds: string[] }[] }
 export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string; executionRoot?: string; runId?: string; baseSha?: string; snapshotId?: string; integration?: IntegrationManifest }
 export interface Snapshot { id: string; workspaceId: string; issueId: string; candidateId: string; root: string; files: { path: string; hash: string; bytes: number; mode: string }[]; hash: string; createdAt: string }
 export interface CheckProfile { id: string; workspaceId: string; name: string; command: string; args: string[]; criteria: string[]; timeoutMs: number; hash: string }
@@ -43,7 +46,7 @@ export interface Issue {
   finalReview: string | null; savedState: { state: State; stage: Issue['stage'] } | null;
   qaAssignee?: string; qaHarness?: Harness; checkProfileIds?: string[];
   artifactMode?: 'git' | 'artifact'; artifactReason?: string; acceptedDigest?: string; gitSubmissionId?: string;
-  aggregate?: boolean; planId?: string; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null;
+  aggregate?: boolean; planId?: string; scopeDecisionId?: string; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null;
 }
 export class DomainError extends Error {
   constructor(public code: string, message: string, public statusCode = 409, public details?: unknown) { super(message); }
@@ -72,6 +75,8 @@ export const schemas = {
   issue_update: z.object({ ...change, title: z.string().min(1).max(300).optional(), description: z.string().max(65536).optional(), criteria: z.array(id).max(100).optional(),...schedule }).strict(),
   plan_apply: z.object({ ...change,expectedPlanId: id.nullable().default(null),designId: id.nullable(),mode: z.enum(['DRAFT','READY']),tasks: z.array(planTask).max(100),integrationCriteria: z.array(id).max(100).default([]),overlapReasons: z.record(id,text).refine(value => Object.keys(value).length <= 100).default({}),reason: text }).strict(),
   plan_get: z.object({ ...target,planId: id.optional(),view: z.enum(['summary','full']).default('summary'),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
+  scope_get: z.object({ ...target,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
+  scope_decide: z.object({ ...change,expectedParentVersion: z.number().int().positive(),designId: id,expectedDecisionId: id.nullable().default(null),scopeHash: id,childScopeHash: id,action: z.enum(['EXCLUDE','REPLACE','RESTORE']),replacements: z.array(z.object({ issueId: id,expectedVersion: z.number().int().positive(),scopeHash: id }).strict()).max(100).default([]),reason: text,reopenParent: z.boolean().default(false),reopenChild: z.boolean().default(false) }).strict(),
   integration_get: z.object({ ...target,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
   artifact_read: z.object({ ...target,snapshotId: id,path: z.string().min(1).max(500),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(65536).default(16384),encoding: z.enum(['utf8','base64']).default('utf8') }).strict(),
   design_set: z.object({ ...change, content: text, criteria: z.array(id).min(1).max(100) }).strict(),
@@ -99,7 +104,7 @@ export const schemas = {
   qa_check_run: z.object({ ...change, profileId: id, testFiles: z.array(z.string().min(1).max(500)).min(1).max(20) }).strict(),
   qa_check_get: z.object({ ...scoped, checkId: id }).strict(),
   qa_report_submit: z.object({ ...change, candidateId: id, verdict: z.enum(['PASS','FAIL','BLOCKED']), summary: text, results: z.array(z.object({ criterionId: id, result: z.enum(['PASS','FAIL','BLOCKED','NOT_RUN']), evidenceIds: z.array(id).max(100), reason: text }).strict()).min(1).max(100), findings: z.array(z.object({ criterionId: id, severity: z.enum(['BLOCKER','MAJOR','MINOR','INFO']), expected: text, actual: text, reproduce: text }).strict()).max(100).default([]) }).strict(),
-  evidence_get: z.object({ ...target, kind: z.enum(['snapshot','qa_report','review','git_submission','git_attempt','git_binding','defect']), evidenceId: id }).strict(),
+  evidence_get: z.object({ ...target, kind: z.enum(['snapshot','qa_report','review','git_submission','git_attempt','git_binding','defect','scope_decision']), evidenceId: id }).strict(),
   delivery_decide: z.object({ ...change, candidateId: id, digest: id, decision: z.enum(['ACCEPT','REJECT']), reason: text }).strict(),
   git_submit: z.object({ ...change, candidateId: id, commitUrl: z.string().min(1).max(1000) }).strict(),
   git_retry: z.object({ ...change, submissionId: id }).strict(),
@@ -108,4 +113,4 @@ export const schemas = {
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide'].includes(k)) as Operation[];

@@ -86,9 +86,9 @@ export function issueView(store: Store, issue: Issue, a: Record<string, any>) {
     .map((row) => ({ ...row, data: JSON.parse(row.data), actorName: store.get<Actor>('actor', row.actorId).name }));
   const evidence = store.db
     .prepare(
-      "SELECT kind,id,data FROM records WHERE workspace_id=? AND kind IN ('snapshot','review','qa_report','git_submission','git_attempt','defect') AND json_extract(data,'$.issueId')=? ORDER BY rowid DESC LIMIT 100"
+      "SELECT kind,id,data FROM records WHERE workspace_id=? AND kind IN ('snapshot','review','qa_report','git_submission','git_attempt','defect','scope_decision') AND (json_extract(data,'$.issueId')=? OR (kind='scope_decision' AND json_extract(data,'$.childId')=?)) ORDER BY rowid DESC LIMIT 100"
     )
-    .all(issue.workspaceId, issue.id) as { kind: string; id: string; data: string }[];
+    .all(issue.workspaceId, issue.id, issue.id) as { kind: string; id: string; data: string }[];
   const checks = store.db
     .prepare(
       "SELECT data FROM records WHERE workspace_id=? AND kind='check' AND json_extract(data,'$.issueId')=? ORDER BY rowid DESC LIMIT 20"
