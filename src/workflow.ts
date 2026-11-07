@@ -8,8 +8,9 @@ import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBind
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, queueQa, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding } from './git.js';
+import { workspaceView,issueView,runsView } from './web-views.js';
 
-const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get']);
+const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -42,7 +43,14 @@ export class Workflow {
   private read(actor: Actor, op: Operation, a: Record<string, any>): unknown {
     const s = this.store;
     if (op === 'workspace_list') return { workspaces: s.list<Workspace>('workspace').filter(w => actor.role === 'human' || actor.workspaceIds.includes(w.id)) };
-    s.workspace(actor, a.workspaceId);
+    const workspace = s.workspace(actor, a.workspaceId);
+    if (op.startsWith('ui_')) {
+      requireRole(actor,'human');
+      if (op === 'ui_workspace') return workspaceView(s,workspace,a,issue => this.display(issue));
+      if (op === 'ui_runs') return runsView(s,workspace.id,a);
+      const issue = s.issue(actor,workspace.id,a.issueId);
+      return { ...this.read(actor,'issue_get',a) as object,...issueView(s,issue,a) };
+    }
     if (op === 'check_profile_list') return { profiles: s.list<CheckProfile>('check_profile',a.workspaceId) };
     if (op === 'qa_check_get') {
       const check = s.get<CheckRun>('check',a.checkId); s.issue(actor,a.workspaceId,check.issueId);
@@ -84,7 +92,7 @@ export class Workflow {
   }
   private display(issue: Issue) {
     const title = issue.parentId ? `${this.store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
-    return { ...issue, title, url: `/w/${issue.workspaceId}/issues/${issue.id}` };
+    return { ...issue, title, titleSuffix: issue.title, url: `/w/${issue.workspaceId}/issues/${issue.id}` };
   }
   private nextActions(actor: Actor, i: Issue): string[] {
     if (i.state === 'NOT_STARTED' && actor.role === 'worker' && !this.readiness(i).blocking.length) return ['work_claim'];
@@ -110,6 +118,7 @@ export class Workflow {
     if (i.dependencies.some(id => this.store.get<Issue>('issue', id).state !== 'DONE')) blocking.push('DEPENDENCY_BLOCKED');
     if (this.store.list<Issue>('issue', i.workspaceId).some(child => child.parentId === i.id && child.state !== 'DONE')) blocking.push('CHILDREN_INCOMPLETE');
     const d = this.design(i);
+    if (d && d.requirementDescription !== root.description) blocking.push('DESIGN_SCOPE_STALE');
     if (d && i.criteria.some(c => !d.criteria.includes(c))) blocking.push('CRITERIA_UNMAPPED');
     return { ready: blocking.length === 0, blocking };
   }
@@ -123,7 +132,17 @@ export class Workflow {
   }
   private invalidate(i: Issue) {
     i.candidate = null; i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.stage = null; i.acceptedDigest = undefined; i.gitSubmissionId = undefined;
-    if (!['NOT_STARTED', 'ABANDONED'].includes(i.state)) i.state = 'NOT_STARTED';
+    if (i.state === 'ON_HOLD') i.savedState = { state: 'NOT_STARTED',stage: null };
+    else if (!['NOT_STARTED', 'ABANDONED'].includes(i.state)) i.state = 'NOT_STARTED';
+  }
+  private draftDesign(actor: Actor, issue: Issue, content: string, criteria: string[]) {
+    const workspace = this.store.get<Workspace>('workspace',issue.workspaceId);
+    issue.designBindingId = issue.artifactMode === 'artifact' ? undefined : workspace.gitBindingId;
+    const normalized = [...new Set(criteria)];
+    const design: Design = { id: randomUUID(),issueId: issue.id,content,criteria: normalized,status: 'DRAFT',requirementDescription: issue.description,hash: hash(canonical({ content,criteria: normalized,requirementDescription: issue.description,artifactMode: issue.artifactMode,artifactReason: issue.artifactReason,gitBindingId: issue.designBindingId })) };
+    this.store.put('design',design,issue.workspaceId); issue.designId = design.id; issue.criteria = design.criteria; this.invalidate(issue);
+    for (const child of this.store.list<Issue>('issue',issue.workspaceId).filter(c => c.parentId === issue.id && c.state !== 'ABANDONED')) { this.invalidate(child); this.save(actor,'design_invalidated',child,{ designId: design.id }); }
+    return design;
   }
   completeQa(actor: Actor, runId: string) {
     requireRole(actor,'qa');
@@ -271,7 +290,7 @@ export class Workflow {
         if (['DONE', 'ABANDONED'].includes(parent.state)) throw new DomainError('PARENT_CLOSED', 'Reopen the parent before adding scope');
         if (!/^\[(Feature|Fix|Refactor|Test|Docs|Research)\] [^:]+: .+ -> .+$/.test(a.title)) throw new DomainError('TITLE_FORMAT', 'Use [Type] Area: action -> outcome for the child suffix');
         const wasActive = parent.state !== 'NOT_STARTED';
-        this.invalidate(parent); if (wasActive) parent.state = 'IN_PROGRESS';
+        this.invalidate(parent); if (wasActive && parent.state !== 'ON_HOLD') parent.state = 'IN_PROGRESS';
         this.save(actor, 'scope_child_added', parent);
       }
       w.sequence++; s.put('workspace', w, w.id);
@@ -361,14 +380,20 @@ export class Workflow {
       }
       return { ...this.save(actor,op,i,{ approvalId: approval.id, reason: a.reason }), approval, closureBlocked: i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [] };
     }
-    if (['issue_assign', 'dependency_add', 'design_set'].includes(op) || (op === 'issue_update' && a.description !== undefined)) {
-      if (s.list<Run>('run', w.id).some(r => (r.issueId === i.id || (op === 'design_set' && s.get<Issue>('issue', r.issueId).parentId === i.id)) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'Reconcile queued, live, or uncertain executions before changing their assignment or scope');
+    const scopeChanged = op === 'issue_update' && a.description !== undefined && a.description !== i.description;
+    if (['issue_assign', 'dependency_add', 'design_set'].includes(op) || scopeChanged) {
+      if (s.list<Run>('run', w.id).some(r => (r.issueId === i.id || ((op === 'design_set' || (scopeChanged && !i.parentId)) && s.get<Issue>('issue', r.issueId).parentId === i.id)) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'Reconcile queued, live, or uncertain executions before changing their assignment or scope');
     }
     if (op === 'issue_update') {
       requireRole(actor, 'human', 'lead', 'pm');
       if (['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('ISSUE_CLOSED', 'Reopen before editing');
       if (a.title !== undefined && i.parentId && !/^\[(Feature|Fix|Refactor|Test|Docs|Research)\] [^:]+: .+ -> .+$/.test(a.title)) throw new DomainError('TITLE_FORMAT', 'Invalid task suffix');
-      if (a.description !== undefined && a.description !== i.description) { i.scopeRevision++; this.invalidate(i); }
+      if (scopeChanged) {
+        i.scopeRevision++; i.description = a.description;
+        const previous = this.design(i);
+        if (!i.parentId && previous) this.draftDesign(actor,i,previous.content,previous.criteria);
+        else this.invalidate(i);
+      }
       for (const key of ['title', 'description', 'priority', 'plannedStart', 'dueDate'] as const) if (a[key] !== undefined) (i as any)[key] = a[key];
       return this.save(actor, op, i);
     }
@@ -376,11 +401,7 @@ export class Workflow {
       requireRole(actor, 'human', 'lead');
       if (i.parentId) throw new DomainError('PARENT_DESIGN_REQUIRED', 'Design revisions belong to the parent requirement');
       if (['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('ISSUE_CLOSED', 'Reopen before changing scope');
-      i.designBindingId = i.artifactMode === 'artifact' ? undefined : w.gitBindingId;
-      const design: Design = { id: randomUUID(), issueId: i.id, content: a.content, criteria: [...new Set<string>(a.criteria)], status: 'DRAFT', hash: hash(canonical({ content: a.content, criteria: a.criteria, artifactMode: i.artifactMode, artifactReason: i.artifactReason,gitBindingId: i.designBindingId })) };
-      s.put('design', design, w.id); i.designId = design.id; i.criteria = design.criteria;
-      this.invalidate(i);
-      for (const child of s.list<Issue>('issue', w.id).filter(c => c.parentId === i.id && c.state !== 'ABANDONED')) { this.invalidate(child); this.save(actor, 'design_invalidated', child, { designId: design.id }); }
+      const design = this.draftDesign(actor,i,a.content,a.criteria);
       return this.save(actor, op, i, { designId: design.id });
     }
     if (op === 'design_submit' || op === 'design_decide') {
@@ -390,6 +411,7 @@ export class Workflow {
       if (op === 'design_submit') { if (d.status !== 'DRAFT' && d.status !== 'CHANGES_REQUESTED') throw new DomainError('INVALID_TRANSITION', 'Design is not editable'); d.status = 'IN_REVIEW'; }
       else {
         if (a.designId !== d.id) throw new DomainError('APPROVAL_STALE', 'Design revision changed');
+        if (d.requirementDescription !== i.description) throw new DomainError('DESIGN_SCOPE_STALE','Create a current scope-bound design revision before approving it');
         if (d.status !== 'IN_REVIEW') throw new DomainError('INVALID_TRANSITION', 'Design is not awaiting a decision');
         d.status = a.decision;
         s.put('approval', { id: randomUUID(), actorId: actor.id, designId: d.id, hash: d.hash, decision: a.decision, reason: a.reason, at: new Date(this.now()).toISOString() }, w.id);

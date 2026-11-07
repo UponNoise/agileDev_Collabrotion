@@ -11,7 +11,7 @@ export interface Workspace { id: string; name: string; root: string; prefix: str
 export interface GitBinding { id: string; workspaceId: string; repository: string; subdirectory: string; remote: string; actorId: string; createdAt: string }
 export interface GitSubmission { id: string; workspaceId: string; issueId: string; candidateId: string; snapshotId: string; bindingId: string; repository: string; subdirectory: string; sha: string; url: string; actorId: string; createdAt: string; state: 'QUEUED' | 'VERIFYING' | 'VERIFIED' | 'UNAVAILABLE' | 'FAILED' | 'STALE'; attempt: number; currentAttemptId?: string; errorCode?: string; verifiedAt?: string; rootTreeSha?: string; treeSha?: string; expectedTreeSha?: string }
 export interface GitAttempt { id: string; submissionId: string; workspaceId: string; issueId: string; attempt: number; startedAt: string; finishedAt?: string; state: 'VERIFYING' | 'VERIFIED' | 'UNAVAILABLE' | 'FAILED' | 'STALE'; apiVersion: string; repository: string; sha: string; errorCode?: string; rootTreeSha?: string; treeSha?: string; expectedTreeSha?: string }
-export interface Design { id: string; issueId: string; content: string; criteria: string[]; status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'CHANGES_REQUESTED'; hash: string }
+export interface Design { id: string; issueId: string; content: string; criteria: string[]; status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'CHANGES_REQUESTED'; hash: string; requirementDescription?: string }
 export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string; executionRoot?: string; runId?: string; baseSha?: string; snapshotId?: string }
 export interface Snapshot { id: string; workspaceId: string; issueId: string; candidateId: string; root: string; files: { path: string; hash: string; bytes: number; mode: string }[]; hash: string; createdAt: string }
 export interface CheckProfile { id: string; workspaceId: string; name: string; command: string; args: string[]; criteria: string[]; timeoutMs: number; hash: string }
@@ -51,6 +51,9 @@ const change = { ...target, ...mutation, expectedVersion: z.number().int().posit
 export const schemas = {
   workspace_register: z.object({ ...mutation, root: text, name: z.string().min(1).max(120), prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/) }).strict(),
   workspace_list: z.object({}).strict(),
+  ui_workspace: z.object({ ...scoped,search: z.string().max(300).default(''),state: z.enum(states).optional(),view: z.enum(['backlog','reviews']).default('backlog'),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20),afterCursor: z.number().int().nonnegative().optional() }).strict(),
+  ui_issue: z.object({ ...target,after: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(30) }).strict(),
+  ui_runs: z.object({ ...scoped,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
   workspace_git_bind: z.object({ ...scoped, ...mutation, remote: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/).default('origin'), expectedBindingId: id.nullable().default(null) }).strict(),
   connection_list: z.object(scoped).strict(),
   actor_enroll: z.object({ ...scoped, ...mutation, role: z.enum(['lead', 'pm', 'worker', 'qa']), name: z.string().min(1).max(120) }).strict(),
@@ -88,4 +91,4 @@ export const schemas = {
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide'].includes(k)) as Operation[];

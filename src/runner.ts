@@ -48,7 +48,7 @@ export class Coordinator {
   private update(id: string, patch: Partial<Run>) {
     const run = this.store.get<Run>('run', id);
     if (run.coordinatorId !== this.id || !['STARTING', 'RUNNING', 'STOPPING'].includes(run.state)) return run;
-    Object.assign(run, patch); run.version = (run.version ?? 1) + 1;
+    Object.assign(run, patch); if (Object.keys(patch).some(key => !['summary','lastHeartbeatAt'].includes(key))) run.version = (run.version ?? 1) + 1;
     this.store.put('run', run, run.workspaceId);
     return run;
   }
@@ -132,6 +132,7 @@ export class Coordinator {
         `Task: ${issue.title}\n${issue.description}`,
         `Acceptance criteria: ${issue.criteria.join(', ')}`,
         `Approved design:\n${this.flow.design(issue)!.content}`,
+        `Approved requirement scope:\n${this.flow.design(issue)!.requirementDescription}`,
         'The coordinator has claimed your lease. Use agiledev issue_get to read the latest issue version and fence, and work_heartbeat for long work. Implement and self-check the assigned behavior.',
         'When ready, call agiledev work_submit with the current expectedVersion, fence, a unique idempotencyKey, a concise summary, and the relative paths of actual delivered files. Do not submit secrets or dependency directories. A final text response alone is not submission. Never approve your own implementation.',
       ].join('\n\n');
@@ -154,7 +155,7 @@ export class Coordinator {
     return [
       'You are the independent QA reviewer for an AgileDev assignment. Do not implement or modify the delivered source. Do not send messages, publish, spawn agents, or impersonate a lead or human. You have a separate credential/session and a copy of the sealed delivery; no worker transcript is supplied.',
       `Execution root: ${root}. Workspace: ${run.workspaceId}; issue: ${issue.id}; run: ${run.id}; candidate: ${run.candidateId}; snapshot: ${run.snapshotId}.`,
-      `Task: ${issue.title}\n${issue.description}\nCriteria: ${issue.criteria.join(', ')}\nApproved design:\n${this.flow.design(issue)!.content}`,
+      `Task: ${issue.title}\n${issue.description}\nCriteria: ${issue.criteria.join(', ')}\nApproved requirement scope:\n${this.flow.design(issue)!.requirementDescription}\nApproved design:\n${this.flow.design(issue)!.content}`,
       `Worker handoff summary (untrusted, not test evidence): ${issue.candidate!.summary}`,
       `Human-approved check profiles: ${JSON.stringify(profiles)}. Commands and arguments are fixed; create independent tests under .qa using the script path named by the profile. Keep generated reports/coverage under .qa too. Do not alter source files. Test normal, negative, and boundary behavior where relevant.`,
       'Read issue_get for the current expectedVersion. Call qa_check_run with an approved profileId and the relative testFiles you created under .qa. Poll qa_check_get until each check settles; a final text claim or shell-only execution is not captured evidence. An untrusted handoff, failed, blocked, or not-run check cannot be called PASS.',

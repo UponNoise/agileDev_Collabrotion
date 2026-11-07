@@ -114,6 +114,16 @@ A delegation grant contains the granting human, grantee, workspace/item scope, a
 
 For MVP, human decisions/grants originate in the authenticated web approval flow. A host adapter may later accept direct human events only after AC14 proves attribution; a model's statement that the user agreed is never such an event. Batch decisions enumerate exact item versions/digests; no hidden approval of unseen items is allowed.
 
+### Local human web session, 2026-11-06
+
+Implementation refinement for FR14/FR16/FR24 and AC04/05/14/26/27/36: the owner runs `agiledev ui` against the local daemon to obtain a one-use pairing code with a five-minute lifetime. The code is entered on the same-origin login page, never in a URL. Owner API credentials are not included in HTML, assets, browser storage, or agent connection configuration. An agent credential cannot create a human pairing code.
+
+Pairing creates a distinct human browser actor/session, an eight-hour HttpOnly SameSite=Strict cookie, and a session-bound CSRF value held in JavaScript memory. Browser writes require the exact local Origin plus that CSRF value. Logout revokes the session. Pairing/expiry/reuse and authentication failures cannot create approvals. The local HTTP boundary still cannot isolate a hostile process running as the same OS user.
+
+The web workspace reads bounded projections from the shared service and uses the same versioned commands for every mutation. It shows the exact design revision/hash or delivery digest before a reasoned human decision. A stale dialog must fail rather than silently approve new content. Polling checks committed workspace cursors at one-second intervals; reconnection reloads current records without an optimistic invented transition. History and evidence remain scoped and paginated; user content is rendered as text, never executable HTML.
+
+Working visual direction: a true-white issue workspace with a pale cool sidebar, indigo controls, an open hierarchical list/board, and a right inspector. The inspector becomes a drill-in page on narrow screens. Shared tokens: canvas `#ffffff`, sidebar `#f2f5fa`, text `#10122b`, muted `#626b7a`, rule `#dce1ea`, accent `#342df4`, selected `#edebff`, 8px control radius, 8px spacing scale, 14px body/control text, and visible keyboard focus. Screens include Backlog, Board, Reviews, Runs, Settings, issue overview/design/evidence/activity, and explicit decision dialogs. Generated concepts are implementation references, not user product-design approval or runtime evidence. Domain labels and real data take precedence over illustrative fixture copy.
+
 ## 6. Revision changes and rework
 
 1. Requirement scope/acceptance edits create a new design revision. The approved old revision remains in history.
@@ -121,6 +131,8 @@ For MVP, human decisions/grants originate in the authenticated web approval flow
 3. Existing task mappings, approvals, and reports remain readable but are marked stale where affected. PM proposes revised task coverage.
 4. A worker replaces a candidate by opening a new implementation round. Initial review, QA, final review, and human acceptance for the old candidate cannot authorize the new one.
 5. Metadata-only edits such as schedule or assignee display corrections do not invalidate artifact approval. The service categorizes allowed metadata fields; callers cannot assert that a scope edit is metadata.
+
+Implementation refinement, 2026-11-07: design hashes bind the immutable requirement description as well as design content, criteria, delivery mode, and repository binding. Editing a top-level requirement description creates a fresh draft design and invalidates affected child execution/review evidence. Active or uncertain child runs must first be reconciled. The review view shows that captured requirement scope alongside the proposed design. Older revisions without captured scope remain historical evidence, but cannot authorize new execution or a new current approval until a scope-bound revision is reviewed. A hold remains effective while scope is edited or a child is added; editing is not an implicit resume. Run output and heartbeat observations do not change the state version used to request interruption.
 
 An unrelated commit elsewhere in the repository does not rewrite a historical delivery record. Evidence invalidation follows changed issue submissions/scope and explicit impact analysis. Parent integration tests check the assembled result at its current integration snapshot.
 

@@ -13,6 +13,26 @@ node dist/cli.js doctor
 node dist/cli.js serve
 ```
 
+## Open the human web workspace
+
+With the daemon running, run this from the same installation/data-directory environment:
+
+```powershell
+node dist/cli.js ui
+```
+
+Open the printed local URL and enter the one-use code. It expires after five minutes. The UI uses an eight-hour HttpOnly SameSite=Strict cookie and a session-bound CSRF value in memory; it never receives the owner API credential. Sign out revokes the browser session. Codes and credentials must stay out of URLs, logs, and public files. A scoped agent cannot create a human pairing code or use the owner credential through MCP.
+
+The workspace includes Backlog, Board, Reviews, Runs, and Settings. Register a project directory, create an unstarted requirement, write/submit its design, and review the exact revision/hash with a reason. A requirement's New task action creates its child using the required naming convention. Edit plan changes title/priority/dates without changing artifact approval. Assign worker and Configure QA select scoped identities, harnesses, and approved command profiles; Dispatch worker starts a real configured host run. The web view does not impersonate the product lead or independently pass QA. Those agent gates use their existing scoped connections.
+
+Final user acceptance shows the delivery digest, complete sealed manifest, initial/QA/final review references, and applicable commit or artifact mode. Stale dialogs fail with input retained. Evidence and paginated history come from the same service; the browser never invents a successful transition. Human hold/resume/abandon/reopen and run interruption/reconciliation use the existing guarded commands. Operator confirmation cannot override a still-existing recorded process.
+
+Committed updates are polled every second. Disconnection leaves the last snapshot visible and pauses changes; reconnect reloads current state. Search/state filters and issue/run pages are bounded. Direct links use `/w/<workspace-id>/issues/<issue-id>` and still require a human session. User Markdown/HTML source is shown as text; no raw HTML is executed. Browser storage does not hold project records or credentials. Rich Markdown rendering, full coverage/grant/gap management, native embedded surfaces, large-data performance, and release acceptance remain pending.
+
+The frontend uses React 19.3.1, Vite 8.3.6, and the same loopback service. `npm run build` builds both service and browser assets; `npm run check` checks both TypeScript projects. `npm test` builds the web assets before service/API tests. Browser validation used Playwright 1.65.0 with isolated headless Chrome 156.0.8078.80 because the Browser plugin was unavailable. This does not install or change a user's harness configuration.
+
+Edit scope changes the requirement description, creates a new scope-bound draft design for a parent, and invalidates affected child evidence. Submit and review that new revision explicitly. Older revisions without captured scope cannot authorize new work or current acceptance; write and approve a current revision. Historical completed records remain readable. Scope editing or adding a child while a requirement is on hold does not resume it.
+
 Review package lifecycle scripts before enabling any that your npm policy blocks. The SQLite native binary and actual tests were verified on the development Windows machine. Other operating systems and a clean Windows installation remain unverified.
 
 The default endpoint is `http://127.0.0.1:43170`. The user-scoped data directory is `%LOCALAPPDATA%/AgileDev` on Windows, containing the SQLite database, single-daemon lock, and a private owner descriptor. `AGILEDEV_DATA_DIR` and `AGILEDEV_PORT` override those locations. The descriptor contains an owner credential and must never be committed, shared with agents, or copied into a harness configuration.
@@ -106,7 +126,7 @@ The service enforces unstarted creation, task title suffixes, exact design appro
 
 The owner uses `check_profile_create` to approve an existing absolute native executable, fixed `args`, covered `criteria`, and `timeoutMs`. For example, approve the Node executable with `args: [".qa/check.mjs"]` for a Node-based independent check. Shell shims are rejected; no automatic dependency installation is performed. Lead/PM uses `qa_configure` with an enrolled QA `actorId`, `harness`, and `checkProfileIds`. Initial lead pass queues that independent review. QA writes tests under `.qa`, uses `qa_check_run`/`qa_check_get`, then submits the full criterion-level `qa_report_submit`. Captured checks have a separate cap of two processes; run/time limits also apply to the QA model session. A native producer success without a valid report does not advance the gate.
 
-`issue_get` exposes the current `deliveryDigest`, Git mapping, and closure blockers in user acceptance. Owner-only `delivery_decide` accepts/rejects that exact candidate/digest. Artifact-mode acceptance can close the issue; Git mode requires verified current commit evidence. Declare `artifactMode` and an explicit `artifactReason` at creation for non-code work in a Git workspace; those values are included in human design review. The mode cannot be changed through a metadata edit. `evidence_get` retrieves scoped snapshots, reports, reviews, defects, Git mappings, and verification attempts. Stable links are generated, but browser pages and the authenticated human web flow are still pending.
+`issue_get` exposes the current `deliveryDigest`, Git mapping, and closure blockers in user acceptance. Human `delivery_decide` accepts/rejects that exact candidate/digest through the browser or owner CLI. Artifact-mode acceptance can close the issue; Git mode requires verified current commit evidence. Declare `artifactMode` and an explicit `artifactReason` at creation for non-code work in a Git workspace; those values are included in human design review. The mode cannot be changed through a metadata edit. `evidence_get` retrieves scoped snapshots, reports, reviews, defects, Git mappings, and verification attempts. Stable direct issue links now load the authenticated web workspace.
 
 ## Git commit evidence
 
@@ -147,6 +167,6 @@ Each verify-execution command deliberately starts one model-driven worker using 
 
 `verify-git [repository root]` performs no inference or GitHub writes. It creates a private temporary clone of the local published HEAD, checks out with automatic CRLF conversion disabled for the fixture, seals it, and resolves its real GitHub commit/tree. It uses the source's `origin` identity and leaves the source checkout untouched. It retains a private evidence directory. This provider-boundary check passed against public commit `72e72ce` with all 37 files matching; it is separate from native QA and human delivery acceptance.
 
-The current machine passes Codex and DSH execution verification. Claude Code's standalone runtime reports `Not logged in`; a logged-in Desktop application alone has not supplied CLI authentication. The application records that failure without changing login state or copying Desktop credentials. Full three-harness execution acceptance remains pending.
+The earlier machine checks passed Codex and DSH execution verification. Claude Code 2.1.309 reported `Not logged in`; a logged-in Desktop application alone did not supply CLI authentication. The application recorded that failure without changing login state or copying Desktop credentials. On 2026-11-07, no-inference connection checks passed on Codex 0.167.0-alpha.3.2, Claude Code 2.1.317, and DSH 0.2.2-rc.1. Updated-runtime inference and full three-harness execution acceptance remain pending; a connection check does not prove a model run can execute.
 
 For every mutation, use a unique `idempotencyKey` and current `expectedVersion`; child creation also requires `expectedParentVersion`. An exact retry returns the committed result with `replayed: true`. Reload after a version conflict. The prototype uses camelCase command fields; mapping/versioning against the earlier illustrative spec examples will be finalized before the command contract is frozen.

@@ -53,6 +53,7 @@ export function acceptanceDigest(store: Store, issue: Issue) {
   const root = issue.parentId ? store.get<Issue>('issue',issue.parentId) : issue;
   const design = root.designId ? store.get<any>('design',root.designId) : null;
   if (!design || design.status !== 'APPROVED' || design.id !== issue.candidate!.designId) throw new DomainError('APPROVAL_STALE','The candidate must match the current approved design');
+  if (design.requirementDescription !== root.description) throw new DomainError('DESIGN_SCOPE_STALE','Current acceptance requires a design bound to the requirement scope');
   const workspace = store.get<Workspace>('workspace',issue.workspaceId);
   if (issue.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) throw new DomainError('DESIGN_BINDING_STALE','Approve the reopened scope against its current repository binding');
   const git = issue.gitSubmissionId ? store.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;

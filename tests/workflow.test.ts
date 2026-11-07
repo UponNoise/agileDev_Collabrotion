@@ -135,3 +135,45 @@ test('agent credentials persist as hashes and are excluded from receipts and eve
   assert.ok(!data.includes(f.worker.token)); assert.ok(!data.includes(f.human.token));
   assert.equal(f.store.authenticate(f.worker.token).id, f.worker.actor.id);
 });
+
+test('editing requirement scope creates a fresh draft and invalidates old child approval and ownership', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task); f.claim(task);
+  const previous = f.store.get<any>('design',f.current(f.parent.id).designId!);
+  f.change(f.pm.actor,'issue_update',f.parent.id,{ description: 'Changed root requirement scope' });
+  const current = f.current(f.parent.id); const design = f.store.get<any>('design',current.designId!);
+  assert.notEqual(design.id,previous.id); assert.notEqual(design.hash,previous.hash); assert.equal(design.status,'DRAFT');
+  assert.equal(design.requirementDescription,'Changed root requirement scope');
+  assert.deepEqual(f.store.get('design',previous.id),previous);
+  assert.equal(f.current(task.id).lease,null); assert.equal(f.current(task.id).state,'NOT_STARTED');
+  assert.throws(() => f.claim(task),rejects('NOT_READY'));
+  assert.ok(f.store.list<any>('approval',task.workspaceId).some(a => a.designId === previous.id && a.decision === 'APPROVED'));
+  f.change(f.lead.actor,'design_submit',f.parent.id);
+  f.change(f.human.actor,'design_decide',f.parent.id,{ designId: design.id,decision: 'APPROVED',reason: 'Fixture approval of the changed scope' });
+  assert.equal(f.claim(task).issue.state,'IN_PROGRESS');
+});
+
+test('queued child execution blocks parent scope edits and held planning never resumes the requirement', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task);
+  const queued = f.change(f.pm.actor,'work_dispatch',task.id,{ designId: f.current(f.parent.id).designId,scopeRevision: 1 }).run;
+  const before = f.current(f.parent.id);
+  assert.throws(() => f.change(f.pm.actor,'issue_update',f.parent.id,{ description: 'Cannot replace live child scope' }),rejects('RUN_EXISTS'));
+  assert.deepEqual(f.current(f.parent.id),before);
+  f.run(f.human.actor,'run_interrupt',{ runId: queued.id,expectedVersion: queued.version,reason: 'Cancel fixture queue before editing' });
+  f.change(f.human.actor,'issue_transition',f.parent.id,{ action: 'hold',reason: 'Keep fixture requirement suspended' });
+  f.change(f.lead.actor,'design_set',f.parent.id,{ content: 'Changed held design',criteria: ['AC-1'] });
+  assert.equal(f.current(f.parent.id).state,'ON_HOLD');
+  f.task(); assert.equal(f.current(f.parent.id).state,'ON_HOLD');
+  f.change(f.pm.actor,'issue_update',f.parent.id,{ description: 'Changed held requirement description' });
+  assert.equal(f.current(f.parent.id).state,'ON_HOLD');
+  f.change(f.human.actor,'issue_transition',f.parent.id,{ action: 'resume',reason: 'Explicitly resume fixture planning' });
+  assert.equal(f.current(f.parent.id).state,'NOT_STARTED');
+});
+
+test('schedule metadata preserves approval while older unbound scope cannot authorize new execution', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task);
+  const designId = f.current(f.parent.id).designId!;
+  f.change(f.pm.actor,'issue_update',f.parent.id,{ title: 'Renamed planning title',plannedStart: '2026-11-10',dueDate: '2026-11-20' });
+  assert.equal(f.current(f.parent.id).designId,designId); assert.equal(f.store.get<any>('design',designId).status,'APPROVED');
+  const older = f.store.get<any>('design',designId); delete older.requirementDescription; f.store.put('design',older,task.workspaceId);
+  assert.throws(() => f.claim(task),(error: any) => error.code === 'NOT_READY' && error.details.blockers.includes('DESIGN_SCOPE_STALE'));
+});

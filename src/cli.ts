@@ -19,6 +19,10 @@ const descriptorFile = join(dataDir, 'daemon.json');
 function descriptor() { return JSON.parse(readFileSync(descriptorFile, 'utf8')) as { endpoint: string; ownerToken: string; pid: number; instance: string }; }
 async function main() {
   const [command = 'help', ...args] = process.argv.slice(2);
+  if (command === 'ui') {
+    const config = descriptor(); const pairing = await new LocalClient(config.endpoint,config.ownerToken).request('/api/ui/pairing',{});
+    console.log(JSON.stringify({ url: config.endpoint,code: pairing.code,expiresAt: new Date(pairing.expiresAt).toISOString(),instruction: 'Open the local URL and enter this one-use code. Keep it private; do not add it to the URL.' },null,2)); return;
+  }
   if (command === 'verify-git') { console.log(JSON.stringify(await verifyGit(args[0] ?? process.cwd()),null,2)); return; }
   if (command === 'verify-execution' || command === 'verify-qa') {
     if (!(harnesses as readonly string[]).includes(args[0] ?? '')) throw new Error('Choose codex, claude-code, or dsh for the real execution verification.');
@@ -100,6 +104,6 @@ async function main() {
     } else throw new Error('Connection format must be codex, claude-code, or dsh.');
     return;
   }
-  console.log('agiledev: serve | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
+  console.log('agiledev: serve | ui | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
 main().catch(error => { console.error(error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
