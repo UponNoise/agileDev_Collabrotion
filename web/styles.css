@@ -377,6 +377,11 @@ td {
 .issue-table td:not(:first-child) {
   white-space: nowrap;
 }
+.issue-table td:nth-child(3),
+.issue-table td:nth-child(4) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .issue-cell {
   display: flex;
   align-items: center;

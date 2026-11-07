@@ -8,6 +8,11 @@ const descriptions: Record<string, string> = {
   issue_get: 'Read the assigned issue, current versions, readiness blockers, and legal next actions.',
   issue_list: 'List scoped issues with pagination. Creation never starts work.',
   issue_create: 'Create an unstarted requirement or task. Child titles use [Type] Area: action -> outcome.',
+  plan_get: 'Read current or historical decomposition, criterion coverage, overlap reasons and blockers. Default coverage is paginated; full explicitly expands task scope and versions.',
+  plan_apply: 'Atomically create/update a complete requirement decomposition with exact parent/child versions, criterion coverage, dependencies and optional assignments/schedule. DRAFT may be incomplete; READY needs approved complete coverage. Existing children cannot be omitted. Applying a plan never starts a model run.',
+  dependency_set: 'Replace the complete blocking dependency set for unstarted/rejected work. Rejects explicit and aggregate cycles and stales affected plan coverage.',
+  integration_get: 'Read paginated current accepted child snapshot/commit references and the ready plan for parent integration. Managed workers/QA may expand only their assigned parent packet.',
+  artifact_read: 'Read a bounded byte window from a current sealed artifact, or an accepted child snapshot in this managed parent integration. UTF-8 is strict; use base64 for binary or split character windows. Does not expose private storage paths.',
   design_set: 'Create a new design revision; invalidates affected approvals. Cannot approve a design.',
   design_submit: 'Request human review of the exact current design revision.',
   grant_list: 'List this agent\'s human-issued grants for the exact issue, including scope, expiry, uses and current status. This cannot issue or revoke authority.',
@@ -33,7 +38,7 @@ export async function connectMcp(client: LocalClient) {
     if (clientInfo) void client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }).catch(() => process.stderr.write('Could not record MCP initialization metadata.\n'));
   };
   for (const name of agentOperations) {
-    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get','grant_list'].includes(name);
+    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get','grant_list','plan_get','integration_get','artifact_read'].includes(name);
     server.registerTool(name, { description: descriptions[name] ?? `Perform ${name} within authenticated role and workspace scope. Mutations require current versions and a unique idempotency key.`, inputSchema: schemas[name], annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: true, openWorldHint: false } }, async (args: any) => {
       try {
         const result = await client.command(name, args);

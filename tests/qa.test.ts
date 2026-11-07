@@ -15,6 +15,7 @@ import { LocalClient } from '../src/client.js';
 import { GitHubProvider } from '../src/git.js';
 import { GitVerifier } from '../src/git-verifier.js';
 import { GitSubmission } from '../src/contracts.js';
+import { applyFixturePlan } from './fixtures.js';
 
 async function until(check: () => boolean, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -36,6 +37,7 @@ async function fixture(mode: 'artifact' | 'git' = 'artifact') {
   const store = new Store(join(root,'workflow.sqlite')); const flow = new Workflow(store); const human = store.bootstrap().actor;
   const call = (actor: Actor,op: string,input: object) => flow.execute(actor,op,{ idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(human,'workspace_register',{ root: source, name: 'Independent QA fixture',prefix: 'QA' }).workspace;
+  if (mode === 'git') { git('remote','add','origin','https://github.com/fixture/delivery.git'); call(human,'workspace_git_bind',{ workspaceId: workspace.id }); }
   const run = (op: string,input: object) => call(human,op,{ workspaceId: workspace.id,...input });
   const current = (id: string) => store.get<Issue>('issue',id);
   const change = (op: string,id: string,input: object = {},actor = human) => call(actor,op,{ workspaceId: workspace.id,issueId: id,expectedVersion: current(id).version,...(op === 'grant_create' ? { scopeHash: (flow.execute(human,'issue_get',{ workspaceId: workspace.id,issueId: id }) as any).authorizationScopeHash } : {}),...input });
@@ -48,6 +50,7 @@ async function fixture(mode: 'artifact' | 'git' = 'artifact') {
   const qa = run('actor_enroll',{ role: 'qa',name: 'Independent QA' }).actor;
   const profile = run('check_profile_create',{ name: 'Independent Node check',command: process.execPath,args: ['.qa/check.mjs'],criteria: ['FILE'],timeoutMs: 5000 }).profile;
   change('issue_assign',issue.id,{ actorId: worker.id,harness: 'codex' }); change('qa_configure',issue.id,{ actorId: qa.id,harness: 'dsh',checkProfileIds: [profile.id] });
+  applyFixturePlan(flow,human,parent.id);
   const dispatch = () => change('work_dispatch',issue.id,{ designId: current(parent.id).designId,scopeRevision: current(issue.id).scopeRevision }).run as Run;
   dispatch();
   const app = createServer(store); const endpoint = await app.listen({ host: '127.0.0.1',port: 0 }); const adapter = new ProviderDouble();
@@ -214,8 +217,6 @@ test('sealing includes unselected files and detects their later corruption befor
 async function reviewedGitFixture() {
   const f = await fixture('git');
   try {
-    execFileSync('git',['remote','add','origin','https://github.com/fixture/delivery.git'],{ cwd: f.source,windowsHide: true,stdio: 'ignore' });
-    f.flow.execute(f.human,'workspace_git_bind',{ workspaceId: f.workspace.id,idempotencyKey: randomUUID() });
     const worker = await f.context(0); await f.submit(worker,'delivered'); f.initialReview(); const qa = await f.context(1); const check = await f.check(qa); await f.report(qa,check.id); await f.complete(qa); f.finalReview();
     const git = (...args: string[]) => execFileSync('git',args,{ cwd: worker.cwd,windowsHide: true,encoding: 'utf8',stdio: ['ignore','pipe','ignore'] }).trim();
     git('add','source.txt'); git('-c','user.name=Fixture','-c','user.email=test@example.invalid','-c','core.hooksPath=/dev/null','commit','-m','Disposable delivery');

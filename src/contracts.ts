@@ -14,7 +14,10 @@ export interface GitAttempt { id: string; submissionId: string; workspaceId: str
 export interface Design { id: string; issueId: string; content: string; criteria: string[]; status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'CHANGES_REQUESTED'; hash: string; requirementDescription?: string }
 export const grantActions = ['hold', 'resume', 'abandon', 'reopen', 'complete'] as const;
 export interface Grant { id: string; workspaceId: string; issueId: string; grantorId: string; granteeId: string; action: typeof grantActions[number]; scopeRevision: number; designId: string | null; scopeHash: string; candidateId?: string; digest?: string; expiresAt: string; maxUses: number; uses: number; version: number; reason: string; createdAt: string; revokedAt?: string; revokedBy?: string; revocationReason?: string }
-export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string; executionRoot?: string; runId?: string; baseSha?: string; snapshotId?: string }
+export interface Plan { id: string; workspaceId: string; issueId: string; designId: string | null; mode: 'DRAFT' | 'READY'; actorId: string; reason: string; createdAt: string; scopeHash: string; hash: string; integrationCriteria: string[]; overlapReasons: Record<string,string>; tasks: { issueId: string; scopeRevision: number; title: string; description: string; criteria: string[]; dependencies: string[] }[] }
+export interface Coverage { ready: boolean; status: string; blocking: string[]; criteria: { criterionId: string; tasks: { issueId: string; key: string; state: State }[]; integration: boolean; overlap: boolean; overlapReason: string | null; delivered: boolean }[]; unknown: string[]; children: { total: number; done: number; abandoned: number }; unassigned: string[]; unscheduled: string[] }
+export interface IntegrationManifest { planId: string; planScopeHash: string; hash: string; children: { issueId: string; candidateId: string; snapshotId: string; snapshotHash: string; digest: string; commitUrl?: string }[] }
+export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string; executionRoot?: string; runId?: string; baseSha?: string; snapshotId?: string; integration?: IntegrationManifest }
 export interface Snapshot { id: string; workspaceId: string; issueId: string; candidateId: string; root: string; files: { path: string; hash: string; bytes: number; mode: string }[]; hash: string; createdAt: string }
 export interface CheckProfile { id: string; workspaceId: string; name: string; command: string; args: string[]; criteria: string[]; timeoutMs: number; hash: string }
 export interface CheckRun { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; profileId: string; profileHash: string; state: 'QUEUED' | 'RUNNING' | 'PASSED' | 'FAILED' | 'UNCERTAIN'; criteria: string[]; testFiles: { path: string; hash: string }[]; createdAt: string; startedAt?: string; finishedAt?: string; command?: string; args?: string[]; pid?: number; exitCode?: number | null; stdout?: string; stderr?: string; errorCode?: string }
@@ -40,6 +43,7 @@ export interface Issue {
   finalReview: string | null; savedState: { state: State; stage: Issue['stage'] } | null;
   qaAssignee?: string; qaHarness?: Harness; checkProfileIds?: string[];
   artifactMode?: 'git' | 'artifact'; artifactReason?: string; acceptedDigest?: string; gitSubmissionId?: string;
+  aggregate?: boolean; planId?: string; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null;
 }
 export class DomainError extends Error {
   constructor(public code: string, message: string, public statusCode = 409, public details?: unknown) { super(message); }
@@ -50,6 +54,9 @@ const mutation = { idempotencyKey: z.string().min(1).max(200) };
 const scoped = { workspaceId: id };
 const target = { ...scoped, issueId: id };
 const change = { ...target, ...mutation, expectedVersion: z.number().int().positive() };
+const estimate = z.object({ value: z.number().positive().max(100000), unit: z.enum(['hours','points']), confidence: z.enum(['low','medium','high']) }).strict().nullable();
+const schedule = { priority: z.number().int().min(0).max(4).optional(),plannedStart: z.iso.date().nullable().optional(),dueDate: z.iso.date().nullable().optional(),estimate: estimate.optional(),iteration: z.string().min(1).max(120).nullable().optional() };
+const planTask = z.object({ ref: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,49}$/),issueId: id.optional(),expectedVersion: z.number().int().positive().optional(),title: z.string().min(1).max(300),description: z.string().max(65536).optional(),criteria: z.array(id).max(100).optional(),dependencies: z.array(z.union([z.object({ ref: id }).strict(),z.object({ issueId: id }).strict()])).max(100).optional(),assigneeId: id.nullable().optional(),harness: z.enum(harnesses).nullable().optional(),...schedule }).strict();
 export const schemas = {
   workspace_register: z.object({ ...mutation, root: text, name: z.string().min(1).max(120), prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/) }).strict(),
   workspace_list: z.object({}).strict(),
@@ -62,15 +69,20 @@ export const schemas = {
   issue_create: z.object({ ...scoped, ...mutation, parentId: id.optional(), expectedParentVersion: z.number().int().positive().optional(), title: z.string().min(1).max(300), description: z.string().max(65536).default(''), criteria: z.array(id).max(100).default([]), artifactMode: z.enum(['git', 'artifact']).optional(), artifactReason: text.optional() }).strict(),
   issue_get: z.object(target).strict(),
   issue_list: z.object({ ...scoped, state: z.enum(states).optional(), limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().min(0).default(0) }).strict(),
-  issue_update: z.object({ ...change, title: z.string().min(1).max(300).optional(), description: z.string().max(65536).optional(), priority: z.number().int().min(0).max(4).optional(), plannedStart: z.iso.date().nullable().optional(), dueDate: z.iso.date().nullable().optional() }).strict(),
+  issue_update: z.object({ ...change, title: z.string().min(1).max(300).optional(), description: z.string().max(65536).optional(), criteria: z.array(id).max(100).optional(),...schedule }).strict(),
+  plan_apply: z.object({ ...change,expectedPlanId: id.nullable().default(null),designId: id.nullable(),mode: z.enum(['DRAFT','READY']),tasks: z.array(planTask).max(100),integrationCriteria: z.array(id).max(100).default([]),overlapReasons: z.record(id,text).refine(value => Object.keys(value).length <= 100).default({}),reason: text }).strict(),
+  plan_get: z.object({ ...target,planId: id.optional(),view: z.enum(['summary','full']).default('summary'),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
+  integration_get: z.object({ ...target,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
+  artifact_read: z.object({ ...target,snapshotId: id,path: z.string().min(1).max(500),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(65536).default(16384),encoding: z.enum(['utf8','base64']).default('utf8') }).strict(),
   design_set: z.object({ ...change, content: text, criteria: z.array(id).min(1).max(100) }).strict(),
   design_submit: z.object(change).strict(),
   design_decide: z.object({ ...change, designId: id, decision: z.enum(['APPROVED', 'CHANGES_REQUESTED']), reason: text }).strict(),
-  issue_assign: z.object({ ...change, actorId: id, harness: z.enum(harnesses) }).strict(),
+  issue_assign: z.object({ ...change, actorId: id.nullable(), harness: z.enum(harnesses).nullable() }).strict(),
   grant_create: z.object({ ...change, granteeId: id, action: z.enum(grantActions), scopeHash: id, expiresAt: z.iso.datetime(), maxUses: z.number().int().min(1).max(10).default(1), reason: text, candidateId: id.optional(), digest: id.optional() }).strict(),
   grant_revoke: z.object({ ...change, grantId: id, expectedGrantVersion: z.number().int().positive(), reason: text }).strict(),
   grant_list: z.object({ ...target, limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().nonnegative().default(0) }).strict(),
   dependency_add: z.object({ ...change, dependsOn: id }).strict(),
+  dependency_set: z.object({ ...change, dependsOn: z.array(id).max(100) }).strict(),
   work_claim: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive() }).strict(),
   work_heartbeat: z.object({ ...change, fence: z.number().int().positive() }).strict(),
   work_submit: z.object({ ...change, fence: z.number().int().positive(), summary: text, files: z.array(z.string().min(1).max(500)).min(1).max(32) }).strict(),

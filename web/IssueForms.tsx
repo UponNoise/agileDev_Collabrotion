@@ -3,6 +3,7 @@ import type { Grant, Issue } from '../src/contracts';
 import { ApiError, command, dateText, errorText, formKey, harnessName, lines, mutation } from './api';
 import type { IssueData, WorkspaceData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
+import { PlanningForm } from './Planning';
 
 export type IssueDialog = {
   id: string;
@@ -17,6 +18,7 @@ export type IssueDialog = {
     | 'dispatch'
     | 'git'
     | 'grants'
+    | 'decomposition'
     | 'scope'
     | 'plan';
   packet?: IssueData;
@@ -125,6 +127,7 @@ export function IssueForm({
       </Modal>
     );
   if (!packet || !issue || !root) return null;
+  if (dialog.kind === 'decomposition') return <PlanningForm packet={packet} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'grants')
     return <GrantForm packet={packet} workspace={workspace} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'scope')
@@ -133,7 +136,12 @@ export function IssueForm({
         <AsyncForm
           onDone={done}
           onSave={(data) =>
-            mutation('issue_update', { ...base, ...formKey(data), description: String(data.get('description')) })
+            mutation('issue_update', {
+              ...base,
+              ...formKey(data),
+              description: String(data.get('description')),
+              ...(issue.parentId ? { criteria: lines(data.get('criteria')) } : {})
+            })
           }
         >
           <div className="form-body">
@@ -144,6 +152,11 @@ export function IssueForm({
             <Field label="Requirement description">
               <textarea name="description" required maxLength={65536} rows={8} defaultValue={issue.description} />
             </Field>
+            {issue.parentId ? (
+              <Field label="Mapped parent criteria" hint="One approved parent criterion ID per line.">
+                <textarea name="criteria" rows={3} defaultValue={issue.criteria.join('\n')} />
+              </Field>
+            ) : null}
           </div>
           {footer('Save scope')}
         </AsyncForm>
@@ -161,7 +174,15 @@ export function IssueForm({
               title: String(data.get('title')),
               priority: Number(data.get('priority')),
               plannedStart: data.get('start') || null,
-              dueDate: data.get('due') || null
+              dueDate: data.get('due') || null,
+              iteration: data.get('iteration') || null,
+              estimate: data.get('estimate')
+                ? {
+                    value: Number(data.get('estimate')),
+                    unit: String(data.get('unit')),
+                    confidence: String(data.get('confidence'))
+                  }
+                : null
             })
           }
         >
@@ -183,6 +204,32 @@ export function IssueForm({
             </Field>
             <Field label="Due date">
               <input type="date" name="due" defaultValue={issue.dueDate ?? ''} />
+            </Field>
+            <Field label="Iteration">
+              <input name="iteration" maxLength={120} defaultValue={issue.iteration ?? ''} />
+            </Field>
+            <Field label="Estimate" hint="Optional forecast, not measured effort.">
+              <input
+                name="estimate"
+                type="number"
+                min="0.01"
+                max="100000"
+                step="any"
+                defaultValue={issue.estimate?.value ?? ''}
+              />
+            </Field>
+            <Field label="Estimate unit">
+              <select name="unit" defaultValue={issue.estimate?.unit ?? 'hours'}>
+                <option value="hours">Hours</option>
+                <option value="points">Points</option>
+              </select>
+            </Field>
+            <Field label="Estimate confidence">
+              <select name="confidence" defaultValue={issue.estimate?.confidence ?? 'low'}>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
             </Field>
             <p className="muted">These metadata fields preserve current artifact approvals.</p>
           </div>
@@ -559,6 +606,35 @@ function DeliveryEvidence({ packet }: { packet: IssueData }) {
       </dl>
       <h3>Worker handoff</h3>
       <div className="prose">{issue.candidate?.summary}</div>
+      {issue.candidate?.integration ? (
+        <details>
+          <summary>Accepted child manifest ({issue.candidate.integration.children.length} children)</summary>
+          <dl className="metadata">
+            <dt>Plan scope hash</dt>
+            <dd className="mono">{issue.candidate.integration.planScopeHash}</dd>
+            <dt>Integration hash</dt>
+            <dd className="mono">{issue.candidate.integration.hash}</dd>
+          </dl>
+          {issue.candidate.integration.children.map((child) => (
+            <section className="evidence-block" key={child.issueId}>
+              <a href={`/w/${issue.workspaceId}/issues/${child.issueId}`}>Open accepted child</a>
+              <dl className="metadata">
+                <dt>Candidate</dt>
+                <dd className="mono">{child.candidateId}</dd>
+                <dt>Snapshot</dt>
+                <dd className="mono">{child.snapshotId}</dd>
+                <dt>Digest</dt>
+                <dd className="mono">{child.digest}</dd>
+              </dl>
+              {child.commitUrl ? (
+                <a href={child.commitUrl} target="_blank" rel="noreferrer">
+                  Verified child commit
+                </a>
+              ) : null}
+            </section>
+          ))}
+        </details>
+      ) : null}
       <details>
         <summary>Full manifest ({packet.snapshot?.files.length ?? 0} files)</summary>
         <pre className="json">

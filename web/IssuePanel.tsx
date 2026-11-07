@@ -108,7 +108,16 @@ export function IssuePanel({
     }
   }
   const terminal = ['DONE', 'ABANDONED'].includes(issue.state);
-  const canAssign = issue.state === 'NOT_STARTED' || issue.state.endsWith('REJECTED');
+  const canAssign =
+    issue.state === 'NOT_STARTED' ||
+    issue.state.endsWith('REJECTED') ||
+    (!issue.parentId &&
+      issue.state === 'IN_PROGRESS' &&
+      !issue.candidate &&
+      !issue.lease &&
+      !!packet.planning?.ready &&
+      packet.planning.children.total > 0 &&
+      packet.planning.children.done === packet.planning.children.total);
   return (
     <aside className="inspector" aria-label="Issue details">
       <button className="mobile-back text-button" onClick={onBack}>
@@ -174,6 +183,14 @@ export function IssuePanel({
               <dd>{issue.plannedStart ?? 'Unscheduled'}</dd>
               <dt>Due date</dt>
               <dd>{issue.dueDate ?? 'Unscheduled'}</dd>
+              <dt>Iteration</dt>
+              <dd>{issue.iteration ?? 'Not set'}</dd>
+              <dt>Estimate</dt>
+              <dd>
+                {issue.estimate
+                  ? `${issue.estimate.value} ${issue.estimate.unit} · ${issue.estimate.confidence} confidence`
+                  : 'Not estimated'}
+              </dd>
               <dt>Delivery mode</dt>
               <dd>{issue.artifactMode ?? 'Not declared'}</dd>
               <dt>Issue version</dt>
@@ -182,6 +199,21 @@ export function IssuePanel({
               <dd>{issue.scopeRevision}</dd>
             </dl>
             <section className="gap-panel" aria-label="Issue gaps">
+              {packet.planning ? (
+                <>
+                  <h3>Requirement plan</h3>
+                  <p>
+                    <Status value={packet.planning.status} /> · {packet.planning.children.done}/
+                    {packet.planning.children.total} tasks implemented
+                  </p>
+                  <p className="muted">
+                    Task counts describe delivery status. Parent integration and user acceptance remain separate gates.
+                  </p>
+                  <button disabled={!online} onClick={() => dialog('decomposition')}>
+                    Review decomposition
+                  </button>
+                </>
+              ) : null}
               <h3>Gaps to resolve</h3>
               {packet.readiness.blocking.length ? (
                 <ul>
@@ -391,6 +423,11 @@ export function IssuePanel({
             <button disabled={!online} onClick={() => dialog('grants')}>
               Manage authorization
             </button>
+            {packet.planning && tab !== 'Overview' ? (
+              <button disabled={!online} onClick={() => dialog('decomposition')}>
+                Review decomposition
+              </button>
+            ) : null}
             {!issue.parentId && !terminal ? (
               <button disabled={!online} onClick={() => dialog('create', { parent: issue })}>
                 New task

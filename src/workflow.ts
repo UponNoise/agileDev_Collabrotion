@@ -4,13 +4,14 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
-import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Grant, Issue, Operation, QaReport, Run, Workspace, liveRunStates, schemas } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, Snapshot, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
-import { acceptanceDigest, candidateSnapshot, queueQa, validateQaReport } from './qa-policy.js';
+import { acceptanceDigest, candidateSnapshot, integrationManifest, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding } from './git.js';
 import { workspaceView,issueView,runsView } from './web-views.js';
+import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
 
-const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list']);
+const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -57,6 +58,41 @@ export class Workflow {
       const grants = s.list<Grant>('grant',a.workspaceId).filter(g => g.issueId === issue.id && (actor.role === 'human' || g.granteeId === actor.id)).reverse();
       return { grants: grants.slice(a.offset,a.offset+a.limit).map(g => ({ ...g,status: this.grantStatus(g,issue) })),total: grants.length,nextOffset: a.offset+a.limit < grants.length ? a.offset+a.limit : null };
     }
+    if (op === 'plan_get') {
+      requireRole(actor,'human','lead','pm');
+      const root = s.issue(actor,workspace.id,a.issueId);
+      if (root.parentId) throw new DomainError('PARENT_REQUIRED','Decomposition plans belong to top-level requirements');
+      const plan = a.planId ? s.get<Plan>('plan',a.planId) : currentPlan(s,root);
+      if (plan && (plan.workspaceId !== workspace.id || plan.issueId !== root.id)) throw new DomainError('SCOPE_DENIED','Plan belongs to another requirement',403);
+      const coverage = planCoverage(s,root,plan); const rows = coverage.criteria;
+      return { issue: this.display(root),plan: !plan ? null : a.view === 'full' ? plan : { id: plan.id,designId: plan.designId,mode: plan.mode,scopeHash: plan.scopeHash,hash: plan.hash,createdAt: plan.createdAt,actorId: plan.actorId,reason: plan.reason },current: plan?.id === root.planId,coverage: { ...coverage,criteria: rows.slice(a.offset,a.offset+a.limit),totalCriteria: rows.length,nextOffset: a.offset+a.limit < rows.length ? a.offset+a.limit : null },...(a.view === 'full' ? { children: planChildren(s,root).map(i => this.display(i)),history: s.list<Plan>('plan',workspace.id).filter(p => p.issueId === root.id).slice(-10).reverse().map(p => ({ id: p.id,mode: p.mode,createdAt: p.createdAt,hash: p.hash })) } : {}) };
+    }
+    if (op === 'integration_get' || op === 'artifact_read') {
+      const issue = s.issue(actor,workspace.id,a.issueId);
+      if (op === 'artifact_read' && ['worker','qa'].includes(actor.role) && ((actor.role === 'worker' ? issue.assignee : issue.qaAssignee) !== (actor.principalId ?? actor.id) || (actor.runId && s.get<Run>('run',actor.runId).issueId !== issue.id))) throw new DomainError('SCOPE_DENIED','Artifact content belongs to the assigned execution, not general parent context',403);
+      const integrationAccess = () => {
+        if (['worker','qa'].includes(actor.role) && (!actor.runId || s.get<Run>('run',actor.runId).issueId !== issue.id || s.get<Run>('run',actor.runId).state !== 'RUNNING')) throw new DomainError('SCOPE_DENIED','Child snapshots require this managed parent integration execution',403);
+      };
+      if (op === 'integration_get') {
+        integrationAccess(); const manifest = integrationManifest(s,issue);
+        if (!manifest) throw new DomainError('INTEGRATION_NOT_REQUIRED','This issue is an executable leaf');
+        return { manifest: { ...manifest,children: manifest.children.slice(a.offset,a.offset+a.limit) },total: manifest.children.length,nextOffset: a.offset+a.limit < manifest.children.length ? a.offset+a.limit : null };
+      }
+      const snapshot = s.get<Snapshot>('snapshot',a.snapshotId);
+      if (snapshot.workspaceId !== workspace.id) throw new DomainError('SCOPE_DENIED','Snapshot belongs to another workspace',403);
+      if (issue.candidate?.snapshotId !== snapshot.id) {
+        integrationAccess();
+        if (!integrationManifest(s,issue)?.children.some(c => c.snapshotId === snapshot.id && c.issueId === snapshot.issueId && c.candidateId === snapshot.candidateId)) throw new DomainError('SCOPE_DENIED','Snapshot is outside the current issue or accepted integration packet',403);
+      }
+      const path = a.path.replaceAll('\\','/'); const entry = snapshot.files.find(f => f.path === path);
+      if (!entry) throw new DomainError('PATH_DENIED','Read an exact relative file from the sealed manifest',403);
+      const bytes = readFileSync(inside(snapshot.root,path));
+      if (hash(bytes) !== entry.hash || bytes.length !== entry.bytes) throw new DomainError('EVIDENCE_STALE','Sealed artifact content changed');
+      const part = bytes.subarray(a.offset,a.offset+a.limit); let content: string;
+      try { content = a.encoding === 'base64' ? part.toString('base64') : new TextDecoder('utf-8',{ fatal: true,ignoreBOM: true }).decode(part); }
+      catch { throw new DomainError('ENCODING_INVALID','This byte window is not complete UTF-8; request base64 encoding',400); }
+      return { snapshotId: snapshot.id,path,hash: entry.hash,mode: entry.mode,totalBytes: entry.bytes,offset: a.offset,encoding: a.encoding,content,nextOffset: a.offset+part.length < bytes.length ? a.offset+part.length : null };
+    }
     if (op === 'check_profile_list') return { profiles: s.list<CheckProfile>('check_profile',a.workspaceId) };
     if (op === 'qa_check_get') {
       const check = s.get<CheckRun>('check',a.checkId); s.issue(actor,a.workspaceId,check.issueId);
@@ -73,7 +109,9 @@ export class Workflow {
       let deliveryDigest: string | null = null;
       if (issue.state === 'USER_ACCEPTANCE') { try { deliveryDigest = acceptanceDigest(s,issue); } catch {} }
       const git = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
-      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
+      const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
+      const coverage = isAggregate(s,root) ? planCoverage(s,root) : null;
+      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
     }
     if (op === 'evidence_get') {
       const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
@@ -112,7 +150,7 @@ export class Workflow {
     const root = issue.parentId ? this.store.get<Issue>('issue', issue.parentId) : issue;
     return root.designId ? this.store.get<Design>('design', root.designId) : null;
   }
-  readiness(i: Issue) {
+  readiness(i: Issue, admission = true) {
     const blocking: string[] = [];
     const workspace = this.store.get<Workspace>('workspace',i.workspaceId); const root = i.parentId ? this.store.get<Issue>('issue',i.parentId) : i;
     if (i.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) blocking.push('DESIGN_BINDING_STALE');
@@ -126,7 +164,8 @@ export class Workflow {
     const d = this.design(i);
     if (d && d.requirementDescription !== root.description) blocking.push('DESIGN_SCOPE_STALE');
     if (d && i.criteria.some(c => !d.criteria.includes(c))) blocking.push('CRITERIA_UNMAPPED');
-    return { ready: blocking.length === 0, blocking };
+    if (admission && isAggregate(this.store,root)) blocking.push(...planCoverage(this.store,root).blocking);
+    return { ready: blocking.length === 0, blocking: [...new Set(blocking)] };
   }
   private save(actor: Actor, op: string, i: Issue, data: unknown = {}) {
     const before = this.store.get<Issue>('issue', i.id);
@@ -150,9 +189,97 @@ export class Workflow {
     for (const child of this.store.list<Issue>('issue',issue.workspaceId).filter(c => c.parentId === issue.id && c.state !== 'ABANDONED')) { this.invalidate(child); this.save(actor,'design_invalidated',child,{ designId: design.id }); }
     return design;
   }
+  private integrationIdle(issue: Issue) {
+    return isAggregate(this.store,issue) && issue.state === 'IN_PROGRESS' && !issue.lease && !issue.candidate;
+  }
+  private assertParentMutable(issue: Issue) {
+    const root = issue.parentId ? this.store.get<Issue>('issue',issue.parentId) : issue;
+    if (issue.parentId && ['DONE','ABANDONED'].includes(root.state)) throw new DomainError('PARENT_CLOSED','Reopen the parent before changing child scope');
+    if (this.store.list<Run>('run',issue.workspaceId).some(r => r.issueId === root.id && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile the parent integration execution before changing its scope');
+  }
+  private childScopeChanged(actor: Actor, child: Issue) {
+    if (!child.parentId) return;
+    const root = this.store.get<Issue>('issue',child.parentId);
+    if (root.candidate || root.lease) { this.invalidate(root); if (!['ON_HOLD','ABANDONED'].includes(root.state)) root.state = 'IN_PROGRESS'; }
+    this.save(actor,'child_scope_changed',root,{ childId: child.id,scopeRevision: child.scopeRevision });
+  }
+  private setDependencies(actor: Actor, issue: Issue, dependencies: string[], graph?: Issue[]) {
+    requireRole(actor,'human','lead','pm');
+    if (new Set(dependencies).size !== dependencies.length) throw new DomainError('INVALID_INPUT','List each dependency once',400);
+    if (canonical([...issue.dependencies].sort()) === canonical([...dependencies].sort())) return { issue: this.display(issue) };
+    if (issue.state !== 'NOT_STARTED' && !issue.state.endsWith('REJECTED')) throw new DomainError('PLAN_ACTIVE','Dependency edits require unstarted or rejected work');
+    if (this.store.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile execution before changing dependencies');
+    this.assertParentMutable(issue);
+    validateDependencyGraph(graph ?? this.store.list<Issue>('issue',issue.workspaceId).map(i => i.id === issue.id ? { ...i,dependencies } : i));
+    issue.dependencies = [...dependencies]; issue.scopeRevision++; this.invalidate(issue);
+    const result = this.save(actor,'dependency_set',issue); this.childScopeChanged(actor,issue); return result;
+  }
+  private applyPlan(actor: Actor, root: Issue, a: Record<string,any>) {
+    requireRole(actor,'human','lead','pm');
+    if (root.parentId) throw new DomainError('PARENT_REQUIRED','Apply a plan to a top-level requirement');
+    if (['DONE','ABANDONED'].includes(root.state)) throw new DomainError('PARENT_CLOSED','Reopen the requirement before changing its plan');
+    if ((root.planId ?? null) !== a.expectedPlanId || root.designId !== a.designId) throw new DomainError('PLAN_STALE','Reload the current design and decomposition before applying a plan');
+    const previous = planChildren(this.store,root); const tasks = a.tasks as Record<string,any>[];
+    const refs = new Map<string,string>(); const existing = new Set<string>();
+    for (const task of tasks) {
+      if (task.issueId && (task.description === undefined || task.criteria === undefined || task.dependencies === undefined)) throw new DomainError('PLAN_TASK_INCOMPLETE','Existing tasks require explicit description, criteria, and complete dependency bindings');
+      task.description ??= ''; task.criteria ??= []; task.dependencies ??= [];
+      if (refs.has(task.ref)) throw new DomainError('PLAN_DUPLICATE_TASK','Task references must be unique');
+      if (new Set(task.criteria).size !== task.criteria.length) throw new DomainError('PLAN_DUPLICATE_CRITERION','List each criterion once per task');
+      if (!/^\[(Feature|Fix|Refactor|Test|Docs|Research)\] [^:]+: .+ -> .+$/.test(task.title)) throw new DomainError('TITLE_FORMAT','Use [Type] Area: action -> outcome for every task');
+      if ((task.assigneeId === undefined) !== (task.harness === undefined) || (task.assigneeId === null) !== (task.harness === null)) throw new DomainError('ASSIGNMENT_INVALID','Provide a matching worker/harness pair or two nulls');
+      if (task.issueId) {
+        const child = previous.find(i => i.id === task.issueId);
+        if (!child || existing.has(child.id)) throw new DomainError('PLAN_TASK_INVALID','Each existing task must belong to this requirement and appear exactly once');
+        version(child,task.expectedVersion); existing.add(child.id); refs.set(task.ref,child.id);
+      } else {
+        if (task.expectedVersion !== undefined) throw new DomainError('INVALID_INPUT','New tasks have no expected version',400);
+        refs.set(task.ref,'');
+      }
+    }
+    if (previous.some(i => !existing.has(i.id))) throw new DomainError('PLAN_TASK_OMITTED','Include every existing child; omission is not scope exclusion');
+    for (const task of tasks.filter(t => !t.issueId)) {
+      const parent = this.store.get<Issue>('issue',root.id);
+      const created = this.mutate(actor,'issue_create',{ workspaceId: root.workspaceId,parentId: root.id,expectedParentVersion: parent.version,title: task.title,description: task.description,criteria: task.criteria }).issue as Issue;
+      refs.set(task.ref,created.id);
+    }
+    for (const task of tasks) {
+      const child = this.store.get<Issue>('issue',refs.get(task.ref)!);
+      const changes = Object.fromEntries(['title','description','criteria','priority','plannedStart','dueDate','estimate','iteration'].filter(k => task[k] !== undefined && canonical(task[k]) !== canonical((child as any)[k])).map(k => [k,task[k]]));
+      if (Object.keys(changes).length) this.mutate(actor,'issue_update',{ workspaceId: root.workspaceId,issueId: child.id,expectedVersion: child.version,...changes });
+    }
+    const dependencies = new Map<string,string[]>();
+    for (const task of tasks) dependencies.set(refs.get(task.ref)!,task.dependencies.map((d: any) => {
+      if (d.ref !== undefined) { const id = refs.get(d.ref); if (!id) throw new DomainError('PLAN_REFERENCE_INVALID','A dependency references an unknown task'); return id; }
+      this.store.issue(actor,root.workspaceId,d.issueId); return d.issueId;
+    }));
+    const graph = this.store.list<Issue>('issue',root.workspaceId).map(i => dependencies.has(i.id) ? { ...i,dependencies: dependencies.get(i.id)! } : i);
+    validateDependencyGraph(graph);
+    for (const task of tasks) {
+      let child = this.store.get<Issue>('issue',refs.get(task.ref)!);
+      this.setDependencies(actor,child,dependencies.get(child.id)!,graph);
+      child = this.store.get<Issue>('issue',child.id);
+      if (task.assigneeId !== undefined && (child.assignee !== task.assigneeId || child.harness !== task.harness)) this.mutate(actor,'issue_assign',{ workspaceId: root.workspaceId,issueId: child.id,expectedVersion: child.version,actorId: task.assigneeId,harness: task.harness });
+    }
+    const latest = this.store.get<Issue>('issue',root.id); latest.aggregate = true;
+    const children = planChildren(this.store,latest);
+    if (new Set(a.integrationCriteria).size !== a.integrationCriteria.length) throw new DomainError('PLAN_DUPLICATE_CRITERION','List each integration criterion once');
+    const plan: Plan = { id: randomUUID(),workspaceId: latest.workspaceId,issueId: latest.id,designId: latest.designId,mode: a.mode,actorId: actor.id,reason: a.reason,createdAt: new Date(this.now()).toISOString(),integrationCriteria: a.integrationCriteria,overlapReasons: a.overlapReasons,tasks: children.map(i => ({ issueId: i.id,scopeRevision: i.scopeRevision,title: i.title,description: i.description,criteria: i.criteria,dependencies: i.dependencies })),scopeHash: '',hash: '' };
+    plan.scopeHash = planScope(this.store,latest,plan); plan.hash = hash(canonical({ ...plan,hash: undefined }));
+    const coverage = planCoverage(this.store,latest,plan);
+    if (plan.mode === 'READY' && !coverage.ready) {
+      const unmapped = coverage.criteria.filter(row => !row.tasks.length && !row.integration).map(row => row.criterionId);
+      const unexplained = coverage.criteria.filter(row => row.overlap && !row.overlapReason?.trim()).map(row => row.criterionId);
+      throw new DomainError('PLAN_NOT_READY',`Resolve plan blockers before activation.${unmapped.length ? ` Unmapped: ${unmapped.slice(0,20).join(', ')}.` : ''}${unexplained.length ? ` Explain overlap: ${unexplained.slice(0,20).join(', ')}.` : ''}${coverage.unknown.length ? ` Unknown criteria: ${coverage.unknown.slice(0,20).join(', ')}.` : ''}`,409,{ blockers: coverage.blocking,unmapped,unexplained,unknown: coverage.unknown });
+    }
+    const old = currentPlan(this.store,latest);
+    if (old?.scopeHash !== plan.scopeHash || old?.mode !== plan.mode) { this.assertParentMutable(latest); if (latest.candidate || latest.lease) { this.invalidate(latest); if (latest.state !== 'ON_HOLD') latest.state = 'IN_PROGRESS'; } }
+    latest.planId = plan.id; this.store.put('plan',plan,latest.workspaceId);
+    return { ...this.save(actor,'plan_apply',latest,{ planId: plan.id,mode: plan.mode,scopeHash: plan.scopeHash,reason: a.reason }),plan,coverage,taskIds: Object.fromEntries(refs) };
+  }
   private grantScope(issue: Issue) {
-    const scope = (i: Issue) => ({ id: i.id,scopeRevision: i.scopeRevision,description: i.description,criteria: i.criteria,artifactMode: i.artifactMode,artifactReason: i.artifactReason });
-    return hash(canonical({ issue: scope(issue),designId: this.design(issue)?.id ?? null,gitBindingId: issue.designBindingId,children: this.store.list<Issue>('issue',issue.workspaceId).filter(i => i.parentId === issue.id).map(scope).sort((a,b) => a.id.localeCompare(b.id)) }));
+    const scope = (i: Issue) => ({ id: i.id,scopeRevision: i.scopeRevision,description: i.description,criteria: i.criteria,dependencies: i.dependencies,artifactMode: i.artifactMode,artifactReason: i.artifactReason });
+    return hash(canonical({ issue: scope(issue),designId: this.design(issue)?.id ?? null,gitBindingId: issue.designBindingId,planScopeHash: !issue.parentId ? currentPlan(this.store,issue)?.scopeHash : undefined,children: this.store.list<Issue>('issue',issue.workspaceId).filter(i => i.parentId === issue.id).map(scope).sort((a,b) => a.id.localeCompare(b.id)) }));
   }
   private grantStatus(grant: Grant, issue: Issue) {
     if (grant.revokedAt !== undefined) return 'REVOKED';
@@ -260,11 +387,14 @@ export class Workflow {
       if (w.gitBindingId) {
         const previous = s.get<GitBinding>('git_binding',w.gitBindingId);
         if (previous.repository === binding.repository && previous.subdirectory === binding.subdirectory) return { workspace: w,binding: previous };
-        if (s.list<Issue>('issue',w.id).some(i => i.artifactMode !== 'artifact' && !['DONE','ABANDONED'].includes(i.state) && (i.candidate || i.state !== 'NOT_STARTED' || this.design(i)?.status === 'APPROVED'))) throw new DomainError('REBIND_REQUIRES_SCOPE_RESET','Reset approved or active Git work before selecting another repository binding');
       }
+      const affected = s.list<Issue>('issue',w.id).filter(i => i.artifactMode !== 'artifact' && !['DONE','ABANDONED'].includes(i.state));
+      if (affected.some(i => i.candidate || i.lease || (i.state === 'ON_HOLD' ? i.savedState?.state : i.state) !== 'NOT_STARTED' || this.design(i)?.status === 'APPROVED') || s.list<Run>('run',w.id).some(r => affected.some(i => i.id === r.issueId) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('REBIND_REQUIRES_SCOPE_RESET','Reset approved scope and reconcile execution before selecting the first or a replacement repository binding');
       s.put('git_binding',binding,w.id); w.gitBindingId = binding.id; s.put('workspace',w,w.id);
-      for (const issue of s.list<Issue>('issue',w.id).filter(i => i.artifactMode !== 'artifact' && !['DONE','ABANDONED'].includes(i.state))) {
-        if (!issue.parentId) issue.designBindingId = binding.id;
+      for (const previous of affected) {
+        const issue = s.get<Issue>('issue',previous.id);
+        if (!issue.parentId) { const design = this.design(issue); if (design) this.draftDesign(actor,issue,design.content,design.criteria); else issue.designBindingId = binding.id; }
+        else issue.designBindingId = binding.id;
         issue.acceptedDigest = undefined; this.save(actor,'scope_git_binding_set',issue,{ bindingId: binding.id,designId: this.design(issue)?.id });
       }
       s.event(w.id,actor,op,binding.id,{ repository: binding.repository,subdirectory: binding.subdirectory }); return { workspace: w,binding };
@@ -320,9 +450,11 @@ export class Workflow {
         version(parent, a.expectedParentVersion);
         if (parent.parentId) throw new DomainError('HIERARCHY_LIMIT', 'Tasks cannot contain child tasks');
         if (['DONE', 'ABANDONED'].includes(parent.state)) throw new DomainError('PARENT_CLOSED', 'Reopen the parent before adding scope');
+        this.assertParentMutable(parent);
+        if (planChildren(s,parent).length >= 100) throw new DomainError('PLAN_SIZE_LIMIT','A requirement supports at most 100 tasks');
         if (!/^\[(Feature|Fix|Refactor|Test|Docs|Research)\] [^:]+: .+ -> .+$/.test(a.title)) throw new DomainError('TITLE_FORMAT', 'Use [Type] Area: action -> outcome for the child suffix');
         const wasActive = parent.state !== 'NOT_STARTED';
-        this.invalidate(parent); if (wasActive && parent.state !== 'ON_HOLD') parent.state = 'IN_PROGRESS';
+        this.invalidate(parent); parent.aggregate = true; if (wasActive && parent.state !== 'ON_HOLD') parent.state = 'IN_PROGRESS';
         this.save(actor, 'scope_child_added', parent);
       }
       w.sequence++; s.put('workspace', w, w.id);
@@ -332,11 +464,12 @@ export class Workflow {
       i.designBindingId = i.artifactMode === 'artifact' ? undefined : parent?.designBindingId ?? w.gitBindingId;
       if (a.artifactMode && parent?.artifactMode && a.artifactMode !== parent.artifactMode) throw new DomainError('ARTIFACT_MODE_MISMATCH','Child delivery mode follows the approved parent scope');
       if (i.artifactMode === 'artifact' && w.commonDir && !i.artifactReason) throw new DomainError('ARTIFACT_REASON_REQUIRED','Non-Git delivery in a Git workspace needs an explicit reviewed reason');
-      s.put('issue', i, w.id); s.event(w.id, actor, op, i.id, { key: i.key, version: 1 });
+      s.put('issue', i, w.id); validateDependencyGraph(s.list<Issue>('issue',w.id)); s.event(w.id, actor, op, i.id, { key: i.key, version: 1 });
       return { issue: this.display(i) };
     }
     const i = s.issue(actor, w.id, a.issueId);
     version(i, a.expectedVersion);
+    if (op === 'plan_apply') return this.applyPlan(actor,i,a);
     if (op === 'grant_create') {
       requireRole(actor,'human');
       const grantee = s.get<Actor>('actor',a.granteeId);
@@ -443,22 +576,25 @@ export class Workflow {
       }
       return { ...this.save(actor,op,i,{ approvalId: approval.id, reason: a.reason }), approval, closureBlocked: i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [] };
     }
-    const scopeChanged = op === 'issue_update' && a.description !== undefined && a.description !== i.description;
-    if (['issue_assign', 'dependency_add', 'design_set'].includes(op) || scopeChanged) {
+    const scopeChanged = op === 'issue_update' && ((a.description !== undefined && a.description !== i.description) || (a.criteria !== undefined && canonical(a.criteria) !== canonical(i.criteria)));
+    if (['issue_assign', 'dependency_add', 'dependency_set', 'design_set'].includes(op) || scopeChanged) {
       if (s.list<Run>('run', w.id).some(r => (r.issueId === i.id || ((op === 'design_set' || (scopeChanged && !i.parentId)) && s.get<Issue>('issue', r.issueId).parentId === i.id)) && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'Reconcile queued, live, or uncertain executions before changing their assignment or scope');
     }
     if (op === 'issue_update') {
       requireRole(actor, 'human', 'lead', 'pm');
       if (['DONE', 'ABANDONED'].includes(i.state)) throw new DomainError('ISSUE_CLOSED', 'Reopen before editing');
       if (a.title !== undefined && i.parentId && !/^\[(Feature|Fix|Refactor|Test|Docs|Research)\] [^:]+: .+ -> .+$/.test(a.title)) throw new DomainError('TITLE_FORMAT', 'Invalid task suffix');
+      if (a.criteria !== undefined && (!i.parentId || new Set(a.criteria).size !== a.criteria.length)) throw new DomainError('PARENT_DESIGN_REQUIRED','Edit parent criteria through a design revision; task mappings must be unique');
+      const start = a.plannedStart === undefined ? i.plannedStart : a.plannedStart; const end = a.dueDate === undefined ? i.dueDate : a.dueDate;
+      if (start && end && start > end) throw new DomainError('SCHEDULE_INVALID','The due date cannot precede the planned start');
       if (scopeChanged) {
-        i.scopeRevision++; i.description = a.description;
+        this.assertParentMutable(i); i.scopeRevision++; if (a.description !== undefined) i.description = a.description;
         const previous = this.design(i);
         if (!i.parentId && previous) this.draftDesign(actor,i,previous.content,previous.criteria);
         else this.invalidate(i);
       }
-      for (const key of ['title', 'description', 'priority', 'plannedStart', 'dueDate'] as const) if (a[key] !== undefined) (i as any)[key] = a[key];
-      return this.save(actor, op, i);
+      for (const key of ['title', 'description', 'criteria', 'priority', 'plannedStart', 'dueDate', 'estimate', 'iteration'] as const) if (a[key] !== undefined) (i as any)[key] = a[key];
+      const result = this.save(actor, op, i); if (scopeChanged) this.childScopeChanged(actor,i); return result;
     }
     if (op === 'design_set') {
       requireRole(actor, 'human', 'lead');
@@ -484,29 +620,17 @@ export class Workflow {
     }
     if (op === 'issue_assign') {
       requireRole(actor, 'human', 'lead', 'pm');
-      if (i.state !== 'NOT_STARTED' && !i.state.endsWith('REJECTED')) throw new DomainError('ASSIGNMENT_ACTIVE', 'Reconcile active work before reassigning');
-      const assigned = s.get<Actor>('actor', a.actorId);
-      if (assigned.role !== 'worker' || assigned.runId || !assigned.workspaceIds.includes(w.id)) throw new DomainError('SCOPE_DENIED', 'Assignment requires a logical worker in this workspace');
-      i.assignee = assigned.id; i.harness = a.harness; i.lease = null;
+      if (i.state !== 'NOT_STARTED' && !i.state.endsWith('REJECTED') && !this.integrationIdle(i)) throw new DomainError('ASSIGNMENT_ACTIVE', 'Reconcile active work before reassigning');
+      if ((a.actorId === null) !== (a.harness === null)) throw new DomainError('ASSIGNMENT_INVALID','Select a worker and harness together, or clear both');
+      const assigned = a.actorId ? s.get<Actor>('actor', a.actorId) : null;
+      if (assigned && (assigned.role !== 'worker' || assigned.runId || !assigned.workspaceIds.includes(w.id))) throw new DomainError('SCOPE_DENIED', 'Assignment requires a logical worker in this workspace');
+      i.assignee = assigned?.id ?? null; i.harness = a.harness; i.lease = null;
       return this.save(actor, op, i);
     }
-    if (op === 'dependency_add') {
-      requireRole(actor, 'human', 'lead', 'pm');
-      if (i.state !== 'NOT_STARTED') throw new DomainError('PLAN_ACTIVE', 'Dependency edits require unstarted work');
-      s.issue(actor, w.id, a.dependsOn);
-      const reaches = (id: string, seen = new Set<string>()): boolean => {
-        if (id === i.id) return true;
-        if (seen.has(id)) return false;
-        seen.add(id); return s.get<Issue>('issue', id).dependencies.some(d => reaches(d, seen));
-      };
-      if (reaches(a.dependsOn)) throw new DomainError('DEPENDENCY_CYCLE', 'Dependency would create a cycle');
-      if (i.parentId === a.dependsOn) throw new DomainError('DEPENDENCY_CYCLE', 'A child cannot wait for its own aggregate parent');
-      i.dependencies = [...new Set([...i.dependencies, a.dependsOn])];
-      return this.save(actor, op, i);
-    }
+    if (op === 'dependency_add' || op === 'dependency_set') return this.setDependencies(actor,i,op === 'dependency_add' ? [...new Set([...i.dependencies,a.dependsOn])] : a.dependsOn);
     if (op === 'work_dispatch' || op === 'work_claim') {
       requireRole(actor, ...(op === 'work_claim' ? ['worker'] as const : ['human', 'lead', 'pm'] as const));
-      if (!['NOT_STARTED', 'LEAD_REJECTED', 'QA_REJECTED', 'USER_REJECTED'].includes(i.state)) throw new DomainError('INVALID_TRANSITION', 'Issue cannot be started from its current state');
+      if (!['NOT_STARTED', 'LEAD_REJECTED', 'QA_REJECTED', 'USER_REJECTED'].includes(i.state) && !this.integrationIdle(i)) throw new DomainError('INVALID_TRANSITION', 'Issue cannot be started from its current state');
       const blockers = this.readiness(i).blocking;
       if (blockers.length) throw new DomainError('NOT_READY', 'Resolve readiness blockers first', 409, { blockers });
       if (this.design(i)?.id !== a.designId || i.scopeRevision !== a.scopeRevision) throw new DomainError('APPROVAL_STALE', 'Acknowledge the current design and task scope');
@@ -527,7 +651,7 @@ export class Workflow {
       requireRole(actor, 'worker');
       if (i.state !== 'IN_PROGRESS' || i.lease?.actorId !== actor.id || i.lease.fence !== a.fence) throw new DomainError('STALE_FENCE', 'Run does not own the current implementation lease');
       if (i.lease.expiresAt <= this.now()) throw new DomainError('LEASE_EXPIRED', 'Reconcile execution before renewing or submitting');
-      if (this.readiness(i).blocking.length) throw new DomainError('NOT_READY', 'Work is blocked by a changed requirement or hold');
+      if (this.readiness(i,false).blocking.length) throw new DomainError('NOT_READY', 'Work is blocked by a changed requirement or hold');
       if (op === 'work_heartbeat') { i.lease.expiresAt = this.now() + 300000; return this.save(actor, op, i); }
       const run = actor.runId ? s.get<Run>('run', actor.runId) : null;
       if (run && (run.state !== 'RUNNING' || run.executionActorId !== actor.id || !run.executionRoot || run.scopeRevision !== i.scopeRevision || run.designId !== this.design(i)?.id)) throw new DomainError('RUN_UNCERTAIN', 'Run is not the current active execution');
@@ -538,7 +662,8 @@ export class Workflow {
         if (!statSync(file).isFile() || statSync(file).size > 2 * 1024 * 1024) throw new DomainError('ARTIFACT_LIMIT', 'Artifacts must be files of at most 2 MiB');
         return { path: relative(root, file), hash: hash(readFileSync(file)) };
       });
-      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary, ...(run ? { executionRoot: root, runId: run.id, baseSha: run.baseSha } : {}) };
+      const integration = integrationManifest(s,i);
+      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary, ...(run ? { executionRoot: root, runId: run.id, baseSha: run.baseSha } : {}),...(integration ? { integration } : {}) };
       s.put('candidate',i.candidate,w.id);
       i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.state = 'LEAD_REVIEW'; i.stage = 'PRE_QA';
       i.gitSubmissionId = undefined; i.acceptedDigest = undefined;
@@ -549,6 +674,7 @@ export class Workflow {
       if (i.candidate.runId && (liveRunStates as readonly string[]).includes(s.get<Run>('run', i.candidate.runId).state)) throw new DomainError('RUN_STILL_LIVE', 'Confirm execution stopped before reviewing its artifacts');
       if (i.candidate.runId) candidateSnapshot(s,i);
       else for (const file of i.candidate.files) if (hash(readFileSync(inside(w.root, file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Submitted artifact changed; resubmit before review');
+      validateIntegration(s,i);
       if (i.candidate.sessionId === actor.sessionId) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED', 'Implementer cannot review its own delivery');
       if (i.state === 'LEAD_REVIEW') requireRole(actor, 'lead');
       else if (i.state === 'QA_TEST') requireRole(actor, 'qa');
@@ -580,7 +706,7 @@ export class Workflow {
         this.invalidate(i); i.state = 'NOT_STARTED';
         if (i.parentId) {
           const parent = s.get<Issue>('issue',i.parentId);
-          if (parent.state === 'DONE') { this.invalidate(parent); parent.state = 'IN_PROGRESS'; this.save(actor,'child_reopened',parent,{ childId: i.id }); }
+          if (parent.state === 'DONE' || parent.candidate || parent.lease) { this.invalidate(parent); if (!['ON_HOLD','ABANDONED'].includes(parent.state)) parent.state = 'IN_PROGRESS'; this.save(actor,'child_reopened',parent,{ childId: i.id }); }
         }
       }
       return this.save(actor, op, i, { reason: a.reason,...(grant ? { grantId: grant.id,grantorId: grant.grantorId } : {}) });

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { Actor, DomainError, Issue } from '../src/contracts.js';
 import { Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
+import { applyFixturePlan } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
@@ -29,8 +30,9 @@ function setup() {
     change(lead.actor, 'design_set', parent.id, { content: 'Explicit active workspace binding and cross-harness state', criteria: ['AC-1'] });
     change(lead.actor, 'design_submit', parent.id);
     change(human.actor, 'design_decide', parent.id, { designId: current(parent.id).designId, decision: 'APPROVED', reason: 'Approve this exact test design' });
+    if (store.list<Issue>('issue',workspace.id).some(i => i.parentId === parent.id)) applyFixturePlan(workflow,pm.actor,parent.id);
   };
-  const task = () => run(pm.actor, 'issue_create', { parentId: parent.id, expectedParentVersion: current(parent.id).version, title: '[Feature] Binding: select active root -> scoped commands', description: 'Implement explicit root binding', criteria: ['AC-1'] }).issue as Issue;
+  const task = () => { const issue = run(pm.actor, 'issue_create', { parentId: parent.id, expectedParentVersion: current(parent.id).version, title: '[Feature] Binding: select active root -> scoped commands', description: 'Implement explicit root binding', criteria: ['AC-1'] }).issue as Issue; applyFixturePlan(workflow,pm.actor,parent.id); return issue; };
   const assign = (i: Issue) => change(pm.actor, 'issue_assign', i.id, { actorId: worker.actor.id, harness: 'codex' });
   const claim = (i: Issue) => change(worker.actor, 'work_claim', i.id, { designId: current(parent.id).designId ?? 'unapproved', scopeRevision: current(i.id).scopeRevision });
   return { root, store, human, lead, pm, worker, qa, run, call, parent, current, change, approve, task, assign, claim, advance: () => { clock += 300001; } };
@@ -213,6 +215,8 @@ test('editing requirement scope creates a fresh draft and invalidates old child 
   assert.ok(f.store.list<any>('approval',task.workspaceId).some(a => a.designId === previous.id && a.decision === 'APPROVED'));
   f.change(f.lead.actor,'design_submit',f.parent.id);
   f.change(f.human.actor,'design_decide',f.parent.id,{ designId: design.id,decision: 'APPROVED',reason: 'Fixture approval of the changed scope' });
+  assert.throws(() => f.claim(task),rejects('NOT_READY'));
+  applyFixturePlan(new Workflow(f.store),f.pm.actor,f.parent.id);
   assert.equal(f.claim(task).issue.state,'IN_PROGRESS');
 });
 

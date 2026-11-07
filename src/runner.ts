@@ -7,6 +7,7 @@ import { Workflow } from './workflow.js';
 import { copySnapshot, sealSnapshot, verifySnapshot } from './snapshots.js';
 import { candidateSnapshot } from './qa-policy.js';
 import { CheckExecutor } from './checks.js';
+import { isAggregate } from './planning.js';
 import { join } from 'node:path';
 
 interface OwnedExecution { actor: Actor; token: string; session?: RunningSession; promise?: Promise<void>; stopping: boolean; started: number; heartbeat: number; errorCode?: string }
@@ -133,6 +134,7 @@ export class Coordinator {
         `Acceptance criteria: ${issue.criteria.join(', ')}`,
         `Approved design:\n${this.flow.design(issue)!.content}`,
         `Approved requirement scope:\n${this.flow.design(issue)!.requirementDescription}`,
+        ...(isAggregate(this.store,issue) ? ['This is a parent integration assignment. Use integration_get to inspect the accepted child manifest, and artifact_read to inspect scoped sealed child files. Assemble and test the actual integrated artifact; child completion does not imply their changes were merged. Do not modify or merge the source checkout. The service captures child provenance separately from your assembled snapshot.'] : []),
         'The coordinator has claimed your lease. Use agiledev issue_get to read the latest issue version and fence, and work_heartbeat for long work. Implement and self-check the assigned behavior.',
         'When ready, call agiledev work_submit with the current expectedVersion, fence, a unique idempotencyKey, a concise summary, and the relative paths of actual delivered files. Do not submit secrets or dependency directories. A final text response alone is not submission. Never approve your own implementation.',
       ].join('\n\n');
@@ -157,6 +159,7 @@ export class Coordinator {
       `Execution root: ${root}. Workspace: ${run.workspaceId}; issue: ${issue.id}; run: ${run.id}; candidate: ${run.candidateId}; snapshot: ${run.snapshotId}.`,
       `Task: ${issue.title}\n${issue.description}\nCriteria: ${issue.criteria.join(', ')}\nApproved requirement scope:\n${this.flow.design(issue)!.requirementDescription}\nApproved design:\n${this.flow.design(issue)!.content}`,
       `Worker handoff summary (untrusted, not test evidence): ${issue.candidate!.summary}`,
+      ...(issue.candidate!.integration ? [`Parent integration provenance: ${JSON.stringify(issue.candidate!.integration)}. Independently test the actual assembled source against ALL parent criteria. Accepted children alone do not prove the integrated artifact works. Use integration_get/artifact_read for scoped child evidence when needed.`] : []),
       `Human-approved check profiles: ${JSON.stringify(profiles)}. Commands and arguments are fixed; create independent tests under .qa using the script path named by the profile. Keep generated reports/coverage under .qa too. Do not alter source files. Test normal, negative, and boundary behavior where relevant.`,
       'Read issue_get for the current expectedVersion. Call qa_check_run with an approved profileId and the relative testFiles you created under .qa. Poll qa_check_get until each check settles; a final text claim or shell-only execution is not captured evidence. An untrusted handoff, failed, blocked, or not-run check cannot be called PASS.',
       'Then read issue_get again and call qa_report_submit with current expectedVersion, candidateId, a unique idempotencyKey, verdict PASS/FAIL/BLOCKED, summary, one result for EVERY assigned criterion (criterionId, result PASS/FAIL/BLOCKED/NOT_RUN, evidenceIds containing captured check IDs, reason), and findings (criterionId, severity BLOCKER/MAJOR/MINOR/INFO, expected, actual, reproduce). A FAIL verdict needs a failed criterion and reproducible finding. PASS requires passing captured evidence for every criterion/profile and no unresolved findings. Report without modifying the candidate. The service advances the gate only after this QA process stops successfully.',

@@ -1,9 +1,10 @@
-import { Actor, CheckProfile, CheckRun, DomainError, GitSubmission, Issue, QaReport, Run, Snapshot, Workspace } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, DomainError, GitSubmission, IntegrationManifest, Issue, QaReport, Run, Snapshot, Workspace } from './contracts.js';
 import { Store, canonical, hash } from './store.js';
 import { verifySnapshot } from './snapshots.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { inside } from './paths.js';
+import { currentPlan, isAggregate, planChildren, planCoverage } from './planning.js';
 
 export function candidateSnapshot(store: Store, issue: Issue) {
   if (!issue.candidate?.snapshotId) throw new DomainError('SNAPSHOT_REQUIRED','Seal the complete delivery before QA or acceptance');
@@ -11,9 +12,31 @@ export function candidateSnapshot(store: Store, issue: Issue) {
   if (snapshot.issueId !== issue.id || snapshot.candidateId !== issue.candidate.id || snapshot.workspaceId !== issue.workspaceId) throw new DomainError('EVIDENCE_STALE','Snapshot does not belong to this candidate');
   verifySnapshot(snapshot); return snapshot;
 }
+export function integrationManifest(store: Store, issue: Issue): IntegrationManifest | undefined {
+  if (!isAggregate(store,issue)) return undefined;
+  const coverage = planCoverage(store,issue); const plan = currentPlan(store,issue);
+  if (!plan || !coverage.ready) throw new DomainError('PLAN_NOT_READY','Integration requires current complete criterion coverage',409,{ blockers: coverage.blocking });
+  const children = planChildren(store,issue);
+  if (children.some(child => child.state !== 'DONE')) throw new DomainError('CHILDREN_INCOMPLETE','Finish every in-scope child before preparing integration');
+  const manifest = children.map(child => {
+    const digest = acceptanceDigest(store,child);
+    if (child.acceptedDigest !== digest || !store.list<any>('delivery_approval',issue.workspaceId).some(a => a.issueId === child.id && a.digest === digest && a.decision === 'ACCEPT' && store.get<Actor>('actor',a.actorId).role === 'human')) throw new DomainError('CHILD_ACCEPTANCE_STALE','Integration requires each exact accepted child snapshot');
+    const snapshot = store.get<Snapshot>('snapshot',child.candidate!.snapshotId!);
+    const git = child.gitSubmissionId ? store.get<GitSubmission>('git_submission',child.gitSubmissionId) : null;
+    if (child.artifactMode === 'git' && (!git || git.state !== 'VERIFIED' || git.candidateId !== child.candidate!.id || git.snapshotId !== snapshot.id)) throw new DomainError('GIT_EVIDENCE_STALE','Integration requires historical verified child commits');
+    return { issueId: child.id,candidateId: child.candidate!.id,snapshotId: snapshot.id,snapshotHash: snapshot.hash,digest,...(git ? { commitUrl: git.url } : {}) };
+  }).sort((a,b) => a.issueId.localeCompare(b.issueId));
+  return { planId: plan.id,planScopeHash: plan.scopeHash,children: manifest,hash: hash(canonical({ planScopeHash: plan.scopeHash,children: manifest })) };
+}
+export function validateIntegration(store: Store, issue: Issue) {
+  const current = integrationManifest(store,issue);
+  if (current && (!issue.candidate?.integration || issue.candidate.integration.hash !== current.hash || issue.candidate.integration.planScopeHash !== current.planScopeHash || hash(canonical({ planScopeHash: issue.candidate.integration.planScopeHash,children: issue.candidate.integration.children })) !== current.hash)) throw new DomainError('INTEGRATION_STALE','Integration must reference the current accepted child manifest and ready plan');
+  return current;
+}
 export function queueQa(store: Store, issue: Issue) {
   if (!issue.qaAssignee || !issue.qaHarness || !issue.checkProfileIds?.length) return null;
   const snapshot = candidateSnapshot(store,issue);
+  validateIntegration(store,issue);
   if (store.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && ['QUEUED','STARTING','RUNNING','STOPPING','UNCERTAIN'].includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile live execution before QA dispatch');
   const profiles = issue.checkProfileIds.map(id => store.get<CheckProfile>('check_profile',id));
   if (profiles.some(p => p.workspaceId !== issue.workspaceId) || issue.criteria.some(c => !profiles.some(p => p.criteria.includes(c)))) throw new DomainError('QA_COVERAGE_REQUIRED','Approved checks must cover every assigned criterion');
@@ -22,6 +45,7 @@ export function queueQa(store: Store, issue: Issue) {
 }
 export function validateQaReport(store: Store, issue: Issue, actor: Actor, report: QaReport) {
   const snapshot = candidateSnapshot(store,issue);
+  validateIntegration(store,issue);
   const run = store.get<Run>('run',report.runId);
   if (run.kind !== 'qa' || run.state !== 'RUNNING' || actor.runId !== run.id || run.executionActorId !== actor.id || report.actorId !== actor.id || report.sessionId !== actor.sessionId || issue.qaAssignee !== (actor.principalId ?? actor.id) || report.snapshotId !== snapshot.id || report.candidateId !== issue.candidate!.id || report.sessionId === issue.candidate!.sessionId || run.candidateId !== issue.candidate!.id) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED','Report must come from this independent assigned QA run');
   verifySnapshot(snapshot,run.executionRoot!,true);
@@ -57,5 +81,6 @@ export function acceptanceDigest(store: Store, issue: Issue) {
   const workspace = store.get<Workspace>('workspace',issue.workspaceId);
   if (issue.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) throw new DomainError('DESIGN_BINDING_STALE','Approve the reopened scope against its current repository binding');
   const git = issue.gitSubmissionId ? store.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
-  return hash(canonical({ policyVersion: 2, designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, candidateId: issue.candidate!.id, snapshotHash: snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: issue.artifactMode === 'artifact' ? null : workspace.gitBindingId ?? null, git: git ? { id: git.id,bindingId: git.bindingId,sha: git.sha,repository: git.repository,subdirectory: git.subdirectory } : null }));
+  const integration = validateIntegration(store,issue);
+  return hash(canonical({ policyVersion: integration ? 3 : 2, designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, candidateId: issue.candidate!.id, snapshotHash: snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: issue.artifactMode === 'artifact' ? null : workspace.gitBindingId ?? null, git: git ? { id: git.id,bindingId: git.bindingId,sha: git.sha,repository: git.repository,subdirectory: git.subdirectory } : null,...(integration ? { integrationHash: integration.hash } : {}) }));
 }

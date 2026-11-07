@@ -2,9 +2,11 @@ import type {
   Actor,
   CheckProfile,
   CheckRun,
+  Coverage,
   Design,
   GitSubmission,
   Issue,
+  Plan,
   Run,
   Snapshot,
   Workspace
@@ -35,6 +37,13 @@ export interface IssueData {
   git: GitSubmission | null;
   closureBlocked: string[];
   readiness: { ready: boolean; blocking: string[] };
+  planning: {
+    planId: string | null;
+    ready: boolean;
+    status: string;
+    blocking: string[];
+    children: Coverage['children'];
+  } | null;
   nextActions: string[];
   history: {
     sequence: number;
@@ -50,6 +59,13 @@ export interface IssueData {
   checks: CheckRun[];
   runs: Run[];
   snapshot: Omit<Snapshot, 'root'> | null;
+}
+export interface PlanData {
+  issue: DisplayIssue;
+  plan: Plan | null;
+  coverage: Coverage & { totalCriteria: number; nextOffset: number | null };
+  children: DisplayIssue[];
+  history: Pick<Plan, 'id' | 'mode' | 'createdAt' | 'hash'>[];
 }
 export class ApiError extends Error {
   constructor(

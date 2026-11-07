@@ -85,6 +85,31 @@ test('owner binds the actual selected remote and agents cannot substitute anothe
   } finally { store.close(); rmSync(root,{ recursive: true,force: true }); }
 });
 
+test('initial repository binding cannot inherit an unrelated design approval and draft rebinding preserves a hold', () => {
+  const root = mkdtempSync(join(tmpdir(),'agiledev-first-bind-')); const store = new Store(':memory:'); const flow = new Workflow(store); const owner = store.bootstrap().actor;
+  const git = (...args: string[]) => execFileSync('git',args,{ cwd: root,windowsHide: true,stdio: 'ignore' });
+  const run = (op: string,input: object) => flow.execute(owner,op,{ ...input,idempotencyKey: randomUUID() }) as any;
+  try {
+    git('init'); git('remote','add','origin','https://github.com/fixture/repository.git');
+    const workspace = run('workspace_register',{ root,name: 'Binding fixture',prefix: 'BIND' }).workspace;
+    const issue = run('issue_create',{ workspaceId: workspace.id,title: 'Repository scope',description: 'Review the actual repository',criteria: ['SCOPE'] }).issue;
+    const change = (op: string,input: object = {}) => run(op,{ workspaceId: workspace.id,issueId: issue.id,expectedVersion: store.get<any>('issue',issue.id).version,...input });
+    change('design_set',{ content: 'Implement and review the bound repository',criteria: ['SCOPE'] }); change('design_submit');
+    const approved = store.get<any>('issue',issue.id).designId;
+    change('design_decide',{ designId: approved,decision: 'APPROVED',reason: 'Automated unbound fixture approval' });
+    assert.throws(() => run('workspace_git_bind',{ workspaceId: workspace.id }),(error: any) => error.code === 'REBIND_REQUIRES_SCOPE_RESET');
+    assert.equal(store.get<any>('workspace',workspace.id).gitBindingId,undefined); assert.equal(store.list('git_binding',workspace.id).length,0);
+    change('design_set',{ content: 'Reset draft before selecting repository',criteria: ['SCOPE'] });
+    const oldDraft = store.get<any>('issue',issue.id).designId;
+    change('issue_transition',{ action: 'hold',reason: 'Keep reset draft suspended while selecting repository' });
+    const binding = run('workspace_git_bind',{ workspaceId: workspace.id }).binding;
+    const current = store.get<any>('issue',issue.id); const design = store.get<any>('design',current.designId);
+    assert.equal(current.state,'ON_HOLD'); assert.equal(current.designBindingId,binding.id); assert.notEqual(current.designId,oldDraft); assert.equal(design.status,'DRAFT');
+    assert.equal(store.get<any>('design',approved).status,'APPROVED'); assert.notEqual(design.hash,store.get<any>('design',oldDraft).hash);
+    assert.throws(() => change('design_decide',{ designId: approved,decision: 'APPROVED',reason: 'Old scope cannot approve a new repository' }),(error: any) => error.code === 'APPROVAL_STALE');
+  } finally { store.close(); rmSync(root,{ recursive: true,force: true }); }
+});
+
 test('interrupted provider read becomes unavailable and is never recovered as verified', () => {
   const store = new Store(':memory:'); const owner = store.bootstrap().actor; const git = { ...submission(),actorId: owner.id,state: 'VERIFYING' as const,currentAttemptId: 'attempt',attempt: 1 };
   const attempt: GitAttempt = { id: 'attempt',submissionId: git.id,workspaceId: git.workspaceId,issueId: git.issueId,attempt: 1,startedAt: new Date().toISOString(),state: 'VERIFYING',apiVersion: githubApiVersion,repository: git.repository,sha: git.sha };

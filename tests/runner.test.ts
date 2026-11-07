@@ -13,6 +13,7 @@ import { AdapterContext, AdapterResult, ExecutionAdapter, NativeAdapter } from '
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
 import { prepareExecution } from '../src/execution.js';
+import { applyFixturePlan } from './fixtures.js';
 
 async function waitFor(check: () => boolean, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -45,6 +46,7 @@ async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapte
     const issue = run('issue_create', { parentId: parent.id, expectedParentVersion: store.get<Issue>('issue', parent.id).version, title: `[Feature] Output: write result ${n} -> isolated delivery`, description: 'Create a result in the isolated workspace', criteria: ['AC-1'] }).issue;
     change('issue_assign', issue.id, { actorId: worker.actor.id, harness: n % 2 ? 'claude-code' : 'codex' }); tasks.push(issue);
   }
+  applyFixturePlan(flow,owner.actor,parent.id);
   const jobs = tasks.map(i => change('work_dispatch', i.id, { designId: store.get<Issue>('issue', parent.id).designId, scopeRevision: 1 }).run as Run);
   const server = createServer(store); const endpoint = await server.listen({ host: '127.0.0.1', port: 0 });
   const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency });
