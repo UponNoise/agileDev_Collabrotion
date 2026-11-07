@@ -107,6 +107,45 @@ test('human browser pairing is one-use, origin-bound, cookie-only, CSRF-protecte
       actor_id: string;
     };
     assert.equal(creation.actor_id, actor.id);
+    const pm = flow.execute(owner.actor, 'actor_enroll', {
+      workspaceId: workspace.id,
+      role: 'pm',
+      name: 'Delegated fixture PM',
+      idempotencyKey: 'pm'
+    }) as any;
+    const createdIssue = created.json().result.issue;
+    const packet = flow.execute(owner.actor, 'issue_get', {
+      workspaceId: workspace.id,
+      issueId: createdIssue.id
+    }) as any;
+    const authorization = {
+      workspaceId: workspace.id,
+      issueId: createdIssue.id,
+      expectedVersion: createdIssue.version,
+      scopeHash: packet.authorizationScopeHash,
+      granteeId: pm.actor.id,
+      action: 'hold',
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      reason: 'Automated browser fixture delegation',
+      idempotencyKey: 'human-grant'
+    };
+    const csrfDenied = await app.inject({
+      method: 'POST',
+      url: '/api/command/grant_create',
+      headers: { host, origin, cookie },
+      payload: authorization
+    });
+    assert.equal(csrfDenied.statusCode, 403);
+    const granted = await app.inject({
+      method: 'POST',
+      url: '/api/command/grant_create',
+      headers: { host, origin, cookie, 'x-csrf-token': csrf },
+      payload: authorization
+    });
+    assert.equal(granted.statusCode, 200);
+    assert.equal(granted.json().result.grant.grantorId, actor.id);
+    assert.ok(!agentOperations.includes('grant_create'));
+    assert.ok(!agentOperations.includes('grant_revoke'));
     const logout = await app.inject({
       method: 'POST',
       url: '/api/ui/logout',

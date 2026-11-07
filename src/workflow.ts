@@ -4,13 +4,13 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
-import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Issue, Operation, QaReport, Run, Workspace, liveRunStates, schemas } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Grant, Issue, Operation, QaReport, Run, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, queueQa, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding } from './git.js';
 import { workspaceView,issueView,runsView } from './web-views.js';
 
-const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs']);
+const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -51,6 +51,12 @@ export class Workflow {
       const issue = s.issue(actor,workspace.id,a.issueId);
       return { ...this.read(actor,'issue_get',a) as object,...issueView(s,issue,a) };
     }
+    if (op === 'grant_list') {
+      requireRole(actor,'human','lead','pm');
+      const issue = s.issue(actor,a.workspaceId,a.issueId);
+      const grants = s.list<Grant>('grant',a.workspaceId).filter(g => g.issueId === issue.id && (actor.role === 'human' || g.granteeId === actor.id)).reverse();
+      return { grants: grants.slice(a.offset,a.offset+a.limit).map(g => ({ ...g,status: this.grantStatus(g,issue) })),total: grants.length,nextOffset: a.offset+a.limit < grants.length ? a.offset+a.limit : null };
+    }
     if (op === 'check_profile_list') return { profiles: s.list<CheckProfile>('check_profile',a.workspaceId) };
     if (op === 'qa_check_get') {
       const check = s.get<CheckRun>('check',a.checkId); s.issue(actor,a.workspaceId,check.issueId);
@@ -67,7 +73,7 @@ export class Workflow {
       let deliveryDigest: string | null = null;
       if (issue.state === 'USER_ACCEPTANCE') { try { deliveryDigest = acceptanceDigest(s,issue); } catch {} }
       const git = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
-      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [] };
+      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
     }
     if (op === 'evidence_get') {
       const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
@@ -143,6 +149,32 @@ export class Workflow {
     this.store.put('design',design,issue.workspaceId); issue.designId = design.id; issue.criteria = design.criteria; this.invalidate(issue);
     for (const child of this.store.list<Issue>('issue',issue.workspaceId).filter(c => c.parentId === issue.id && c.state !== 'ABANDONED')) { this.invalidate(child); this.save(actor,'design_invalidated',child,{ designId: design.id }); }
     return design;
+  }
+  private grantScope(issue: Issue) {
+    const scope = (i: Issue) => ({ id: i.id,scopeRevision: i.scopeRevision,description: i.description,criteria: i.criteria,artifactMode: i.artifactMode,artifactReason: i.artifactReason });
+    return hash(canonical({ issue: scope(issue),designId: this.design(issue)?.id ?? null,gitBindingId: issue.designBindingId,children: this.store.list<Issue>('issue',issue.workspaceId).filter(i => i.parentId === issue.id).map(scope).sort((a,b) => a.id.localeCompare(b.id)) }));
+  }
+  private grantStatus(grant: Grant, issue: Issue) {
+    if (grant.revokedAt !== undefined) return 'REVOKED';
+    if (Date.parse(grant.expiresAt) <= this.now()) return 'EXPIRED';
+    if (grant.uses >= grant.maxUses) return 'EXHAUSTED';
+    if (grant.scopeHash !== this.grantScope(issue)) return 'STALE';
+    if (grant.action === 'complete') {
+      try { if (grant.candidateId !== issue.candidate?.id || grant.digest !== acceptanceDigest(this.store,issue)) return 'STALE'; }
+      catch { return 'STALE'; }
+    }
+    return 'AVAILABLE';
+  }
+  private useGrant(actor: Actor, issue: Issue, action: Grant['action'], grantId?: string) {
+    requireRole(actor,'lead','pm');
+    if (!grantId) throw new DomainError('ROLE_DENIED','This lifecycle action requires an exact human grant',403);
+    const grant = this.store.get<Grant>('grant',grantId);
+    if (actor.runId || grant.granteeId !== actor.id || grant.workspaceId !== issue.workspaceId || grant.issueId !== issue.id || grant.action !== action) throw new DomainError('GRANT_DENIED','Grant does not authorize this agent, issue, or action',403);
+    const status = this.grantStatus(grant,issue);
+    if (status !== 'AVAILABLE') throw new DomainError(`GRANT_${status}`,'The human grant is no longer usable');
+    grant.uses++; grant.version++; this.store.put('grant',grant,issue.workspaceId);
+    this.store.event(issue.workspaceId,actor,'grant_used',grant.id,{ issueId: issue.id,grantorId: grant.grantorId,action,uses: grant.uses });
+    return grant;
   }
   completeQa(actor: Actor, runId: string) {
     requireRole(actor,'qa');
@@ -305,6 +337,30 @@ export class Workflow {
     }
     const i = s.issue(actor, w.id, a.issueId);
     version(i, a.expectedVersion);
+    if (op === 'grant_create') {
+      requireRole(actor,'human');
+      const grantee = s.get<Actor>('actor',a.granteeId);
+      if (!['lead','pm'].includes(grantee.role) || grantee.runId || !grantee.workspaceIds.includes(w.id)) throw new DomainError('GRANTEE_INVALID','Choose a logical lead or PM in this workspace');
+      const lifetime = Date.parse(a.expiresAt)-this.now();
+      if (lifetime <= 0 || lifetime > 604800000) throw new DomainError('GRANT_EXPIRY_INVALID','A grant must expire in the next seven days');
+      if (a.scopeHash !== this.grantScope(i)) throw new DomainError('GRANT_SCOPE_STALE','The issue or its child scope changed after the authorization view was loaded');
+      if (a.action === 'complete') {
+        if (i.state !== 'USER_ACCEPTANCE' || a.candidateId !== i.candidate?.id || a.digest !== acceptanceDigest(s,i)) throw new DomainError('APPROVAL_STALE','Completion authority must bind the current reviewed delivery');
+      } else if (a.candidateId !== undefined || a.digest !== undefined) throw new DomainError('INVALID_INPUT','Delivery bindings apply only to completion grants',400);
+      const grant: Grant = { id: randomUUID(),workspaceId: w.id,issueId: i.id,grantorId: actor.id,granteeId: grantee.id,action: a.action,scopeRevision: i.scopeRevision,designId: this.design(i)?.id ?? null,scopeHash: this.grantScope(i),candidateId: a.candidateId,digest: a.digest,expiresAt: a.expiresAt,maxUses: a.maxUses,uses: 0,version: 1,reason: a.reason,createdAt: new Date(this.now()).toISOString() };
+      s.put('grant',grant,w.id);
+      return { ...this.save(actor,op,i,{ grantId: grant.id,granteeId: grant.granteeId,action: grant.action,reason: a.reason }),grant };
+    }
+    if (op === 'grant_revoke') {
+      requireRole(actor,'human');
+      const grant = s.get<Grant>('grant',a.grantId);
+      if (grant.workspaceId !== w.id || grant.issueId !== i.id) throw new DomainError('SCOPE_DENIED','Grant belongs to another issue',403);
+      if (grant.version !== a.expectedGrantVersion) throw new DomainError('VERSION_CONFLICT','Grant use or revocation changed; reload before revoking');
+      if (grant.revokedAt !== undefined) throw new DomainError('GRANT_REVOKED','Grant is already revoked');
+      grant.revokedAt = new Date(this.now()).toISOString(); grant.revokedBy = actor.id; grant.revocationReason = a.reason; grant.version++;
+      s.put('grant',grant,w.id);
+      return { ...this.save(actor,op,i,{ grantId: grant.id,reason: a.reason }),grant };
+    }
     if (op === 'git_submit' || op === 'git_retry') {
       requireRole(actor,'human','lead','pm');
       if (i.artifactMode === 'artifact' || !w.commonDir) throw new DomainError('GIT_MODE_REQUIRED','Commit evidence applies to Git-backed delivery');
@@ -330,9 +386,16 @@ export class Workflow {
     if (op === 'delivery_complete') {
       requireRole(actor,'human','lead','pm');
       if (i.state !== 'USER_ACCEPTANCE') throw new DomainError('INVALID_TRANSITION','Completion requires the final user acceptance gate');
+      let grant: Grant | undefined;
+      if (a.grantId) {
+        grant = this.useGrant(actor,i,'complete',a.grantId);
+        const approval = { id: randomUUID(),issueId: i.id,actorId: grant.grantorId,executedBy: actor.id,grantId: grant.id,source: 'delegated_close',candidateId: grant.candidateId,digest: grant.digest,decision: 'ACCEPT',reason: grant.reason,at: new Date(this.now()).toISOString() };
+        s.put('delivery_approval',approval,w.id); i.acceptedDigest = grant.digest;
+      }
       const blockers = this.closureBlockers(i);
+      if (grant && blockers.length) throw new DomainError('CLOSURE_BLOCKED','Delegated completion still requires all delivery guards',409,{ blockers });
       if (!blockers.length) i.state = 'DONE';
-      return { ...this.save(actor,op,i,{ closureBlocked: blockers }),closureBlocked: blockers };
+      return { ...this.save(actor,op,i,{ closureBlocked: blockers,...(grant ? { grantId: grant.id,grantorId: grant.grantorId } : {}) }),closureBlocked: blockers };
     }
     if (op === 'qa_configure') {
       requireRole(actor,'human','lead','pm');
@@ -500,7 +563,7 @@ export class Workflow {
       return this.save(actor, op, i, { reviewId: review.id, verdict: review.verdict, reason: review.reason });
     }
     if (op === 'issue_transition') {
-      requireRole(actor, 'human');
+      const grant = actor.role === 'human' && !a.grantId ? null : this.useGrant(actor,i,a.action,a.grantId);
       if (a.action === 'hold') {
         if (['DONE', 'ABANDONED', 'ON_HOLD'].includes(i.state)) throw new DomainError('INVALID_TRANSITION', 'Only active issues can be held');
         i.savedState = { state: i.state, stage: i.stage }; i.state = 'ON_HOLD';
@@ -520,7 +583,7 @@ export class Workflow {
           if (parent.state === 'DONE') { this.invalidate(parent); parent.state = 'IN_PROGRESS'; this.save(actor,'child_reopened',parent,{ childId: i.id }); }
         }
       }
-      return this.save(actor, op, i, { reason: a.reason });
+      return this.save(actor, op, i, { reason: a.reason,...(grant ? { grantId: grant.id,grantorId: grant.grantorId } : {}) });
     }
     throw new DomainError('CAPABILITY_UNSUPPORTED', 'Operation is not implemented', 501);
   }

@@ -12,6 +12,8 @@ export interface GitBinding { id: string; workspaceId: string; repository: strin
 export interface GitSubmission { id: string; workspaceId: string; issueId: string; candidateId: string; snapshotId: string; bindingId: string; repository: string; subdirectory: string; sha: string; url: string; actorId: string; createdAt: string; state: 'QUEUED' | 'VERIFYING' | 'VERIFIED' | 'UNAVAILABLE' | 'FAILED' | 'STALE'; attempt: number; currentAttemptId?: string; errorCode?: string; verifiedAt?: string; rootTreeSha?: string; treeSha?: string; expectedTreeSha?: string }
 export interface GitAttempt { id: string; submissionId: string; workspaceId: string; issueId: string; attempt: number; startedAt: string; finishedAt?: string; state: 'VERIFYING' | 'VERIFIED' | 'UNAVAILABLE' | 'FAILED' | 'STALE'; apiVersion: string; repository: string; sha: string; errorCode?: string; rootTreeSha?: string; treeSha?: string; expectedTreeSha?: string }
 export interface Design { id: string; issueId: string; content: string; criteria: string[]; status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'CHANGES_REQUESTED'; hash: string; requirementDescription?: string }
+export const grantActions = ['hold', 'resume', 'abandon', 'reopen', 'complete'] as const;
+export interface Grant { id: string; workspaceId: string; issueId: string; grantorId: string; granteeId: string; action: typeof grantActions[number]; scopeRevision: number; designId: string | null; scopeHash: string; candidateId?: string; digest?: string; expiresAt: string; maxUses: number; uses: number; version: number; reason: string; createdAt: string; revokedAt?: string; revokedBy?: string; revocationReason?: string }
 export interface Candidate { id: string; workerId: string; sessionId: string; designId: string; files: { path: string; hash: string }[]; hash: string; summary: string; executionRoot?: string; runId?: string; baseSha?: string; snapshotId?: string }
 export interface Snapshot { id: string; workspaceId: string; issueId: string; candidateId: string; root: string; files: { path: string; hash: string; bytes: number; mode: string }[]; hash: string; createdAt: string }
 export interface CheckProfile { id: string; workspaceId: string; name: string; command: string; args: string[]; criteria: string[]; timeoutMs: number; hash: string }
@@ -65,12 +67,15 @@ export const schemas = {
   design_submit: z.object(change).strict(),
   design_decide: z.object({ ...change, designId: id, decision: z.enum(['APPROVED', 'CHANGES_REQUESTED']), reason: text }).strict(),
   issue_assign: z.object({ ...change, actorId: id, harness: z.enum(harnesses) }).strict(),
+  grant_create: z.object({ ...change, granteeId: id, action: z.enum(grantActions), scopeHash: id, expiresAt: z.iso.datetime(), maxUses: z.number().int().min(1).max(10).default(1), reason: text, candidateId: id.optional(), digest: id.optional() }).strict(),
+  grant_revoke: z.object({ ...change, grantId: id, expectedGrantVersion: z.number().int().positive(), reason: text }).strict(),
+  grant_list: z.object({ ...target, limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().nonnegative().default(0) }).strict(),
   dependency_add: z.object({ ...change, dependsOn: id }).strict(),
   work_claim: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive() }).strict(),
   work_heartbeat: z.object({ ...change, fence: z.number().int().positive() }).strict(),
   work_submit: z.object({ ...change, fence: z.number().int().positive(), summary: text, files: z.array(z.string().min(1).max(500)).min(1).max(32) }).strict(),
   review_submit: z.object({ ...change, candidateId: id, verdict: z.enum(['PASS', 'FAIL']), reason: text }).strict(),
-  issue_transition: z.object({ ...change, action: z.enum(['hold', 'resume', 'abandon', 'reopen']), reason: text }).strict(),
+  issue_transition: z.object({ ...change, action: z.enum(['hold', 'resume', 'abandon', 'reopen']), reason: text, grantId: id.optional() }).strict(),
   work_dispatch: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive() }).strict(),
   run_list: z.object({ ...scoped, limit: z.number().int().min(1).max(100).default(20) }).strict(),
   run_get: z.object({ ...scoped, runId: id }).strict(),
@@ -86,9 +91,9 @@ export const schemas = {
   delivery_decide: z.object({ ...change, candidateId: id, digest: id, decision: z.enum(['ACCEPT','REJECT']), reason: text }).strict(),
   git_submit: z.object({ ...change, candidateId: id, commitUrl: z.string().min(1).max(1000) }).strict(),
   git_retry: z.object({ ...change, submissionId: id }).strict(),
-  delivery_complete: z.object(change).strict(),
+  delivery_complete: z.object({ ...change, grantId: id.optional() }).strict(),
   gap_list: z.object(scoped).strict(),
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke'].includes(k)) as Operation[];

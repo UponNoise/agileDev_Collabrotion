@@ -388,6 +388,9 @@ export function IssuePanel({
         <details className="more-actions">
           <summary>Plan and lifecycle actions</summary>
           <div className="action-group">
+            <button disabled={!online} onClick={() => dialog('grants')}>
+              Manage authorization
+            </button>
             {!issue.parentId && !terminal ? (
               <button disabled={!online} onClick={() => dialog('create', { parent: issue })}>
                 New task

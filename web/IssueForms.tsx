@@ -1,7 +1,8 @@
-import type { Issue } from '../src/contracts';
-import { ApiError, formKey, harnessName, lines, mutation } from './api';
+import { useEffect, useState } from 'react';
+import type { Grant, Issue } from '../src/contracts';
+import { ApiError, command, dateText, errorText, formKey, harnessName, lines, mutation } from './api';
 import type { IssueData, WorkspaceData } from './api';
-import { AsyncForm, Field, Modal } from './components';
+import { AsyncForm, Field, Modal, Status } from './components';
 
 export type IssueDialog = {
   id: string;
@@ -15,6 +16,7 @@ export type IssueDialog = {
     | 'transition'
     | 'dispatch'
     | 'git'
+    | 'grants'
     | 'scope'
     | 'plan';
   packet?: IssueData;
@@ -123,6 +125,8 @@ export function IssueForm({
       </Modal>
     );
   if (!packet || !issue || !root) return null;
+  if (dialog.kind === 'grants')
+    return <GrantForm packet={packet} workspace={workspace} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'scope')
     return (
       <Modal title="Edit requirement scope" subtitle={issue.key} onClose={onClose}>
@@ -301,48 +305,7 @@ export function IssueForm({
             <p className="notice">
               Your decision applies only to this reviewed snapshot. Acceptance is saved if closure is still blocked.
             </p>
-            <dl className="metadata">
-              <dt>Digest</dt>
-              <dd className="mono">{packet.deliveryDigest}</dd>
-              <dt>Snapshot SHA-256</dt>
-              <dd className="mono">{packet.snapshot?.hash ?? 'Unavailable'}</dd>
-              <dt>Initial lead</dt>
-              <dd className="mono">{issue.initialReview}</dd>
-              <dt>Independent QA</dt>
-              <dd className="mono">{issue.qaReview}</dd>
-              <dt>Final lead</dt>
-              <dd className="mono">{issue.finalReview}</dd>
-              <dt>{issue.artifactMode === 'artifact' ? 'Artifact mode' : 'Commit'}</dt>
-              <dd>
-                {issue.artifactMode === 'artifact' ? (
-                  (issue.artifactReason ?? 'Reviewed artifact delivery')
-                ) : packet.git ? (
-                  <a href={packet.git.url} target="_blank" rel="noreferrer">
-                    {packet.git.sha}
-                  </a>
-                ) : (
-                  'No verified commit attached'
-                )}
-              </dd>
-            </dl>
-            <h3>Worker handoff</h3>
-            <div className="prose">{issue.candidate?.summary}</div>
-            <details>
-              <summary>Full manifest ({packet.snapshot?.files.length ?? 0} files)</summary>
-              <pre className="json">
-                {packet.snapshot?.files.map((file) => `${file.mode} ${file.path}\n${file.hash}`).join('\n\n')}
-              </pre>
-            </details>
-            {packet.closureBlocked.length ? (
-              <>
-                <h3>Closure checks</h3>
-                <ul>
-                  {packet.closureBlocked.map((code) => (
-                    <li key={code}>{code}</li>
-                  ))}
-                </ul>
-              </>
-            ) : null}
+            <DeliveryEvidence packet={packet} />
             <Field label="Decision reason">
               <textarea name="reason" required rows={4} placeholder="Explain your acceptance or requested changes" />
             </Field>
@@ -564,4 +527,282 @@ export function IssueForm({
       </Modal>
     );
   return null;
+}
+
+function DeliveryEvidence({ packet }: { packet: IssueData }) {
+  const issue = packet.issue;
+  return (
+    <>
+      <dl className="metadata">
+        <dt>Digest</dt>
+        <dd className="mono">{packet.deliveryDigest}</dd>
+        <dt>Snapshot SHA-256</dt>
+        <dd className="mono">{packet.snapshot?.hash ?? 'Unavailable'}</dd>
+        <dt>Initial lead</dt>
+        <dd className="mono">{issue.initialReview}</dd>
+        <dt>Independent QA</dt>
+        <dd className="mono">{issue.qaReview}</dd>
+        <dt>Final lead</dt>
+        <dd className="mono">{issue.finalReview}</dd>
+        <dt>{issue.artifactMode === 'artifact' ? 'Artifact mode' : 'Commit'}</dt>
+        <dd>
+          {issue.artifactMode === 'artifact' ? (
+            (issue.artifactReason ?? 'Reviewed artifact delivery')
+          ) : packet.git ? (
+            <a href={packet.git.url} target="_blank" rel="noreferrer">
+              {packet.git.sha}
+            </a>
+          ) : (
+            'No verified commit attached'
+          )}
+        </dd>
+      </dl>
+      <h3>Worker handoff</h3>
+      <div className="prose">{issue.candidate?.summary}</div>
+      <details>
+        <summary>Full manifest ({packet.snapshot?.files.length ?? 0} files)</summary>
+        <pre className="json">
+          {packet.snapshot?.files.map((file) => `${file.mode} ${file.path}\n${file.hash}`).join('\n\n')}
+        </pre>
+      </details>
+      {packet.closureBlocked.length ? (
+        <>
+          <h3>Closure checks</h3>
+          <ul>
+            {packet.closureBlocked.map((code) => (
+              <li key={code}>{code}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function GrantForm({
+  packet,
+  workspace,
+  onClose,
+  onSaved
+}: {
+  packet: IssueData;
+  workspace: WorkspaceData;
+  onClose(): void;
+  onSaved(): void;
+}) {
+  const issue = packet.issue;
+  const [action, setAction] = useState<Grant['action']>(
+    issue.state === 'USER_ACCEPTANCE'
+      ? 'complete'
+      : issue.state === 'ON_HOLD'
+        ? 'resume'
+        : ['DONE', 'ABANDONED'].includes(issue.state)
+          ? 'reopen'
+          : 'hold'
+  );
+  const [openedAt] = useState(Date.now);
+  const [section, setSection] = useState('create');
+  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState<{
+    grants: (Grant & { status: string })[];
+    total: number;
+    nextOffset: number | null;
+  } | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    setPage(null);
+    setError('');
+    command<{ grants: (Grant & { status: string })[]; total: number; nextOffset: number | null }>('grant_list', {
+      workspaceId: issue.workspaceId,
+      issueId: issue.id,
+      offset
+    })
+      .then((result) => {
+        if (active) setPage(result);
+      })
+      .catch((failure) => {
+        if (active) setError(errorText(failure));
+      });
+    return () => {
+      active = false;
+    };
+  }, [issue.id, issue.workspaceId, offset]);
+  const done = () => {
+    onSaved();
+    onClose();
+  };
+  return (
+    <Modal title="Human authorization" subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
+      <nav className="tabs" aria-label="Authorization sections">
+        <button aria-current={section === 'create' ? 'page' : undefined} onClick={() => setSection('create')}>
+          Create authorization
+        </button>
+        <button aria-current={section === 'history' ? 'page' : undefined} onClick={() => setSection('history')}>
+          Grant history
+        </button>
+      </nav>
+      <div hidden={section !== 'create'}>
+        <AsyncForm
+          onDone={done}
+          onSave={(data) =>
+            mutation('grant_create', {
+              workspaceId: issue.workspaceId,
+              issueId: issue.id,
+              expectedVersion: issue.version,
+              ...formKey(data),
+              granteeId: String(data.get('granteeId')),
+              action,
+              scopeHash: packet.authorizationScopeHash,
+              expiresAt: new Date(openedAt + Number(data.get('minutes')) * 60000).toISOString(),
+              maxUses: Number(data.get('uses')),
+              reason: String(data.get('reason')),
+              ...(action === 'complete' ? { candidateId: issue.candidate?.id, digest: packet.deliveryDigest } : {})
+            })
+          }
+        >
+          <div className="form-body">
+            <p className="notice">
+              Authorize one agent and one action on this exact issue. A parent hold also pauses descendant work; direct
+              child actions require separate grants. Scope changes invalidate unused authority.
+            </p>
+            <h3>Authorized scope</h3>
+            <div className="prose">{issue.description || 'Draft scope is empty.'}</div>
+            <dl className="metadata">
+              <dt>Scope revision</dt>
+              <dd>{issue.scopeRevision}</dd>
+              <dt>Design revision</dt>
+              <dd className="mono">{packet.design?.id ?? 'No design yet'}</dd>
+              <dt>Issue / child scope hash</dt>
+              <dd className="mono">{packet.authorizationScopeHash}</dd>
+            </dl>
+            <Field label="Delegate to">
+              <select name="granteeId" required defaultValue="">
+                <option disabled value="">
+                  Select a lead or PM
+                </option>
+                {workspace.actors
+                  .filter((actor) => ['lead', 'pm'].includes(actor.role))
+                  .map((actor) => (
+                    <option key={actor.id} value={actor.id}>
+                      {actor.name} ({actor.role})
+                    </option>
+                  ))}
+              </select>
+            </Field>
+            <Field label="Allowed action">
+              <select
+                name="action"
+                value={action}
+                onChange={(event) => setAction(event.target.value as Grant['action'])}
+              >
+                {(['hold', 'resume', 'abandon', 'reopen', 'complete'] as const).map((value) => (
+                  <option
+                    key={value}
+                    value={value}
+                    disabled={value === 'complete' && (issue.state !== 'USER_ACCEPTANCE' || !packet.deliveryDigest)}
+                  >
+                    {value === 'complete'
+                      ? 'Accept this snapshot and close when all guards pass'
+                      : value[0].toUpperCase() + value.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Expires after">
+              <select name="minutes" defaultValue="60">
+                <option value="15">15 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="1440">1 day</option>
+                <option value="10080">7 days</option>
+              </select>
+            </Field>
+            <Field label="Maximum uses">
+              <input name="uses" type="number" min="1" max="10" required defaultValue="1" />
+            </Field>
+            {action === 'complete' ? (
+              <>
+                <p className="notice">
+                  This authorizes acceptance of the exact delivery below. The agent must still satisfy all closure
+                  checks before the grant is consumed.
+                </p>
+                <DeliveryEvidence packet={packet} />
+              </>
+            ) : null}
+            <Field label="Authorization reason">
+              <textarea name="reason" required rows={3} />
+            </Field>
+          </div>
+          <footer className="form-footer">
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="primary" type="submit" disabled={action === 'complete' && !packet.deliveryDigest}>
+              Create authorization
+            </button>
+          </footer>
+        </AsyncForm>
+      </div>
+      <section className="form-body" hidden={section !== 'history'}>
+        <h3>Recorded grants</h3>
+        {error ? (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {page ? (
+          <>
+            <p className="muted">
+              {page.total} grants · Showing {page.grants.length ? offset + 1 : 0}–{offset + page.grants.length}
+            </p>
+            {page.grants.map((grant) => (
+              <section className="evidence-block" key={grant.id}>
+                <h3>
+                  {grant.action} ·{' '}
+                  {workspace.actors.find((actor) => actor.id === grant.granteeId)?.name ?? grant.granteeId}
+                </h3>
+                <p>
+                  <Status value={grant.status} /> · {grant.uses}/{grant.maxUses} uses
+                </p>
+                <p className="muted">Expires {dateText(grant.expiresAt)}</p>
+                <p>{grant.reason}</p>
+                <p className="mono">{grant.id}</p>
+                {grant.status === 'AVAILABLE' ? (
+                  <AsyncForm
+                    onDone={done}
+                    onSave={(data) =>
+                      mutation('grant_revoke', {
+                        workspaceId: issue.workspaceId,
+                        issueId: issue.id,
+                        expectedVersion: issue.version,
+                        ...formKey(data),
+                        grantId: grant.id,
+                        expectedGrantVersion: grant.version,
+                        reason: String(data.get('reason'))
+                      })
+                    }
+                  >
+                    <Field label={`Revocation reason for ${grant.id}`}>
+                      <input name="reason" required />
+                    </Field>
+                    <button type="submit">Revoke authorization</button>
+                  </AsyncForm>
+                ) : null}
+              </section>
+            ))}
+            <div className="action-group">
+              <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 20))}>
+                Previous grants
+              </button>
+              <button disabled={page.nextOffset === null} onClick={() => setOffset(page.nextOffset!)}>
+                Next grants
+              </button>
+            </div>
+          </>
+        ) : !error ? (
+          <p className="muted">Loading grants…</p>
+        ) : null}
+      </section>
+    </Modal>
+  );
 }

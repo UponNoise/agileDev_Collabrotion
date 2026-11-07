@@ -38,7 +38,7 @@ async function fixture(mode: 'artifact' | 'git' = 'artifact') {
   const workspace = call(human,'workspace_register',{ root: source, name: 'Independent QA fixture',prefix: 'QA' }).workspace;
   const run = (op: string,input: object) => call(human,op,{ workspaceId: workspace.id,...input });
   const current = (id: string) => store.get<Issue>('issue',id);
-  const change = (op: string,id: string,input: object = {},actor = human) => call(actor,op,{ workspaceId: workspace.id,issueId: id,expectedVersion: current(id).version,...input });
+  const change = (op: string,id: string,input: object = {},actor = human) => call(actor,op,{ workspaceId: workspace.id,issueId: id,expectedVersion: current(id).version,...(op === 'grant_create' ? { scopeHash: (flow.execute(human,'issue_get',{ workspaceId: workspace.id,issueId: id }) as any).authorizationScopeHash } : {}),...input });
   const parent = run('issue_create',{ title: 'QA pipeline',description: 'Deliver exact content',criteria: ['FILE'],artifactMode: mode,artifactReason: mode === 'artifact' ? 'Disposable test of non-code artifact delivery' : undefined }).issue;
   change('design_set',parent.id,{ content: 'source.txt must contain delivered. Preserve contract.txt. Test the actual delivered source.',criteria: ['FILE'] });
   change('design_submit',parent.id); change('design_decide',parent.id,{ designId: current(parent.id).designId,decision: 'APPROVED',reason: 'Automated test fixture approval only' });
@@ -96,6 +96,39 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     f.finalReview(); assert.throws(() => f.delivery('ACCEPT','old-digest'),(e: any) => e.code === 'APPROVAL_STALE');
     assert.equal(f.delivery().issue.state,'DONE'); assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
     assert.equal(readFileSync(join(f.source,'source.txt'),'utf8'),'original');
+  } finally { await f.close(); }
+});
+
+test('exact completion delegation records the human grantor and executing agent without bypassing QA', { timeout: 20000 },async () => {
+  const f = await fixture();
+  try {
+    const worker = await f.context(0); await f.submit(worker,'delivered'); f.initialReview();
+    assert.throws(() => f.change('grant_create',f.issue.id,{ granteeId: f.lead.id,action: 'complete',candidateId: f.current(f.issue.id).candidate!.id,digest: 'invented',expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'Cannot delegate an unreviewed fixture' }),(error: any) => error.code === 'APPROVAL_STALE');
+    const qa = await f.context(1); const check = await f.check(qa); await f.report(qa,check.id); await f.complete(qa); f.finalReview();
+    const digest = (f.flow.execute(f.human,'issue_get',{ workspaceId: f.workspace.id,issueId: f.issue.id }) as any).deliveryDigest;
+    const grant = f.change('grant_create',f.issue.id,{ granteeId: f.lead.id,action: 'complete',candidateId: f.current(f.issue.id).candidate!.id,digest,expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'Automated fixture explicitly delegates acceptance of this exact snapshot' }).grant;
+    assert.equal(f.store.list('delivery_approval',f.workspace.id).length,0);
+    assert.equal(f.change('delivery_complete',f.issue.id,{ grantId: grant.id },f.lead).issue.state,'DONE');
+    const decision = f.store.list<any>('delivery_approval',f.workspace.id)[0];
+    assert.equal(decision.actorId,f.human.id); assert.equal(decision.executedBy,f.lead.id); assert.equal(decision.grantId,grant.id); assert.equal(decision.source,'delegated_close'); assert.equal(decision.digest,digest);
+    const consumed = f.store.get<any>('grant',grant.id); assert.equal(consumed.uses,1);
+    f.change('grant_revoke',f.issue.id,{ grantId: grant.id,expectedGrantVersion: consumed.version,reason: 'Revoke any remaining fixture authority without rewriting history' });
+    assert.equal(f.current(f.issue.id).state,'DONE'); assert.equal(f.store.list('delivery_approval',f.workspace.id).length,1);
+  } finally { await f.close(); }
+});
+
+test('Git-blocked delegated closure consumes no grant or acceptance and changed mapping invalidates authority', { timeout: 20000 },async () => {
+  const f = await reviewedGitFixture();
+  try {
+    const mapping = f.attach();
+    const digest = (f.flow.execute(f.human,'issue_get',{ workspaceId: f.workspace.id,issueId: f.issue.id }) as any).deliveryDigest;
+    const grant = f.change('grant_create',f.issue.id,{ granteeId: f.lead.id,action: 'complete',candidateId: f.current(f.issue.id).candidate!.id,digest,expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'Fixture delegation remains conditional on verified Git evidence' }).grant;
+    assert.throws(() => f.change('delivery_complete',f.issue.id,{ grantId: grant.id },f.lead),(error: any) => error.code === 'CLOSURE_BLOCKED' && error.details.blockers.includes('GIT_VERIFICATION_PENDING'));
+    assert.equal(f.store.get<any>('grant',grant.id).uses,0); assert.equal(f.store.list('delivery_approval',f.workspace.id).length,0); assert.equal(f.current(f.issue.id).acceptedDigest,undefined);
+    f.attach('f'.repeat(40));
+    assert.notEqual(f.current(f.issue.id).gitSubmissionId,mapping.id);
+    assert.throws(() => f.change('delivery_complete',f.issue.id,{ grantId: grant.id },f.lead),(error: any) => error.code === 'GRANT_STALE');
+    assert.equal(f.store.get<any>('grant',grant.id).uses,0);
   } finally { await f.close(); }
 });
 

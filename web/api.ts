@@ -31,6 +31,7 @@ export interface IssueData {
   revision: number | null;
   designHistory: Design[];
   deliveryDigest: string | null;
+  authorizationScopeHash: string;
   git: GitSubmission | null;
   closureBlocked: string[];
   readiness: { ready: boolean; blocking: string[] };

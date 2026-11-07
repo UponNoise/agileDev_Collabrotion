@@ -10,6 +10,8 @@ const descriptions: Record<string, string> = {
   issue_create: 'Create an unstarted requirement or task. Child titles use [Type] Area: action -> outcome.',
   design_set: 'Create a new design revision; invalidates affected approvals. Cannot approve a design.',
   design_submit: 'Request human review of the exact current design revision.',
+  grant_list: 'List this agent\'s human-issued grants for the exact issue, including scope, expiry, uses and current status. This cannot issue or revoke authority.',
+  issue_transition: 'Perform a guarded lifecycle action. Lead/PM must supply a current human grantId for this exact issue and action; authority does not extend to children.',
   work_dispatch: 'Queue a ready assignment for the selected harness. Queued is not running or completed.',
   work_claim: 'Acknowledge the current scope/design and atomically claim assigned work.',
   work_submit: 'Hash real workspace artifacts and submit them for initial lead review.',
@@ -19,7 +21,7 @@ const descriptions: Record<string, string> = {
   qa_report_submit: 'Submit criterion-level independent QA results and reproducible findings using captured check IDs. Gate advancement waits for producer termination.',
   git_submit: 'Attach a full GitHub commit URL to the current sealed candidate in the owner-bound repository. Queued verification is not a successful check; changed mappings invalidate human delivery acceptance.',
   git_retry: 'Retry unavailable/failed read verification of the same current commit mapping. Preserves exact saved human acceptance; cannot change the target or assert success.',
-  delivery_complete: 'Recheck current saved human acceptance, independent reviews, children, and remote Git evidence before closure. This cannot create human approval.',
+  delivery_complete: 'Recheck saved human acceptance or consume an exact human completion grantId. Independent reviews, children, defects and remote Git evidence still apply. This cannot invent human authority.',
   gap_list: 'Find specific blocking readiness gaps and advisory unscheduled work.',
 };
 export async function connectMcp(client: LocalClient) {
@@ -31,7 +33,7 @@ export async function connectMcp(client: LocalClient) {
     if (clientInfo) void client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }).catch(() => process.stderr.write('Could not record MCP initialization metadata.\n'));
   };
   for (const name of agentOperations) {
-    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get'].includes(name);
+    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get','grant_list'].includes(name);
     server.registerTool(name, { description: descriptions[name] ?? `Perform ${name} within authenticated role and workspace scope. Mutations require current versions and a unique idempotency key.`, inputSchema: schemas[name], annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: true, openWorldHint: false } }, async (args: any) => {
       try {
         const result = await client.command(name, args);

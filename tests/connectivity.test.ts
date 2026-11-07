@@ -29,7 +29,8 @@ test('real SQLite service shares one issue across three independent MCP processe
     }
     const tools = await clients[0]!.listTools();
     assert.ok(tools.tools.some(t => t.name === 'work_dispatch'));
-    assert.ok(!tools.tools.some(t => t.name === 'design_decide' || t.name === 'actor_enroll'));
+    assert.ok(!tools.tools.some(t => ['design_decide','actor_enroll','grant_create','grant_revoke'].includes(t.name)));
+    assert.ok(tools.tools.some(t => t.name === 'grant_list' && t.annotations?.readOnlyHint));
     const created = await clients[0]!.callTool({ name: 'issue_create', arguments: { workspaceId: workspace.id, title: 'Shared across entries', description: 'Create in entry A; read in B and C', criteria: ['AC-1'], idempotencyKey: 'create-shared' } });
     assert.ok(!created.isError);
     const issue = (created.structuredContent as any).issue;

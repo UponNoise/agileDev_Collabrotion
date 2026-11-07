@@ -17,14 +17,14 @@ function setup() {
   const human = store.bootstrap();
   let clock = Date.now();
   const workflow = new Workflow(store, () => clock);
-  const call = (actor: Actor, op: string, input: object = {}) => workflow.execute(actor, op, { ...(['workspace_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list'].includes(op) ? {} : { idempotencyKey: randomUUID() }), ...input }) as any;
+  const call = (actor: Actor, op: string, input: object = {}) => workflow.execute(actor, op, { ...(['workspace_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'grant_list'].includes(op) ? {} : { idempotencyKey: randomUUID() }), ...input }) as any;
   const workspace = call(human.actor, 'workspace_register', { root, name: 'Test workspace', prefix: 'TEST' }).workspace;
   const enroll = (role: string) => call(human.actor, 'actor_enroll', { workspaceId: workspace.id, role, name: `${role} test` });
   const lead = enroll('lead'); const pm = enroll('pm'); const worker = enroll('worker'); const qa = enroll('qa');
   const run = (actor: Actor, op: string, input: object = {}) => call(actor, op, { workspaceId: workspace.id, ...input });
   const parent = run(lead.actor, 'issue_create', { title: 'Deliver workspace binding', description: 'Preserve the active workspace across harnesses', criteria: ['AC-1'] }).issue as Issue;
   const current = (id: string) => store.get<Issue>('issue', id);
-  const change = (actor: Actor, op: string, issueId: string, input: object = {}) => run(actor, op, { issueId, expectedVersion: current(issueId).version, ...input });
+  const change = (actor: Actor, op: string, issueId: string, input: object = {}) => run(actor, op, { issueId, expectedVersion: current(issueId).version, ...(op === 'grant_create' ? { scopeHash: run(human.actor,'issue_get',{ issueId }).authorizationScopeHash } : {}), ...input });
   const approve = () => {
     change(lead.actor, 'design_set', parent.id, { content: 'Explicit active workspace binding and cross-harness state', criteria: ['AC-1'] });
     change(lead.actor, 'design_submit', parent.id);
@@ -36,6 +36,70 @@ function setup() {
   return { root, store, human, lead, pm, worker, qa, run, call, parent, current, change, approve, task, assign, claim, advance: () => { clock += 300001; } };
 }
 function rejects(code: string) { return (error: unknown) => error instanceof DomainError && error.code === code; }
+
+test('human grants constrain actor, issue, action and use count with exactly-once retries', () => {
+  const f = setup(); const task = f.task();
+  const request = { granteeId: f.pm.actor.id,action: 'hold',expiresAt: new Date(Date.now()+3600000).toISOString(),maxUses: 1,reason: 'Automated fixture authorization for this task only' };
+  assert.throws(() => f.change(f.lead.actor,'grant_create',task.id,request),rejects('ROLE_DENIED'));
+  assert.throws(() => f.change(f.human.actor,'grant_create',task.id,{ ...request,granteeId: f.worker.actor.id }),rejects('GRANTEE_INVALID'));
+  const grant = f.change(f.human.actor,'grant_create',task.id,request).grant;
+  assert.equal(f.run(f.pm.actor,'grant_list',{ issueId: task.id }).grants[0].status,'AVAILABLE');
+  assert.equal(f.run(f.lead.actor,'grant_list',{ issueId: task.id }).total,0);
+  f.change(f.human.actor,'grant_create',task.id,{ ...request,granteeId: f.lead.actor.id });
+  const firstPage = f.run(f.human.actor,'grant_list',{ issueId: task.id,limit: 1 });
+  assert.equal(firstPage.total,2); assert.equal(firstPage.grants.length,1); assert.equal(firstPage.nextOffset,1);
+  assert.notEqual(f.run(f.human.actor,'grant_list',{ issueId: task.id,limit: 1,offset: 1 }).grants[0].id,firstPage.grants[0].id);
+  assert.equal(f.run(f.pm.actor,'grant_list',{ issueId: task.id }).total,1);
+  assert.throws(() => f.run(f.worker.actor,'grant_list',{ issueId: task.id }),rejects('ROLE_DENIED'));
+  assert.throws(() => f.change(f.lead.actor,'issue_transition',task.id,{ action: 'hold',grantId: grant.id,reason: 'Wrong agent' }),rejects('GRANT_DENIED'));
+  assert.throws(() => f.change(f.pm.actor,'issue_transition',f.parent.id,{ action: 'hold',grantId: grant.id,reason: 'Wrong issue' }),rejects('GRANT_DENIED'));
+  assert.throws(() => f.change(f.pm.actor,'issue_transition',task.id,{ action: 'abandon',grantId: grant.id,reason: 'Wrong action' }),rejects('GRANT_DENIED'));
+  const input = { workspaceId: task.workspaceId,issueId: task.id,expectedVersion: f.current(task.id).version,action: 'hold',grantId: grant.id,reason: 'Apply the exact fixture grant',idempotencyKey: randomUUID() };
+  assert.equal(f.call(f.pm.actor,'issue_transition',input).issue.state,'ON_HOLD');
+  assert.equal(f.call(f.pm.actor,'issue_transition',input).replayed,true);
+  assert.equal(f.store.get<any>('grant',grant.id).uses,1);
+  f.change(f.human.actor,'issue_transition',task.id,{ action: 'resume',reason: 'Resume fixture without delegating another action' });
+  assert.throws(() => f.change(f.pm.actor,'issue_transition',task.id,{ action: 'hold',grantId: grant.id,reason: 'Exhausted authorization' }),rejects('GRANT_EXHAUSTED'));
+  const used = f.run(f.human.actor,'event_list').events.filter((event: any) => event.operation === 'grant_used');
+  assert.equal(used.length,1); assert.equal(used[0].actorId,f.pm.actor.id);
+});
+
+test('failed delegated actions roll back grant use and revocation persists across service access', () => {
+  const f = setup(); f.task();
+  const grant = f.change(f.human.actor,'grant_create',f.parent.id,{ granteeId: f.lead.actor.id,action: 'abandon',expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'Fixture delegation cannot hide unresolved children' }).grant;
+  assert.throws(() => f.change(f.lead.actor,'issue_transition',f.parent.id,{ action: 'abandon',grantId: grant.id,reason: 'Attempt unresolved parent cancellation' }),rejects('CHILD_DISPOSITION_REQUIRED'));
+  assert.equal(f.store.get<any>('grant',grant.id).uses,0);
+  assert.ok(!f.run(f.human.actor,'event_list').events.some((event: any) => event.operation === 'grant_used'));
+  const revoked = f.change(f.human.actor,'grant_revoke',f.parent.id,{ grantId: grant.id,expectedGrantVersion: 1,reason: 'Human fixture revokes unused authority' }).grant;
+  assert.equal(revoked.revokedBy,f.human.actor.id);
+  const secondStore = new Store(join(f.root,'data.sqlite'));
+  try {
+    const reconnected = new Workflow(secondStore);
+    assert.equal((reconnected.execute(f.lead.actor,'grant_list',{ workspaceId: f.parent.workspaceId,issueId: f.parent.id }) as any).grants[0].status,'REVOKED');
+    assert.throws(() => f.change(f.lead.actor,'issue_transition',f.parent.id,{ action: 'abandon',grantId: grant.id,reason: 'Revoked authority' }),rejects('GRANT_REVOKED'));
+  } finally { secondStore.close(); }
+});
+
+test('grant expiry, stale scope and metadata are evaluated independently', () => {
+  const f = setup(); const task = f.task(); f.approve();
+  const grant = (issueId: string,expiresAt = new Date(Date.now()+3600000).toISOString()) => f.change(f.human.actor,'grant_create',issueId,{ granteeId: f.pm.actor.id,action: 'hold',expiresAt,maxUses: 2,reason: 'Exact-scope fixture grant' }).grant;
+  assert.throws(() => grant(task.id,new Date(Date.now()-1000).toISOString()),rejects('GRANT_EXPIRY_INVALID'));
+  assert.throws(() => grant(task.id,new Date(Date.now()+8*86400000).toISOString()),rejects('GRANT_EXPIRY_INVALID'));
+  const valid = grant(task.id);
+  f.change(f.pm.actor,'issue_update',task.id,{ dueDate: '2026-12-01',priority: 1 });
+  f.change(f.pm.actor,'issue_transition',task.id,{ action: 'hold',grantId: valid.id,reason: 'Metadata retained scoped authority' });
+  assert.throws(() => f.change(f.human.actor,'grant_revoke',task.id,{ grantId: valid.id,expectedGrantVersion: 1,reason: 'Stale revocation must reload' }),rejects('VERSION_CONFLICT'));
+  f.change(f.human.actor,'issue_transition',task.id,{ action: 'resume',reason: 'Resume fixture' });
+  f.change(f.lead.actor,'design_set',f.parent.id,{ content: 'Materially revised fixture design',criteria: ['AC-1'] });
+  assert.throws(() => f.change(f.pm.actor,'issue_transition',task.id,{ action: 'hold',grantId: valid.id,reason: 'Old design authority' }),rejects('GRANT_STALE'));
+  const parentGrant = grant(f.parent.id); f.task();
+  assert.throws(() => f.change(f.pm.actor,'issue_transition',f.parent.id,{ action: 'hold',grantId: parentGrant.id,reason: 'New child changed authorized scope' }),rejects('GRANT_STALE'));
+  const capturedHash = f.run(f.human.actor,'issue_get',{ issueId: f.parent.id }).authorizationScopeHash;
+  f.change(f.pm.actor,'issue_update',task.id,{ description: 'Changed child scope without a parent metadata edit' });
+  assert.throws(() => f.change(f.human.actor,'grant_create',f.parent.id,{ granteeId: f.pm.actor.id,action: 'hold',scopeHash: capturedHash,expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'An unseen child change cannot inherit authorization' }),rejects('GRANT_SCOPE_STALE'));
+  const expiring = grant(task.id,new Date(Date.now()+60000).toISOString()); f.advance();
+  assert.throws(() => f.change(f.pm.actor,'issue_transition',task.id,{ action: 'hold',grantId: expiring.id,reason: 'Expired authority' }),rejects('GRANT_EXPIRED'));
+});
 
 test('draft creation, immutable IDs and rendered parent-title lineage', () => {
   const f = setup(); const task = f.task();

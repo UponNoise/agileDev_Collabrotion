@@ -40,6 +40,8 @@ The common schema envelope contains `contract_version`, `workspace_id`, and for 
 
 Human web endpoints additionally support design decisions, acceptance decisions, grants/revocations, and explicit scope exclusion/reopen decisions. They are not registered as agent-callable tools. A future chat-human adapter must pass the same human attribution tests before forwarding those commands.
 
+Implemented delegation refinement, 2026-11-07: `grant_list` returns this authenticated lead/PM's paginated issue-specific authority and status. Supply an available `grantId` to `issue_transition` or `delivery_complete`; the service rechecks grantee/action/scope/expiry/uses and all normal transition guards atomically. Human-only `grant_create` binds the displayed `authorizationScopeHash`, current issue version, and, for completion, exact candidate/digest. `grant_revoke` checks both issue and grant versions. Neither command is exposed over MCP. See [the executable local contract](local-development.md#human-action-grants) for current camelCase fields and limits. This refinement does not implement batch decisions or arbitrary human-event attribution.
+
 ## 3. Representative payloads
 
 Illustrative brief response:

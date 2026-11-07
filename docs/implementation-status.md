@@ -1,19 +1,20 @@
 # Implementation evidence and remaining work
 
-Updated: 2026-11-07. Public baseline `6857ca4` includes independent managed QA, sealed snapshots, artifact acceptance, owner-bound GitHub repositories, exact-tree commit verification, and recoverable closure. This iteration adds the authenticated human web workspace and scope-bound design revisions. The full local multi-harness product goal remains active.
+Updated: 2026-11-07. Public baseline `75f946a` includes the authenticated human web workspace, scope-bound design revisions, independent managed QA, sealed snapshots, Git verification, and recoverable closure. This iteration adds revocable, exact-scope human delegation to lead/PM agents. The full local multi-harness product goal remains active.
 
 ## Current evidence
 
 | Evidence | Actual result | Limits |
 | --- | --- | --- |
 | TypeScript application | Build/type checks pass | Not proof of every host interface or full release acceptance |
-| Automated behavior suite | 48 tests pass, exercising workflow/MCP/SQLite, native test execution, QA/rework, artifact acceptance, actual Git object equivalence, Git closure/retry, human pairing/cookie/CSRF attribution, bounded browser projections, static delivery, stale decisions, scope invalidation, and preserved holds | Deterministic model/provider adapters are labeled test doubles; they do not prove native end-to-end release compatibility |
+| Automated behavior suite | 53 tests pass, exercising workflow/MCP/SQLite, native test execution, QA/rework, artifact acceptance, actual Git object equivalence, Git closure/retry, human pairing/cookie/CSRF attribution, browser projections, stale decisions, scope invalidation, preserved holds, grant boundaries/revocation/expiry/retry, and guarded delegated closure | Deterministic model/provider adapters are labeled test doubles; they do not prove native end-to-end release compatibility |
 | Shared state | Three independent MCP bridge processes create/read/update the same store | Separate from real model execution checks |
 | Codex connectivity | Native App Server lists the workspace, creates an issue, and reads it back | No inference in `probe-hosts` |
 | Claude connectivity | Desktop-managed Claude Code confirms the scoped MCP connection | Does not establish CLI authentication for inference |
 | DSH connectivity | SDK profile loads a temporary MCP patch and reports real MCP initialization | Does not establish embedded UI support |
 | Human browser workspace | Actual built React UI covers list/board/reviews, issue/design/evidence/history, creation, planning, design approval/rejection, artifact acceptance, and run/settings surfaces | Isolated fixture decisions are automated test actions, not actual user acceptance. Model execution uses explicitly labeled adapters; QA checks use real Node subprocesses |
 | Browser consistency and recovery | A separate real MCP bridge mutation appears in 820 ms; reconnect refreshes in 833 ms; lost-response retry creates exactly one issue; a stale design dialog rejects with input retained | Small isolated fixture on a healthy local machine; not a 10,000-issue performance or complete recovery acceptance result |
+| Human delegation | Browser creates/revokes exact-scope PM grants; a separate real MCP bridge rejects revoked authority, applies the authorized hold, and completes an exact reviewed artifact. Lost-response retry creates one grant, not two. Mobile keyboard authorization succeeds | Automated human decisions and model adapters remain explicitly labeled fixtures. Missing Git verification rolls back delegated acceptance/use in service tests; native-host model use of grants is not inferred from the protocol check |
 | Browser interaction and layout | Keyboard creation and delivery acceptance, dialog focus containment, malicious-content text rendering, logout, and desktop/mobile overflow checks pass | Chrome 156.0.8078.80 / Playwright 1.65.0 on Windows; 1536x1024, 1280x720, and 390x844. No broader assistive-technology/browser matrix yet |
 | Codex real execution | Native worker creates exact `delivery.txt` content in an isolated Git worktree and submits through MCP; run `SUCCEEDED`, issue `LEAD_REVIEW:PRE_QA`, provider session recorded, source intact | No independent QA, final lead review, merge, deployment, or user acceptance was performed |
 | DSH real execution | SDK worker using the declared SDK-profile default route produces and submits the same fixture; run `SUCCEEDED`, issue enters initial lead review, source intact | Same delivery/QA limits as Codex; no invented fallback provider |
@@ -58,11 +59,12 @@ The 2026-11-07 browser pass used an isolated headless Chrome profile and disposa
 | AC20/23/27 | PASS for tested subset | Mobile keyboard acceptance displayed digest, complete manifest, review references, and artifact reason; fixture reached `DONE` only through the guarded command |
 | AC26/35 | PASS for tested subset | Separate MCP update appeared in 820 ms; reconnect refreshed in 833 ms. Aborting a committed create response and retrying with the same form intent produced exactly one issue |
 | AC27/36 | PASS for tested subset | Critical keyboard flows and modal focus containment worked at tested viewports; no horizontal document overflow; malicious HTML source rendered as text; logout revoked the session |
+| AC13/14/24 | PASS for single-issue grant subset | Browser creation/revocation, paginated grant history, keyboard focus containment, grant-create lost-response retry, separate MCP hold/closure/reopen, and distinct human-grantor/agent-executor audit passed |
 | Build/console | PASS | Correct workspace/direct-link entry loaded without blank page or unexpected overlay; no uncaught page errors. Expected 409, lost-response network failure, and offline network errors were deliberately injected |
 
 Reproduce the normal flow with `npm run build`, `node dist/cli.js serve`, and `node dist/cli.js ui`: pair the browser, register a disposable directory, create a requirement/design, request review, inspect the exact revision, then approve or request changes with a reason. Use the scoped lead/worker/QA connections for those gates; the browser does not bypass them. The local setup guide explains dispatch, captured checks, evidence, and digest-bound delivery acceptance. Fault injection used private temporary fixtures rather than an additional published test server.
 
-The working visual reference's white/indigo hierarchy, sidebar, list, inspector, and review dialog are implemented. Real naming, scope snapshots, history, and evidence fields extend the illustrative reference. The concepts have not been accepted by the user. Large-data performance, complete coverage/grant/gap management, assistive-technology coverage, multiple browsers, native embedded views, and actual human phase acceptance are not established by this pass.
+The working visual reference's white/indigo hierarchy, sidebar, list, inspector, and review dialog are implemented. Real naming, scope snapshots, history, and evidence fields extend the illustrative reference. The concepts have not been accepted by the user. Large-data performance, complete coverage/gap management, batch decisions, assistive-technology coverage, multiple browsers, native embedded views, and actual human phase acceptance are not established by this pass.
 
 ## Phase status and remaining gates
 
@@ -73,8 +75,8 @@ The service consumes queued tasks, isolates workers/QA, records provider session
 Outstanding required work:
 
 1. Complete Git normalization/filter and multi-repository delivery handling, native-model rejection/rework with actual published Git closure, parent integration/coverage, explicit minor-risk waivers, and complete evidence browsing. Current independently tested boundaries do not establish full P4 acceptance.
-2. Complete the browser workspace's coverage/grant/gap management, native execution permission/input requests, and native-host authentication/setup guidance. Validate operator run recovery against real current hosts.
-3. Complete plan/coverage commands, grants, parent integration/exclusion/reopen rules, evidence browsing, and gap reporting.
+2. Complete the browser workspace's coverage/gap management and batch decisions, native execution permission/input requests, and native-host authentication/setup guidance. Validate operator run recovery against real current hosts.
+3. Complete plan/coverage commands, parent integration/exclusion/reopen rules, complete evidence browsing, and gap reporting. Exact single-issue action grants exist; this does not establish all AC14 batch/harness-human attribution scenarios.
 4. Package native plugin entries, complete workspace binding/discovery, and verify installation, restore, migration, accessibility, performance, and embedded/fallback views.
 5. Finish the full acceptance catalogue and mixed-harness worker-to-QA scenarios. Claude's standalone runtime must have supported authentication before its execution acceptance can pass.
 
