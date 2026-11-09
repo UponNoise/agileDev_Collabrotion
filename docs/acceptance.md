@@ -49,6 +49,8 @@ P0 validation covers the planning artifacts only. P1 probes, P2 integration test
 
 ## 2. End-to-end release scenario
 
+2026-11-09 accepted delivery amendment: AC29/30/38 use the installed desktop application, common MCP access from all three harnesses, and disclosed browser fallback. Native harness packages/embedded views are optional shortcuts. All role, execution, human-attribution, lifecycle, installation/removal, and data-preservation requirements remain. AC26/27 additionally verify Chinese/English switching and reload persistence, readable unchanged user content/evidence, Ctrl/Command-wheel zoom and reset, ordinary scrolling, cross-tab preferences, and critical controls at effective narrow/short viewports from 50-200% zoom.
+
 Use a disposable GitHub repository and a deliberately small product requirement with two implementation tasks and one parent integration criterion. This scenario is not run against the user's production projects.
 
 1. Lead creates the requirement and design. PM prepares unstarted, initially unassigned tasks. Attempting early execution fails.

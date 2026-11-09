@@ -127,7 +127,13 @@ These are proposed release budgets, not measured results. Reference environment:
 
 ## 8. Scope boundaries
 
-The MVP includes real dispatch and independent QA, not only a board. Native packaging and embedded UI are adapter work; their availability must be proven in P1/P5.
+### Approved delivery direction, 2026-11-09
+
+The user selected a desktop application as the primary human entry, with Codex, DSH, and Claude accessing one local workflow authority through MCP. Native harness plugins become optional shortcuts/context integration rather than three mandatory release packages. This replaces the earlier plugin-first packaging requirement without relaxing the shared data, scoped execution, independent QA, human approval, or three-harness MCP acceptance requirements. Desktop installation, service lifecycle, browser fallback, and removal without data loss remain release gates. This product-direction decision does not approve any requirement or delivery managed inside the application.
+
+The user also requested Chinese/English interface selection in Settings, modifier-wheel page zoom, and layouts that adapt to the application/window size. Language and zoom are local presentation preferences, restored on reload and shared by same-origin tabs. Requirement content, evidence, IDs, commands, and stored workflow state retain their original values. Ctrl/Command plus wheel changes application zoom within 50-200%; an unmodified wheel keeps normal scrolling, with accessible settings controls and a reset available. Layouts use the effective viewport after application zoom so critical controls and dialogs remain reachable in narrow or short windows.
+
+The MVP includes real dispatch and independent QA, not only a board. Desktop packaging, common MCP access, and browser fallback must be proven in P1/P5. Optional native harness packages and embedded surfaces require their own evidence before being claimed as supported.
 
 The MVP does not include replacing coding harnesses, arbitrary shell execution from ticket text, cloud tenant operation, billing, SSO, organization management, full Scrum compliance, chat/email integrations, autonomous release deployment, or automatic Git merges. Git integration records and verifies evidence; merge/release authorization remains with the user's development workflow.
 

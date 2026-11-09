@@ -1,3 +1,4 @@
+import { useText } from './Preferences';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { errorText } from './api';
@@ -58,18 +59,25 @@ export function Icon({ name }: { name: string }) {
   );
 }
 export function Status({ value, label }: { value: string; label?: string }) {
+  const t = useText();
   const tone = ['DONE', 'SUCCEEDED', 'PASSED', 'VERIFIED', 'APPROVED', 'PASS'].includes(value)
     ? 'good'
-    : ['FAILED', 'UNCERTAIN', 'QA_REJECTED', 'LEAD_REJECTED', 'USER_REJECTED', 'FAIL', 'CHANGES_REQUESTED'].includes(
-          value
-        )
+    : [
+          'FAILED',
+          'UNCERTAIN',
+          'QA_REJECTED',
+          'LEAD_REJECTED',
+          'USER_REJECTED',
+          'FAIL',
+          'CHANGES_REQUESTED'
+        ].includes(value)
       ? 'bad'
       : ['LEAD_REVIEW', 'IN_REVIEW', 'USER_ACCEPTANCE'].includes(value)
         ? 'review'
         : ['IN_PROGRESS', 'RUNNING', 'QA_TEST', 'VERIFYING'].includes(value)
           ? 'active'
           : 'neutral';
-  return <span className={`status ${tone}`}>{label ?? value.replaceAll('_', ' ').toLowerCase()}</span>;
+  return <span className={`status ${tone}`}>{t(label ?? value.replaceAll('_', ' ').toLowerCase())}</span>;
 }
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
@@ -99,6 +107,7 @@ export function Modal({
   children: ReactNode;
   onClose(): void;
 }) {
+  const t = useText();
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const close = useRef(onClose);
@@ -126,7 +135,10 @@ export function Modal({
       }
       const first = controls[0];
       const last = controls.at(-1)!;
-      if (event.shiftKey && (document.activeElement === first || document.activeElement === heading.current)) {
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || document.activeElement === heading.current)
+      ) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -148,11 +160,11 @@ export function Modal({
       <header className="modal-head">
         <div>
           <h2 ref={heading} tabIndex={-1} id="modal-title">
-            {title}
+            {t(title)}
           </h2>
           {subtitle ? <p>{subtitle}</p> : null}
         </div>
-        <button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}>
+        <button type="button" className="icon-button" aria-label={t('Close dialog')} onClick={onClose}>
           <Icon name="close" />
         </button>
       </header>
@@ -171,6 +183,7 @@ export function AsyncForm({
   onDone?(): void;
   className?: string;
 }) {
+  const t = useText();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const key = useRef(crypto.randomUUID());
@@ -198,12 +211,12 @@ export function AsyncForm({
       <fieldset disabled={busy || !online}>{children}</fieldset>
       {error ? (
         <p className="error" role="alert">
-          {error}
+          {t(error)}
         </p>
       ) : null}
       {busy ? (
         <p className="saving" role="status">
-          Saving…
+          {t('Saving…')}
         </p>
       ) : null}
     </form>

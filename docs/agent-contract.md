@@ -172,7 +172,7 @@ Handoff must state implemented behavior, criteria covered, evidence references, 
 
 ## 7. Adapter capability matrix and release status
 
-All cells are **planned/unverified in P0**. `Required` below means needed for a P5 support claim, not already working.
+The matrix below records the original plugin-first proposal. The user's 2026-11-09 accepted delivery amendment replaces mandatory native plugin packages and embedded harness views with a primary desktop application plus verified MCP access from all three harnesses and browser fallback. Native plugins/views are optional shortcuts. Other required capability rows remain mandatory and require current evidence.
 
 | Capability | Codex local | Claude Code | DSH |
 | --- | --- | --- | --- |

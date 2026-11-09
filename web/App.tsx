@@ -1,3 +1,4 @@
+import { useText } from './Preferences';
 import { useDeferredValue, useEffect, useState } from 'react';
 import type { Actor, Workspace } from '../src/contracts';
 import { ApiError, command, errorText, request, setCsrf } from './api';
@@ -26,6 +27,7 @@ function route() {
   };
 }
 function Login({ connected }: { connected(actor: Actor, csrf: string): void }) {
+  const t = useText();
   return (
     <main className="login">
       <div className="login-content">
@@ -33,9 +35,11 @@ function Login({ connected }: { connected(actor: Actor, csrf: string): void }) {
           <span />
           AgileDev
         </div>
-        <h1>Connect to your workspace</h1>
+        <h1>{t('Connect to your workspace')}</h1>
         <p>
-          Run <code>node dist/cli.js ui</code> in your local installation, then enter the one-use code.
+          {t('Run ')}
+          <code>node dist/cli.js ui</code>
+          {t(' in your local installation, then enter the one-use code.')}
         </p>
         <AsyncForm
           onSave={async (form) => {
@@ -45,7 +49,7 @@ function Login({ connected }: { connected(actor: Actor, csrf: string): void }) {
             connected(result.actor, result.csrf);
           }}
         >
-          <Field label="Pairing code">
+          <Field label={t('Pairing code')}>
             <input
               name="code"
               type="password"
@@ -56,15 +60,18 @@ function Login({ connected }: { connected(actor: Actor, csrf: string): void }) {
             />
           </Field>
           <button type="submit" className="primary">
-            Connect workspace
+            {t('Connect workspace')}
           </button>
         </AsyncForm>
-        <p className="muted">The code expires after five minutes. Keep it private and out of the URL.</p>
+        <p className="muted">
+          {t('The code expires after five minutes. Keep it private and out of the URL.')}
+        </p>
       </div>
     </main>
   );
 }
 export function App() {
+  const t = useText();
   const [actor, setActor] = useState<Actor | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [fatal, setFatal] = useState('');
@@ -226,7 +233,7 @@ export function App() {
   if (initializing)
     return (
       <main className="login">
-        <p role="status">Connecting to the local workspace…</p>
+        <p role="status">{t('Connecting to the local workspace…')}</p>
       </main>
     );
   if (!actor)
@@ -234,7 +241,7 @@ export function App() {
       <>
         {fatal ? (
           <p className="connection-banner" role="alert">
-            {fatal}
+            {t(fatal)}
           </p>
         ) : null}
         <Login connected={connected} />
@@ -244,12 +251,12 @@ export function App() {
     <OnlineContext.Provider value={online}>
       <div className={`app ${locationState.issueId && split ? 'has-selection' : ''}`}>
         <a className="skip-link" href="#main">
-          Skip to workspace
+          {t('Skip to workspace')}
         </a>
         <header className="mobile-header">
           <button
             className="icon-button"
-            aria-label="Toggle navigation"
+            aria-label={t('Toggle navigation')}
             aria-expanded={menu}
             onClick={() => setMenu((previous) => !previous)}
           >
@@ -263,7 +270,7 @@ export function App() {
             AgileDev
           </div>
           <label className="workspace-picker">
-            <span className="sr-only">Workspace</span>
+            <span className="sr-only">{t('Workspace')}</span>
             <select
               value={workspaceId ?? ''}
               onChange={(event) => {
@@ -274,7 +281,7 @@ export function App() {
               }}
             >
               <option value="" disabled>
-                Select workspace
+                {t('Select workspace')}
               </option>
               {workspaces.map((workspace) => (
                 <option key={workspace.id} value={workspace.id}>
@@ -283,7 +290,7 @@ export function App() {
               ))}
             </select>
           </label>
-          <nav aria-label="Workspace navigation">
+          <nav aria-label={t('Workspace navigation')}>
             {(Object.keys(labels) as View[]).map((name) => (
               <button
                 key={name}
@@ -296,32 +303,33 @@ export function App() {
                 }}
               >
                 <Icon name={name} />
-                {labels[name]}
+                {t(labels[name])}
               </button>
             ))}
           </nav>
           <footer>
-            <p>Local workspace</p>
+            <p>{t('Local workspace')}</p>
             <button className="text-button" onClick={() => void logout()}>
-              Sign out
+              {t('Sign out')}
             </button>
           </footer>
         </aside>
         <div className="workspace-shell">
           {!online ? (
             <div className="connection-banner" role="alert">
-              Disconnected. Changes are paused; reconnecting…<small>{syncError}</small>
+              {t('Disconnected. Changes are paused; reconnecting…')}
+              <small>{t(syncError)}</small>
             </div>
           ) : null}
           {fatal ? (
             <p className="error" role="alert">
-              {fatal}
+              {t(fatal)}
             </p>
           ) : null}
           {!workspaceId ? (
             <main id="main" className="first-workspace">
-              <h1>Create your first workspace</h1>
-              <p>Register a project directory to start planning requirements.</p>
+              <h1>{t('Create your first workspace')}</h1>
+              <p>{t('Register a project directory to start planning requirements.')}</p>
               <WorkspaceRegistration onRegistered={registered} />
             </main>
           ) : current ? (
@@ -331,28 +339,32 @@ export function App() {
                   <div>
                     <h1>
                       {view === 'backlog'
-                        ? 'Workspace backlog'
+                        ? t('Workspace backlog')
                         : view === 'board'
-                          ? 'Workspace board'
+                          ? t('Workspace board')
                           : view === 'reviews'
-                            ? 'Review queue'
+                            ? t('Review queue')
                             : view === 'runs'
-                              ? 'Managed runs'
-                              : 'Workspace settings'}
+                              ? t('Managed runs')
+                              : t('Workspace settings')}
                     </h1>
                     <p>
                       {view === 'reviews'
-                        ? 'Design, lead, QA, and delivery decisions stay separate.'
+                        ? t('Design, lead, QA, and delivery decisions stay separate.')
                         : view === 'runs'
-                          ? 'Queued, running, and uncertain are distinct execution states.'
+                          ? t('Queued, running, and uncertain are distinct execution states.')
                           : view === 'settings'
-                            ? 'Manage local bindings, scoped identities, and approved checks.'
-                            : 'Plan work. Review evidence. Keep every handoff visible.'}
+                            ? t('Manage local bindings, scoped identities, and approved checks.')
+                            : t('Plan work. Review evidence. Keep every handoff visible.')}
                     </p>
                   </div>
                   {split ? (
-                    <button className="primary" disabled={!online} onClick={() => openDialog({ kind: 'create' })}>
-                      New issue
+                    <button
+                      className="primary"
+                      disabled={!online}
+                      onClick={() => openDialog({ kind: 'create' })}
+                    >
+                      {t('New issue')}
                     </button>
                   ) : null}
                 </header>
@@ -361,9 +373,9 @@ export function App() {
                     <div className="workspace-tools">
                       <label className="search">
                         <Icon name="search" />
-                        <span className="sr-only">Search title or key</span>
+                        <span className="sr-only">{t('Search title or key')}</span>
                         <input
-                          placeholder="Search title or key"
+                          placeholder={t('Search title or key')}
                           value={search}
                           onChange={(event) => {
                             setSearch(event.target.value);
@@ -372,16 +384,16 @@ export function App() {
                         />
                       </label>
                       <label>
-                        <span className="sr-only">Issue state</span>
+                        <span className="sr-only">{t('Issue state')}</span>
                         <select
-                          aria-label="Issue state"
+                          aria-label={t('Issue state')}
                           value={state}
                           onChange={(event) => {
                             setState(event.target.value);
                             setOffset(0);
                           }}
                         >
-                          <option value="">All states</option>
+                          <option value="">{t('All states')}</option>
                           {[
                             'NOT_STARTED',
                             'IN_PROGRESS',
@@ -396,7 +408,7 @@ export function App() {
                             'DONE'
                           ].map((value) => (
                             <option value={value} key={value}>
-                              {value.replaceAll('_', ' ').toLowerCase()}
+                              {t(value.replaceAll('_', ' ').toLowerCase())}
                             </option>
                           ))}
                         </select>
@@ -410,19 +422,24 @@ export function App() {
                     />
                     <footer className="pagination">
                       <span>
-                        {current.total} {current.total === 1 ? 'issue' : 'issues'}
-                        {current.total > 20 ? ` · page ${offset / 20 + 1}` : ''}
+                        {current.total} {current.total === 1 ? t('issue') : t('issues')}
+                        {current.total > 20 ? ` · ${t('page {page}').replace('{page}', String(offset / 20 + 1))}` : ''}
                       </span>
                       <button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 20))}>
-                        Previous
+                        {t('Previous')}
                       </button>
-                      <button disabled={current.nextOffset === null} onClick={() => setOffset(current.nextOffset!)}>
-                        Next
+                      <button
+                        disabled={current.nextOffset === null}
+                        onClick={() => setOffset(current.nextOffset!)}
+                      >
+                        {t('Next')}
                       </button>
                     </footer>
                   </>
                 ) : null}
-                {view === 'settings' ? <Settings data={current} onSaved={saved} onRegistered={registered} /> : null}
+                {view === 'settings' ? (
+                  <Settings data={current} onSaved={saved} onRegistered={registered} />
+                ) : null}
                 {view === 'runs' ? (
                   <Runs
                     key={workspaceId}
@@ -445,16 +462,18 @@ export function App() {
                   />
                 ) : (
                   <aside className="inspector loading">
-                    <p role={detailError ? 'alert' : 'status'}>{detailError || 'Loading issue details…'}</p>
-                    <button onClick={() => navigate(workspaceId, null)}>Back to workspace</button>
+                    <p role={detailError ? 'alert' : 'status'}>
+                      {detailError || t('Loading issue details…')}
+                    </p>
+                    <button onClick={() => navigate(workspaceId, null)}>{t('Back to workspace')}</button>
                   </aside>
                 )
               ) : null}
             </div>
           ) : (
             <main id="main" className="workspace-main">
-              <Empty title={syncError ? 'Workspace unavailable' : 'Loading workspace'}>
-                <p>{syncError || 'Reading committed local records…'}</p>
+              <Empty title={syncError ? t('Workspace unavailable') : t('Loading workspace')}>
+                <p>{syncError || t('Reading committed local records…')}</p>
               </Empty>
             </main>
           )}

@@ -10,6 +10,8 @@ Dependency chain: `P0 -> P1 -> P2 -> P3 -> P4 -> P5`. Small independent tasks in
 
 P1–P5 constitute the local MVP. P6 is a future scope proposal, not hidden work required to finish the MVP.
 
+Approved scope amendment, 2026-11-09: deliver the desktop application as the primary human entry and MCP as the required common harness entry. Three native plugin packages are optional enhancements. P1/P5 must verify the actual desktop package, three MCP entry configurations, lifecycle/removal/data preservation, and browser fallback; no marketplace or unverified embedded harness view is required. This replaces the earlier mandatory native-plugin/embedded-view packaging gates while preserving all workflow and execution acceptance. The requested Chinese/English Settings, modifier-wheel zoom, persistence, and effective-viewport layout checks extend AC26/27/38.
+
 ## 2. Phase definitions
 
 | Phase | Result | Mandatory exit evidence | Relative size |
@@ -19,7 +21,7 @@ P1–P5 constitute the local MVP. P6 is a future scope proposal, not hidden work
 | P2 Workflow authority | Domain model, migrations, guarded commands, approvals/grants, audit, idempotency, parent rules, local storage | AC03–16, AC20–24, AC31/32/35/36 domain/storage tests; no mock success for unimplemented provider verification | L |
 | P3 Human + agent vertical slice | Browser workspace and compact MCP tools with real daemon storage; design review through user acceptance using fixture evidence clearly labeled | AC01–09, AC14/24–30/34/36; actual MCP reads/writes from all three entries; keyboard/UI checks; every write shares domain enforcement | L |
 | P4 Managed collaboration | PM planning/dispatch, isolated workers, real independent QA, rejected-work loops, Git provider verification, recovery | AC10–23/25/31–35 using real runs and a disposable test repository; four-run ownership tests; exact-snapshot acceptance | XL |
-| P5 Packaged MVP | Native packages, installation/upgrade/recovery guidance, three-entry end-to-end acceptance, published source/release artifacts | All mandatory AC01–38; recorded supported matrix; Windows fresh-install run; no unresolved blocking defects; human release acceptance | L |
+| P5 Packaged MVP | Desktop application, common MCP entry, installation/upgrade/recovery guidance, three-entry end-to-end acceptance, published source/release artifacts | All mandatory AC01–38 under the accepted amendment; recorded supported matrix; Windows fresh-install run; no unresolved blocking defects; human release acceptance | L |
 | P6 Shared team extension | Multi-human server, memberships, remote companions, optional external issue projections | New approved spec: tenant/workspace boundaries, synchronization, operations, privacy, migration and recovery acceptance | Unestimated |
 
 The sizes compare implementation scope, not elapsed time or guaranteed agent speed. After P1, PM estimates tasks against measured adapter complexity and available capacity, then sets optional dates/iterations. No fixed delivery date or token-cost promise is made in P0.
@@ -63,7 +65,7 @@ These are **planned records**, not GitHub issues and not approved/in-progress as
 | B14 | Managed collaboration——[Feature] QA: run independent checks -> reproducible rejection and rework | QA integration worker | B13 | AC11/19/20 |
 | B15 | Managed collaboration——[Feature] Git: verify immutable commit evidence -> traceable closure | Git integration worker | B13 | AC21–23 |
 | B16 | Managed collaboration——[Test] Recovery: interrupt and restart runs -> no false completion or duplicate execution | Reliability worker | B13–B15 | AC18/33/35 |
-| B17 | Packaged MVP——[Feature] Plugins: package three adapters -> installable versioned entries | Integration worker | P4 gate | AC29/30/38 |
+| B17 | Packaged MVP——[Feature] Desktop: package application and MCP entry -> installable shared workspace | Integration worker | P4 gate | AC29/30/38 |
 | B18 | Packaged MVP——[Test] Delivery: exercise complete workflow -> accepted three-harness release | Independent QA | B17 | AC01–38 |
 
 PM can split these after P1; each final task still needs its own acceptance criteria, owned outputs, and approved mapping. Do not assign a single worker to implement and independently QA the same task.
