@@ -29,6 +29,7 @@ See [local setup and commands](docs/local-development.md) for the executable sli
 | [Research](docs/research.md) | Primary sources, compatibility evidence, alternatives, and unresolved feasibility questions |
 | [Delivery plan](docs/delivery-plan.md) | Phase boundaries, seed backlog, dependencies, and release gates |
 | [Acceptance catalogue](docs/acceptance.md) | Executable acceptance scenarios and the evidence each phase must produce |
+| [Revision proposal R1](docs/proposals/r1-inbox-iterations-defects.md) | Draft decision inbox, iterations, and defect register; awaiting user decision |
 
 Start with the decisions in the product specification, then review the workflow and phase gates. State transitions are authoritative in `docs/workflow.md`; the other documents reference them.
 

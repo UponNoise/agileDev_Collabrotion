@@ -158,6 +158,8 @@ These choices make specification 0.1 implementable. They are recommendations, no
 | D09 | MVP has requirement + task hierarchy, with related defects and criterion-level coverage | Avoids recursive workflow complexity before the core is validated |
 | D10 | Browser UI is mandatory for every entry; native embedded capability is tested and reported per surface | Avoids promising unsupported host UI behavior; an unavailable required embedded surface must trigger a scope decision |
 
+Pending revision proposal R1, 2026-11-09: [decision inbox, iterations, and defect register](proposals/r1-inbox-iterations-defects.md) proposes FR27/FR28, refinements of FR15/FR22/FR26, AC39–AC41, and decisions D11–D16. It is a draft for user decision and changes no requirement in this document until accepted.
+
 ## 10. Definition of ready and done
 
 **Ready to implement:** user-approved applicable design revision; concrete task scope and acceptance mapping; assigned accountable worker; cleared blocking dependencies; valid execution binding; available concurrency/cost policy; no effective hold; no unresolved readiness blockers. Dates and estimates remain optional.
