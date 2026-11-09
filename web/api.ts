@@ -4,6 +4,8 @@ import type {
   CheckRun,
   Coverage,
   Design,
+  GitAttempt,
+  GitRepositoryEntry,
   GitSubmission,
   Issue,
   Plan,
@@ -15,6 +17,8 @@ import type {
 
 export type DisplayIssue = Issue & { url: string; titleSuffix: string; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
 export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings';
+export interface GitEntryView extends GitRepositoryEntry { attempt: GitAttempt | null }
+export type GitSubmissionView = Omit<GitSubmission, 'entries'> & { entries: GitEntryView[] };
 export interface WorkspaceData {
   workspace: Workspace;
   cursor: number;
@@ -35,7 +39,7 @@ export interface IssueData {
   designHistory: Design[];
   deliveryDigest: string | null;
   authorizationScopeHash: string;
-  git: GitSubmission | null;
+  git: GitSubmissionView | null;
   closureBlocked: string[];
   readiness: { ready: boolean; blocking: string[] };
   executionRecovery: { required: boolean; fence: number; candidateId: string | null };

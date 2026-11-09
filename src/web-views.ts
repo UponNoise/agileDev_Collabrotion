@@ -109,7 +109,7 @@ export function issueView(store: Store, issue: Issue, a: Record<string, any>) {
     nextAfter: history.length > a.limit ? page.at(-1)!.sequence : null,
     evidence: evidence.map(({ kind, id, data }) => {
       const v = JSON.parse(data);
-      return { kind, id, state: v.state, verdict: v.verdict, createdAt: v.createdAt ?? v.at ?? v.startedAt };
+      return { kind, id, state: v.state, verdict: v.verdict, createdAt: v.createdAt ?? v.at ?? v.startedAt, ...(kind === 'git_attempt' ? { entryIndex: v.entryIndex, repository: v.repository, sha: v.sha } : {}) };
     }),
     checks: checks.map((row) => JSON.parse(row.data) as CheckRun),
     runs: runs.map((row) => JSON.parse(row.data) as Run)

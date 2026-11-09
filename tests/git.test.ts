@@ -13,7 +13,7 @@ import { Workflow } from '../src/workflow.js';
 import { GitVerifier } from '../src/git-verifier.js';
 
 const sha = 'a'.repeat(40); const tree = 'b'.repeat(40); const scoped = 'c'.repeat(40);
-const submission = (subdirectory = ''): GitSubmission => ({ id: randomUUID(),workspaceId: 'w',issueId: 'i',candidateId: 'c',snapshotId: 's',bindingId: 'b',repository: 'owner/project',subdirectory,sha,url: `https://github.com/owner/project/commit/${sha}`,actorId: 'actor',createdAt: new Date().toISOString(),state: 'QUEUED',attempt: 0 });
+const submission = (subdirectory = ''): GitSubmission => ({ id: randomUUID(),workspaceId: 'w',issueId: 'i',candidateId: 'c',snapshotId: 's',bindingId: 'b',entries: [{ repository: 'owner/project',subdirectory,sha,url: `https://github.com/owner/project/commit/${sha}` }],actorId: 'actor',createdAt: new Date().toISOString(),state: 'QUEUED',attempt: 0 });
 
 test('commit references require an immutable SHA and credential-free canonical GitHub repository', () => {
   for (const value of ['https://github.com/Owner/Project.git','git@github.com:Owner/Project.git','ssh://git@github.com/Owner/Project.git']) assert.equal(githubRepository(value),'owner/project');
@@ -112,7 +112,7 @@ test('initial repository binding cannot inherit an unrelated design approval and
 
 test('interrupted provider read becomes unavailable and is never recovered as verified', () => {
   const store = new Store(':memory:'); const owner = store.bootstrap().actor; const git = { ...submission(),actorId: owner.id,state: 'VERIFYING' as const,currentAttemptId: 'attempt',attempt: 1 };
-  const attempt: GitAttempt = { id: 'attempt',submissionId: git.id,workspaceId: git.workspaceId,issueId: git.issueId,attempt: 1,startedAt: new Date().toISOString(),state: 'VERIFYING',apiVersion: githubApiVersion,repository: git.repository,sha: git.sha };
+  const attempt: GitAttempt = { id: 'attempt',submissionId: git.id,workspaceId: git.workspaceId,issueId: git.issueId,attempt: 1,entryIndex: 0,treeComparison: true,startedAt: new Date().toISOString(),state: 'VERIFYING',apiVersion: githubApiVersion,repository: git.entries[0]!.repository,sha: git.entries[0]!.sha };
   try {
     store.put('git_submission',git,git.workspaceId); store.put('git_attempt',attempt,git.workspaceId); new GitVerifier(store).recover();
     assert.equal(store.get<GitSubmission>('git_submission',git.id).state,'UNAVAILABLE'); assert.equal(store.get<GitAttempt>('git_attempt',attempt.id).errorCode,'VERIFICATION_COORDINATOR_LOST');

@@ -350,20 +350,36 @@ export function IssuePanel({
               <p className="muted">{t('No sealed delivery snapshot.')}</p>
             )}
             {packet.git ? (
-              <section className="evidence-block">
-                <h3>{t('Final commit')}</h3>
-                <a className="mono" href={packet.git.url} target="_blank" rel="noreferrer">
-                  {packet.git.sha}
-                </a>
-                <p>
-                  <Status value={packet.git.state} />
-                </p>
-                {packet.git.errorCode ? <p className="error">{packet.git.errorCode}</p> : null}
-                <p className="muted">
-                  {t('Verified: ')}
-                  {dateText(packet.git.verifiedAt)}
-                </p>
-              </section>
+              (() => {
+                const git = packet.git;
+                return (
+                  <section className="evidence-block">
+                    <h3>{t('Final commits')}</h3>
+                    {git.entries.map((entry, index) => (
+                      <div className="evidence-row" key={`${entry.repository}-${entry.sha}`}>
+                        <span>
+                          <a className="mono" href={entry.url} target="_blank" rel="noreferrer">
+                            {entry.repository} @ {entry.sha}
+                          </a>
+                          {index > 0 || entry.attempt?.evidenceRole === 'reference' ? (
+                            <p className="muted">{t('Reference-only evidence; not snapshot closure proof.')}</p>
+                          ) : null}
+                          {entry.attempt?.errorCode ? <p className="error">{entry.attempt.errorCode}</p> : null}
+                        </span>
+                        <Status value={entry.attempt?.state ?? git.state} />
+                      </div>
+                    ))}
+                    <p>
+                      <Status value={git.state} />
+                    </p>
+                    {git.errorCode ? <p className="error">{git.errorCode}</p> : null}
+                    <p className="muted">
+                      {t('Verified: ')}
+                      {dateText(git.verifiedAt)}
+                    </p>
+                  </section>
+                );
+              })()
             ) : null}
             <h3>{t('Captured checks')}</h3>
             {packet.checks.length ? (
