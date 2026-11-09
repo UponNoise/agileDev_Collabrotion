@@ -120,7 +120,7 @@ Claude Code MCP JSON example:
 }
 ```
 
-DSH uses a patch/profile configuration rather than this JSON format. `connection dsh` prints a patch containing the MCP client, absolute runtime paths, local data-directory binding (or an explicitly requested endpoint), and an environment reference for the token. Save it to a private local file and launch a chosen profile with `--patch <file>`. The earlier direct-endpoint format was loaded by the installed DSH SDK profile in the no-inference probe; native-host loading of the new data-directory variant remains pending. The generator does not mutate an existing profile or bundle; native plugin installation is optional under desktop-first delivery.
+DSH uses a patch/profile configuration rather than this JSON format. `connection dsh` prints a patch containing the MCP client, absolute runtime paths, local data-directory binding (or an explicitly requested endpoint), and an environment reference for the token. Save it to a private local file and launch a chosen profile with `--patch <file>`. The 2026-11-09 fresh portable package's generated data-directory patch initialized in the actual DSH 0.2.2-rc.1 SDK profile both before and after explicit owner restart on a different port, using the unchanged saved configuration. Codex and Claude's generated configurations passed the same reconnect scenario. No-inference connection evidence does not prove all native tool calls or model execution. The generator does not mutate an existing profile or bundle; native plugin installation is optional under desktop-first delivery.
 
 ## No-inference host verification
 
