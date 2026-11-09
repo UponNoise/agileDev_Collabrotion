@@ -1,6 +1,8 @@
+import { useDateText } from './Preferences';
+import { useText } from './Preferences';
 import { useEffect, useState } from 'react';
 import type { Grant, Issue } from '../src/contracts';
-import { ApiError, command, dateText, errorText, formKey, harnessName, lines, mutation } from './api';
+import { ApiError, command, errorText, formKey, harnessName, lines, mutation } from './api';
 import type { IssueData, WorkspaceData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
 import { PlanningForm } from './Planning';
@@ -39,6 +41,7 @@ export function IssueForm({
   onClose(): void;
   onSaved(): void;
 }) {
+  const t = useText();
   const packet = dialog.packet;
   const issue = packet?.issue;
   const root = packet?.parent ?? issue;
@@ -52,23 +55,29 @@ export function IssueForm({
   const footer = (label: string) => (
     <footer className="form-footer">
       <button type="button" onClick={onClose}>
-        Cancel
+        {t('Cancel')}
       </button>
       <button className="primary" type="submit">
-        {label}
+        {t(label)}
       </button>
     </footer>
   );
   if (dialog.kind === 'create')
     return (
-      <Modal title={dialog.parent ? 'New task' : 'New issue'} subtitle={dialog.parent?.title} onClose={onClose}>
+      <Modal
+        title={dialog.parent ? t('New task') : t('New issue')}
+        subtitle={dialog.parent?.title}
+        onClose={onClose}
+      >
         <AsyncForm
           onDone={done}
           onSave={(data) =>
             mutation('issue_create', {
               workspaceId: workspace.workspace.id,
               ...formKey(data),
-              ...(dialog.parent ? { parentId: dialog.parent.id, expectedParentVersion: dialog.parent.version } : {}),
+              ...(dialog.parent
+                ? { parentId: dialog.parent.id, expectedParentVersion: dialog.parent.version }
+                : {}),
               title: String(data.get('title')),
               description: String(data.get('description')),
               criteria: lines(data.get('criteria')),
@@ -79,12 +88,14 @@ export function IssueForm({
           }
         >
           <div className="form-body">
-            <p className="notice">New issues start as Not started. Assignment and dates are optional.</p>
+            <p className="notice">
+              {t('New issues start as Not started. Assignment and dates are optional.')}
+            </p>
             <Field
-              label="Title"
+              label={t('Title')}
               hint={
                 dialog.parent
-                  ? 'Use [Type] Area: action -> outcome. The parent prefix is added automatically.'
+                  ? t('Use [Type] Area: action -> outcome. The parent prefix is added automatically.')
                   : undefined
               }
             >
@@ -93,30 +104,35 @@ export function IssueForm({
                 maxLength={300}
                 required
                 placeholder={
-                  dialog.parent ? '[Feature] Area: action -> outcome' : 'What should this requirement achieve?'
+                  dialog.parent
+                    ? t('[Feature] Area: action -> outcome')
+                    : t('What should this requirement achieve?')
                 }
               />
             </Field>
-            <Field label="Requirement description">
+            <Field label={t('Requirement description')}>
               <textarea name="description" rows={5} />
             </Field>
             <Field
-              label="Acceptance criteria"
-              hint="One criterion ID per line. Tasks reference the parent design criteria."
+              label={t('Acceptance criteria')}
+              hint={t('One criterion ID per line. Tasks reference the parent design criteria.')}
             >
               <textarea name="criteria" rows={3} />
             </Field>
             {!dialog.parent ? (
               <>
-                <Field label="Delivery mode">
+                <Field label={t('Delivery mode')}>
                   <select name="mode" defaultValue={workspace.workspace.commonDir ? 'git' : 'artifact'}>
                     <option value="git" disabled={!workspace.workspace.commonDir}>
-                      Git commit
+                      {t('Git commit')}
                     </option>
-                    <option value="artifact">Document or artifact</option>
+                    <option value="artifact">{t('Document or artifact')}</option>
                   </select>
                 </Field>
-                <Field label="Artifact reason" hint="Required when using artifact mode in a Git workspace.">
+                <Field
+                  label={t('Artifact reason')}
+                  hint={t('Required when using artifact mode in a Git workspace.')}
+                >
                   <input
                     name="reason"
                     defaultValue={workspace.workspace.commonDir ? '' : 'Non-Git workspace delivery'}
@@ -125,32 +141,75 @@ export function IssueForm({
               </>
             ) : null}
           </div>
-          {footer(dialog.parent ? 'Create task' : 'Create issue')}
+          {footer(dialog.parent ? t('Create task') : t('Create issue'))}
         </AsyncForm>
       </Modal>
     );
   if (!packet || !issue || !root) return null;
-  if (dialog.kind === 'decomposition') return <PlanningForm packet={packet} onClose={onClose} onSaved={onSaved} />;
-  if (dialog.kind === 'scope-decision') return <ScopeReview packet={packet} onClose={onClose} onSaved={onSaved} />;
-  if (dialog.kind === 'execution-recovery') return (
-    <Modal title="Reconcile unbound execution" subtitle={`${issue.key} · ${issue.titleSuffix}`} onClose={onClose}>
-      <AsyncForm onDone={done} onSave={data => mutation('work_reconcile',{ ...base,...formKey(data),fence: packet.executionRecovery.fence,candidateId: packet.executionRecovery.candidateId,confirmStopped: data.has('confirmStopped'),reason: String(data.get('reason')) })}>
-        <div className="form-body">
-          <p className="notice">This older work has no managed execution binding. Inspect and stop its external worker before confirming. Recovery clears current ownership and reviews, keeps historical evidence, and requires a fresh isolated dispatch. An effective hold remains.</p>
-          <p className="prose">{issue.description}</p>
-          <dl className="metadata"><dt>Lifecycle</dt><dd>{issue.state}</dd><dt>Lease fence</dt><dd>{packet.executionRecovery.fence}</dd><dt>Lease owner</dt><dd className="mono">{issue.lease?.actorId ?? 'No current lease'}</dd><dt>Candidate</dt><dd className="mono">{packet.executionRecovery.candidateId ?? 'No current candidate'}</dd><dt>Prior handoff</dt><dd className="prose">{issue.candidate?.summary ?? 'None recorded'}</dd></dl>
-          <Field label="I verified the old external worker has stopped" hint="The service has no provider identity for this legacy work. This records your confirmation rather than an automatic process check."><input type="checkbox" name="confirmStopped" required /></Field>
-          <Field label="Recovery reason"><textarea name="reason" rows={4} required /></Field>
-        </div>
-        {footer('Confirm stopped and reset')}
-      </AsyncForm>
-    </Modal>
-  );
+  if (dialog.kind === 'decomposition')
+    return <PlanningForm packet={packet} onClose={onClose} onSaved={onSaved} />;
+  if (dialog.kind === 'scope-decision')
+    return <ScopeReview packet={packet} onClose={onClose} onSaved={onSaved} />;
+  if (dialog.kind === 'execution-recovery')
+    return (
+      <Modal
+        title={t('Reconcile unbound execution')}
+        subtitle={`${issue.key} · ${issue.titleSuffix}`}
+        onClose={onClose}
+      >
+        <AsyncForm
+          onDone={done}
+          onSave={(data) =>
+            mutation('work_reconcile', {
+              ...base,
+              ...formKey(data),
+              fence: packet.executionRecovery.fence,
+              candidateId: packet.executionRecovery.candidateId,
+              confirmStopped: data.has('confirmStopped'),
+              reason: String(data.get('reason'))
+            })
+          }
+        >
+          <div className="form-body">
+            <p className="notice">
+              {t(
+                'This older work has no managed execution binding. Inspect and stop its external worker before confirming. Recovery clears current ownership and reviews, keeps historical evidence, and requires a fresh isolated dispatch. An effective hold remains.'
+              )}
+            </p>
+            <p className="prose">{issue.description}</p>
+            <dl className="metadata">
+              <dt>{t('Lifecycle')}</dt>
+              <dd>{issue.state}</dd>
+              <dt>{t('Lease fence')}</dt>
+              <dd>{packet.executionRecovery.fence}</dd>
+              <dt>{t('Lease owner')}</dt>
+              <dd className="mono">{issue.lease?.actorId ?? t('No current lease')}</dd>
+              <dt>{t('Candidate')}</dt>
+              <dd className="mono">{packet.executionRecovery.candidateId ?? t('No current candidate')}</dd>
+              <dt>{t('Prior handoff')}</dt>
+              <dd className="prose">{issue.candidate?.summary ?? t('None recorded')}</dd>
+            </dl>
+            <Field
+              label={t('I verified the old external worker has stopped')}
+              hint={t(
+                'The service has no provider identity for this legacy work. This records your confirmation rather than an automatic process check.'
+              )}
+            >
+              <input type="checkbox" name="confirmStopped" required />
+            </Field>
+            <Field label={t('Recovery reason')}>
+              <textarea name="reason" rows={4} required />
+            </Field>
+          </div>
+          {footer('Confirm stopped and reset')}
+        </AsyncForm>
+      </Modal>
+    );
   if (dialog.kind === 'grants')
     return <GrantForm packet={packet} workspace={workspace} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'scope')
     return (
-      <Modal title="Edit requirement scope" subtitle={issue.key} onClose={onClose}>
+      <Modal title={t('Edit requirement scope')} subtitle={issue.key} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -164,14 +223,24 @@ export function IssueForm({
         >
           <div className="form-body">
             <p className="notice">
-              Scope changes invalidate current delivery evidence. A top-level requirement also receives a new draft
-              design. Active execution must be reconciled first.
+              {t(
+                'Scope changes invalidate current delivery evidence. A top-level requirement also receives a new draft design. Active execution must be reconciled first.'
+              )}
             </p>
-            <Field label="Requirement description">
-              <textarea name="description" required maxLength={65536} rows={8} defaultValue={issue.description} />
+            <Field label={t('Requirement description')}>
+              <textarea
+                name="description"
+                required
+                maxLength={65536}
+                rows={8}
+                defaultValue={issue.description}
+              />
             </Field>
             {issue.parentId ? (
-              <Field label="Mapped parent criteria" hint="One approved parent criterion ID per line.">
+              <Field
+                label={t('Mapped parent criteria')}
+                hint={t('One approved parent criterion ID per line.')}
+              >
                 <textarea name="criteria" rows={3} defaultValue={issue.criteria.join('\n')} />
               </Field>
             ) : null}
@@ -182,7 +251,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'plan')
     return (
-      <Modal title="Edit plan" subtitle={issue.key} onClose={onClose}>
+      <Modal title={t('Edit plan')} subtitle={issue.key} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -205,28 +274,28 @@ export function IssueForm({
           }
         >
           <div className="form-body">
-            <Field label="Title">
+            <Field label={t('Title')}>
               <input name="title" required maxLength={300} defaultValue={issue.titleSuffix} />
             </Field>
-            <Field label="Priority">
+            <Field label={t('Priority')}>
               <select name="priority" defaultValue={issue.priority}>
                 {[0, 1, 2, 3, 4].map((value) => (
                   <option value={value} key={value}>
-                    {value === 0 ? '0 · Highest' : String(value)}
+                    {value === 0 ? t('0 · Highest') : String(value)}
                   </option>
                 ))}
               </select>
             </Field>
-            <Field label="Planned start">
+            <Field label={t('Planned start')}>
               <input type="date" name="start" defaultValue={issue.plannedStart ?? ''} />
             </Field>
-            <Field label="Due date">
+            <Field label={t('Due date')}>
               <input type="date" name="due" defaultValue={issue.dueDate ?? ''} />
             </Field>
-            <Field label="Iteration">
+            <Field label={t('Iteration')}>
               <input name="iteration" maxLength={120} defaultValue={issue.iteration ?? ''} />
             </Field>
-            <Field label="Estimate" hint="Optional forecast, not measured effort.">
+            <Field label={t('Estimate')} hint={t('Optional forecast, not measured effort.')}>
               <input
                 name="estimate"
                 type="number"
@@ -236,20 +305,20 @@ export function IssueForm({
                 defaultValue={issue.estimate?.value ?? ''}
               />
             </Field>
-            <Field label="Estimate unit">
+            <Field label={t('Estimate unit')}>
               <select name="unit" defaultValue={issue.estimate?.unit ?? 'hours'}>
-                <option value="hours">Hours</option>
-                <option value="points">Points</option>
+                <option value="hours">{t('Hours')}</option>
+                <option value="points">{t('Points')}</option>
               </select>
             </Field>
-            <Field label="Estimate confidence">
+            <Field label={t('Estimate confidence')}>
               <select name="confidence" defaultValue={issue.estimate?.confidence ?? 'low'}>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
+                <option value="low">{t('Low')}</option>
+                <option value="medium">{t('Medium')}</option>
+                <option value="high">{t('High')}</option>
               </select>
             </Field>
-            <p className="muted">These metadata fields preserve current artifact approvals.</p>
+            <p className="muted">{t('These metadata fields preserve current artifact approvals.')}</p>
           </div>
           {footer('Save plan')}
         </AsyncForm>
@@ -257,7 +326,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'design')
     return (
-      <Modal title="Edit design" subtitle={`${root.key} · ${root.title}`} onClose={onClose}>
+      <Modal title={t('Edit design')} subtitle={`${root.key} · ${root.title}`} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -273,13 +342,14 @@ export function IssueForm({
         >
           <div className="form-body">
             <p className="notice">
-              Saving creates a new revision and invalidates affected approvals. Active execution must be reconciled
-              first.
+              {t(
+                'Saving creates a new revision and invalidates affected approvals. Active execution must be reconciled first.'
+              )}
             </p>
-            <Field label="Proposed design">
+            <Field label={t('Proposed design')}>
               <textarea name="content" required rows={10} defaultValue={packet.design?.content ?? ''} />
             </Field>
-            <Field label="Acceptance criteria" hint="One criterion ID per line.">
+            <Field label={t('Acceptance criteria')} hint={t('One criterion ID per line.')}>
               <textarea
                 name="criteria"
                 required
@@ -294,7 +364,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'design-review' && packet.design)
     return (
-      <Modal title="Review design" subtitle={`${root.key} · ${root.title}`} onClose={onClose}>
+      <Modal title={t('Review design')} subtitle={`${root.key} · ${root.title}`} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -310,40 +380,42 @@ export function IssueForm({
           }
         >
           <div className="form-body">
-            <p className="notice">Your decision applies only to this revision.</p>
+            <p className="notice">{t('Your decision applies only to this revision.')}</p>
             <dl className="metadata">
-              <dt>Revision</dt>
+              <dt>{t('Revision')}</dt>
               <dd>r{packet.revision}</dd>
               <dt>SHA-256</dt>
               <dd className="mono">{packet.design.hash}</dd>
             </dl>
-            <h3>Requirement scope</h3>
+            <h3>{t('Requirement scope')}</h3>
             <div className="prose">
               {packet.design.requirementDescription ??
-                'This older revision has no captured requirement scope. Create a new revision before approval.'}
+                t(
+                  'This older revision has no captured requirement scope. Create a new revision before approval.'
+                )}
             </div>
-            <h3>Proposed design</h3>
+            <h3>{t('Proposed design')}</h3>
             <div className="prose">{packet.design.content}</div>
-            <h3>Acceptance criteria</h3>
+            <h3>{t('Acceptance criteria')}</h3>
             <ul>
               {packet.design.criteria.map((c) => (
                 <li key={c}>{c}</li>
               ))}
             </ul>
-            <Field label="Decision reason">
-              <textarea name="reason" required rows={4} placeholder="Explain your decision" />
+            <Field label={t('Decision reason')}>
+              <textarea name="reason" required rows={4} placeholder={t('Explain your decision')} />
             </Field>
           </div>
           <footer className="form-footer">
             <button type="button" onClick={onClose}>
-              Cancel
+              {t('Cancel')}
             </button>
             <span className="footer-actions">
               <button type="submit" name="decision" value="CHANGES_REQUESTED">
-                Request changes
+                {t('Request changes')}
               </button>
               <button className="primary" type="submit" name="decision" value="APPROVED">
-                Approve design
+                {t('Approve design')}
               </button>
             </span>
           </footer>
@@ -352,7 +424,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'delivery')
     return (
-      <Modal title="Review delivery" subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
+      <Modal title={t('Review delivery')} subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -368,20 +440,27 @@ export function IssueForm({
         >
           <div className="form-body">
             <p className="notice">
-              Your decision applies only to this reviewed snapshot. Acceptance is saved if closure is still blocked.
+              {t(
+                'Your decision applies only to this reviewed snapshot. Acceptance is saved if closure is still blocked.'
+              )}
             </p>
             <DeliveryEvidence packet={packet} />
-            <Field label="Decision reason">
-              <textarea name="reason" required rows={4} placeholder="Explain your acceptance or requested changes" />
+            <Field label={t('Decision reason')}>
+              <textarea
+                name="reason"
+                required
+                rows={4}
+                placeholder={t('Explain your acceptance or requested changes')}
+              />
             </Field>
           </div>
           <footer className="form-footer">
             <button type="button" onClick={onClose}>
-              Cancel
+              {t('Cancel')}
             </button>
             <span className="footer-actions">
               <button type="submit" name="decision" value="REJECT">
-                Request rework
+                {t('Request rework')}
               </button>
               <button
                 type="submit"
@@ -390,7 +469,7 @@ export function IssueForm({
                 value="ACCEPT"
                 disabled={!packet.deliveryDigest}
               >
-                Accept delivery
+                {t('Accept delivery')}
               </button>
             </span>
           </footer>
@@ -399,7 +478,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'assignment')
     return (
-      <Modal title="Assign worker" subtitle={issue.key} onClose={onClose}>
+      <Modal title={t('Assign worker')} subtitle={issue.key} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -412,10 +491,10 @@ export function IssueForm({
           }
         >
           <div className="form-body">
-            <Field label="Worker">
+            <Field label={t('Worker')}>
               <select name="actorId" required defaultValue={issue.assignee ?? ''}>
                 <option value="" disabled>
-                  Select an enrolled worker
+                  {t('Select an enrolled worker')}
                 </option>
                 {workspace.actors
                   .filter((a) => a.role === 'worker')
@@ -426,14 +505,16 @@ export function IssueForm({
                   ))}
               </select>
             </Field>
-            <Field label="Harness">
+            <Field label={t('Harness')}>
               <select name="harness" defaultValue={issue.harness ?? 'codex'}>
                 <option value="codex">Codex</option>
                 <option value="dsh">DSH</option>
                 <option value="claude-code">Claude Code</option>
               </select>
             </Field>
-            <p className="muted">Create logical agents in Settings. Assignment does not start a model run.</p>
+            <p className="muted">
+              {t('Create logical agents in Settings. Assignment does not start a model run.')}
+            </p>
           </div>
           {footer('Save assignment')}
         </AsyncForm>
@@ -441,7 +522,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'qa')
     return (
-      <Modal title="Configure independent QA" subtitle={issue.key} onClose={onClose}>
+      <Modal title={t('Configure independent QA')} subtitle={issue.key} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) => {
@@ -458,10 +539,10 @@ export function IssueForm({
           }}
         >
           <div className="form-body">
-            <Field label="QA reviewer">
+            <Field label={t('QA reviewer')}>
               <select name="actorId" required defaultValue={issue.qaAssignee ?? ''}>
                 <option value="" disabled>
-                  Select an independent reviewer
+                  {t('Select an independent reviewer')}
                 </option>
                 {workspace.actors
                   .filter((a) => a.role === 'qa')
@@ -472,14 +553,14 @@ export function IssueForm({
                   ))}
               </select>
             </Field>
-            <Field label="QA harness">
+            <Field label={t('QA harness')}>
               <select name="harness" defaultValue={issue.qaHarness ?? 'dsh'}>
                 <option value="codex">Codex</option>
                 <option value="dsh">DSH</option>
                 <option value="claude-code">Claude Code</option>
               </select>
             </Field>
-            <h3>Approved check profiles</h3>
+            <h3>{t('Approved check profiles')}</h3>
             {workspace.profiles.map((profile) => (
               <label className="check-row" key={profile.id}>
                 <input
@@ -494,8 +575,12 @@ export function IssueForm({
                 </span>
               </label>
             ))}
-            {!workspace.profiles.length ? <p className="muted">Approve a test command in Settings first.</p> : null}
-            <p className="muted">Configuring QA while this issue waits in QA testing queues a real reviewer run.</p>
+            {!workspace.profiles.length ? (
+              <p className="muted">{t('Approve a test command in Settings first.')}</p>
+            ) : null}
+            <p className="muted">
+              {t('Configuring QA while this issue waits in QA testing queues a real reviewer run.')}
+            </p>
           </div>
           {footer('Save QA configuration')}
         </AsyncForm>
@@ -521,9 +606,9 @@ export function IssueForm({
         >
           <div className="form-body">
             <p className="muted">
-              This records a lifecycle decision. Stopping or uncertain execution is tracked separately.
+              {t('This records a lifecycle decision. Stopping or uncertain execution is tracked separately.')}
             </p>
-            <Field label="Reason">
+            <Field label={t('Reason')}>
               <textarea name="reason" rows={4} required />
             </Field>
           </div>
@@ -533,7 +618,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'dispatch')
     return (
-      <Modal title="Dispatch worker" subtitle={issue.key} onClose={onClose}>
+      <Modal title={t('Dispatch worker')} subtitle={issue.key} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -547,11 +632,14 @@ export function IssueForm({
         >
           <div className="form-body">
             <p>
-              Starts a real {harnessName(issue.harness)} run using its configured account. The service prepares an
-              isolated execution directory.
+              {t('Starts a real ')}
+              {harnessName(issue.harness)}
+              {t(' run using its configured account. The service prepares an isolated execution directory.')}
             </p>
             <p className="notice">
-              Only approved, assigned, unblocked work can start. Queued does not mean running or delivered.
+              {t(
+                'Only approved, assigned, unblocked work can start. Queued does not mean running or delivered.'
+              )}
             </p>
           </div>
           {footer(`Dispatch ${harnessName(issue.harness)}`)}
@@ -560,7 +648,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'git')
     return (
-      <Modal title="Attach final commit" subtitle={issue.key} onClose={onClose}>
+      <Modal title={t('Attach final commit')} subtitle={issue.key} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -574,10 +662,11 @@ export function IssueForm({
         >
           <div className="form-body">
             <p className="notice">
-              The full commit must belong to the owner-bound repository and match the complete reviewed snapshot.
-              Changing the mapping invalidates delivery acceptance.
+              {t(
+                'The full commit must belong to the owner-bound repository and match the complete reviewed snapshot. Changing the mapping invalidates delivery acceptance.'
+              )}
             </p>
-            <Field label="GitHub commit URL">
+            <Field label={t('GitHub commit URL')}>
               <input
                 name="url"
                 type="url"
@@ -595,24 +684,25 @@ export function IssueForm({
 }
 
 function DeliveryEvidence({ packet }: { packet: IssueData }) {
+  const t = useText();
   const issue = packet.issue;
   return (
     <>
       <dl className="metadata">
-        <dt>Digest</dt>
+        <dt>{t('Digest')}</dt>
         <dd className="mono">{packet.deliveryDigest}</dd>
-        <dt>Snapshot SHA-256</dt>
-        <dd className="mono">{packet.snapshot?.hash ?? 'Unavailable'}</dd>
-        <dt>Initial lead</dt>
+        <dt>{t('Snapshot SHA-256')}</dt>
+        <dd className="mono">{packet.snapshot?.hash ?? t('Unavailable')}</dd>
+        <dt>{t('Initial lead')}</dt>
         <dd className="mono">{issue.initialReview}</dd>
-        <dt>Independent QA</dt>
+        <dt>{t('Independent QA')}</dt>
         <dd className="mono">{issue.qaReview}</dd>
-        <dt>Final lead</dt>
+        <dt>{t('Final lead')}</dt>
         <dd className="mono">{issue.finalReview}</dd>
-        <dt>{issue.artifactMode === 'artifact' ? 'Artifact mode' : 'Commit'}</dt>
+        <dt>{issue.artifactMode === 'artifact' ? t('Artifact mode') : t('Commit')}</dt>
         <dd>
           {issue.artifactMode === 'artifact' ? (
-            (issue.artifactReason ?? 'Reviewed artifact delivery')
+            (issue.artifactReason ?? t('Reviewed artifact delivery'))
           ) : packet.git ? (
             <a href={packet.git.url} target="_blank" rel="noreferrer">
               {packet.git.sha}
@@ -622,50 +712,75 @@ function DeliveryEvidence({ packet }: { packet: IssueData }) {
           )}
         </dd>
       </dl>
-      <h3>Worker handoff</h3>
+      <h3>{t('Worker handoff')}</h3>
       <div className="prose">{issue.candidate?.summary}</div>
       {issue.candidate?.integration ? (
         <details>
-          <summary>Accepted child manifest ({issue.candidate.integration.children.length} children)</summary>
+          <summary>
+            {t('Accepted child manifest (')}
+            {issue.candidate.integration.children.length}
+            {t(' children)')}
+          </summary>
           <dl className="metadata">
-            <dt>Plan scope hash</dt>
+            <dt>{t('Plan scope hash')}</dt>
             <dd className="mono">{issue.candidate.integration.planScopeHash}</dd>
-            <dt>Integration hash</dt>
+            <dt>{t('Integration hash')}</dt>
             <dd className="mono">{issue.candidate.integration.hash}</dd>
           </dl>
           {issue.candidate.integration.children.map((child) => (
             <section className="evidence-block" key={child.issueId}>
-              <a href={`/w/${issue.workspaceId}/issues/${child.issueId}`}>Open accepted child</a>
+              <a href={`/w/${issue.workspaceId}/issues/${child.issueId}`}>{t('Open accepted child')}</a>
               <dl className="metadata">
-                <dt>Candidate</dt>
+                <dt>{t('Candidate')}</dt>
                 <dd className="mono">{child.candidateId}</dd>
-                <dt>Snapshot</dt>
+                <dt>{t('Snapshot')}</dt>
                 <dd className="mono">{child.snapshotId}</dd>
-                <dt>Digest</dt>
+                <dt>{t('Digest')}</dt>
                 <dd className="mono">{child.digest}</dd>
               </dl>
               {child.commitUrl ? (
                 <a href={child.commitUrl} target="_blank" rel="noreferrer">
-                  Verified child commit
+                  {t('Verified child commit')}
                 </a>
               ) : null}
             </section>
           ))}
-          {issue.candidate.integration.excluded?.map(child => <section className="evidence-block" key={child.issueId}>
-            <a href={`/w/${issue.workspaceId}/issues/${child.issueId}`}>Excluded abandoned task</a>
-            <dl className="metadata"><dt>Human decision</dt><dd className="mono">{child.decisionId}</dd><dt>Decision hash</dt><dd className="mono">{child.decisionHash}</dd><dt>Replacement tasks</dt><dd>{child.replacementIds.length ? child.replacementIds.map(id => <a key={id} href={`/w/${issue.workspaceId}/issues/${id}`}>{id} </a>) : 'Excluded without a named replacement; approved criteria remain required'}</dd></dl>
-          </section>)}
+          {issue.candidate.integration.excluded?.map((child) => (
+            <section className="evidence-block" key={child.issueId}>
+              <a href={`/w/${issue.workspaceId}/issues/${child.issueId}`}>{t('Excluded abandoned task')}</a>
+              <dl className="metadata">
+                <dt>{t('Human decision')}</dt>
+                <dd className="mono">{child.decisionId}</dd>
+                <dt>{t('Decision hash')}</dt>
+                <dd className="mono">{child.decisionHash}</dd>
+                <dt>{t('Replacement tasks')}</dt>
+                <dd>
+                  {child.replacementIds.length
+                    ? child.replacementIds.map((id) => (
+                        <a key={id} href={`/w/${issue.workspaceId}/issues/${id}`}>
+                          {id}{' '}
+                        </a>
+                      ))
+                    : t('Excluded without a named replacement; approved criteria remain required')}
+                </dd>
+              </dl>
+            </section>
+          ))}
         </details>
       ) : null}
       <details>
-        <summary>Full manifest ({packet.snapshot?.files.length ?? 0} files)</summary>
+        <summary>
+          {t('Full manifest (')}
+          {packet.snapshot?.files.length ?? 0}
+          {t(' files)')}
+        </summary>
         <pre className="json">
           {packet.snapshot?.files.map((file) => `${file.mode} ${file.path}\n${file.hash}`).join('\n\n')}
         </pre>
       </details>
       {packet.closureBlocked.length ? (
         <>
-          <h3>Closure checks</h3>
+          <h3>{t('Closure checks')}</h3>
           <ul>
             {packet.closureBlocked.map((code) => (
               <li key={code}>{code}</li>
@@ -688,6 +803,8 @@ function GrantForm({
   onClose(): void;
   onSaved(): void;
 }) {
+  const dateText = useDateText();
+  const t = useText();
   const issue = packet.issue;
   const [action, setAction] = useState<Grant['action']>(
     issue.state === 'USER_ACCEPTANCE'
@@ -711,11 +828,14 @@ function GrantForm({
     let active = true;
     setPage(null);
     setError('');
-    command<{ grants: (Grant & { status: string })[]; total: number; nextOffset: number | null }>('grant_list', {
-      workspaceId: issue.workspaceId,
-      issueId: issue.id,
-      offset
-    })
+    command<{ grants: (Grant & { status: string })[]; total: number; nextOffset: number | null }>(
+      'grant_list',
+      {
+        workspaceId: issue.workspaceId,
+        issueId: issue.id,
+        offset
+      }
+    )
       .then((result) => {
         if (active) setPage(result);
       })
@@ -731,13 +851,16 @@ function GrantForm({
     onClose();
   };
   return (
-    <Modal title="Human authorization" subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
-      <nav className="tabs" aria-label="Authorization sections">
+    <Modal title={t('Human authorization')} subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
+      <nav className="tabs" aria-label={t('Authorization sections')}>
         <button aria-current={section === 'create' ? 'page' : undefined} onClick={() => setSection('create')}>
-          Create authorization
+          {t('Create authorization')}
         </button>
-        <button aria-current={section === 'history' ? 'page' : undefined} onClick={() => setSection('history')}>
-          Grant history
+        <button
+          aria-current={section === 'history' ? 'page' : undefined}
+          onClick={() => setSection('history')}
+        >
+          {t('Grant history')}
         </button>
       </nav>
       <div hidden={section !== 'create'}>
@@ -755,40 +878,43 @@ function GrantForm({
               expiresAt: new Date(openedAt + Number(data.get('minutes')) * 60000).toISOString(),
               maxUses: Number(data.get('uses')),
               reason: String(data.get('reason')),
-              ...(action === 'complete' ? { candidateId: issue.candidate?.id, digest: packet.deliveryDigest } : {})
+              ...(action === 'complete'
+                ? { candidateId: issue.candidate?.id, digest: packet.deliveryDigest }
+                : {})
             })
           }
         >
           <div className="form-body">
             <p className="notice">
-              Authorize one agent and one action on this exact issue. A parent hold also pauses descendant work; direct
-              child actions require separate grants. Scope changes invalidate unused authority.
+              {t(
+                'Authorize one agent and one action on this exact issue. A parent hold also pauses descendant work; direct child actions require separate grants. Scope changes invalidate unused authority.'
+              )}
             </p>
-            <h3>Authorized scope</h3>
-            <div className="prose">{issue.description || 'Draft scope is empty.'}</div>
+            <h3>{t('Authorized scope')}</h3>
+            <div className="prose">{issue.description || t('Draft scope is empty.')}</div>
             <dl className="metadata">
-              <dt>Scope revision</dt>
+              <dt>{t('Scope revision')}</dt>
               <dd>{issue.scopeRevision}</dd>
-              <dt>Design revision</dt>
-              <dd className="mono">{packet.design?.id ?? 'No design yet'}</dd>
-              <dt>Issue / child scope hash</dt>
+              <dt>{t('Design revision')}</dt>
+              <dd className="mono">{packet.design?.id ?? t('No design yet')}</dd>
+              <dt>{t('Issue / child scope hash')}</dt>
               <dd className="mono">{packet.authorizationScopeHash}</dd>
             </dl>
-            <Field label="Delegate to">
+            <Field label={t('Delegate to')}>
               <select name="granteeId" required defaultValue="">
                 <option disabled value="">
-                  Select a lead or PM
+                  {t('Select a lead or PM')}
                 </option>
                 {workspace.actors
                   .filter((actor) => ['lead', 'pm'].includes(actor.role))
                   .map((actor) => (
                     <option key={actor.id} value={actor.id}>
-                      {actor.name} ({actor.role})
+                      {actor.name} ({t(actor.role)})
                     </option>
                   ))}
               </select>
             </Field>
-            <Field label="Allowed action">
+            <Field label={t('Allowed action')}>
               <select
                 name="action"
                 value={action}
@@ -798,60 +924,69 @@ function GrantForm({
                   <option
                     key={value}
                     value={value}
-                    disabled={value === 'complete' && (issue.state !== 'USER_ACCEPTANCE' || !packet.deliveryDigest)}
+                    disabled={
+                      value === 'complete' && (issue.state !== 'USER_ACCEPTANCE' || !packet.deliveryDigest)
+                    }
                   >
                     {value === 'complete'
-                      ? 'Accept this snapshot and close when all guards pass'
-                      : value[0].toUpperCase() + value.slice(1)}
+                      ? t('Accept this snapshot and close when all guards pass')
+                      : t(value[0].toUpperCase() + value.slice(1))}
                   </option>
                 ))}
               </select>
             </Field>
-            <Field label="Expires after">
+            <Field label={t('Expires after')}>
               <select name="minutes" defaultValue="60">
-                <option value="15">15 minutes</option>
-                <option value="60">1 hour</option>
-                <option value="1440">1 day</option>
-                <option value="10080">7 days</option>
+                <option value="15">{t('15 minutes')}</option>
+                <option value="60">{t('1 hour')}</option>
+                <option value="1440">{t('1 day')}</option>
+                <option value="10080">{t('7 days')}</option>
               </select>
             </Field>
-            <Field label="Maximum uses">
+            <Field label={t('Maximum uses')}>
               <input name="uses" type="number" min="1" max="10" required defaultValue="1" />
             </Field>
             {action === 'complete' ? (
               <>
                 <p className="notice">
-                  This authorizes acceptance of the exact delivery below. The agent must still satisfy all closure
-                  checks before the grant is consumed.
+                  {t(
+                    'This authorizes acceptance of the exact delivery below. The agent must still satisfy all closure checks before the grant is consumed.'
+                  )}
                 </p>
                 <DeliveryEvidence packet={packet} />
               </>
             ) : null}
-            <Field label="Authorization reason">
+            <Field label={t('Authorization reason')}>
               <textarea name="reason" required rows={3} />
             </Field>
           </div>
           <footer className="form-footer">
             <button type="button" onClick={onClose}>
-              Cancel
+              {t('Cancel')}
             </button>
-            <button className="primary" type="submit" disabled={action === 'complete' && !packet.deliveryDigest}>
-              Create authorization
+            <button
+              className="primary"
+              type="submit"
+              disabled={action === 'complete' && !packet.deliveryDigest}
+            >
+              {t('Create authorization')}
             </button>
           </footer>
         </AsyncForm>
       </div>
       <section className="form-body" hidden={section !== 'history'}>
-        <h3>Recorded grants</h3>
+        <h3>{t('Recorded grants')}</h3>
         {error ? (
           <p className="error" role="alert">
-            {error}
+            {t(error)}
           </p>
         ) : null}
         {page ? (
           <>
             <p className="muted">
-              {page.total} grants · Showing {page.grants.length ? offset + 1 : 0}–{offset + page.grants.length}
+              {page.total}
+              {t(' grants · Showing ')}
+              {page.grants.length ? offset + 1 : 0}–{offset + page.grants.length}
             </p>
             {page.grants.map((grant) => (
               <section className="evidence-block" key={grant.id}>
@@ -860,9 +995,13 @@ function GrantForm({
                   {workspace.actors.find((actor) => actor.id === grant.granteeId)?.name ?? grant.granteeId}
                 </h3>
                 <p>
-                  <Status value={grant.status} /> · {grant.uses}/{grant.maxUses} uses
+                  <Status value={grant.status} /> · {grant.uses}/{grant.maxUses}
+                  {t(' uses')}
                 </p>
-                <p className="muted">Expires {dateText(grant.expiresAt)}</p>
+                <p className="muted">
+                  {t('Expires ')}
+                  {dateText(grant.expiresAt)}
+                </p>
                 <p>{grant.reason}</p>
                 <p className="mono">{grant.id}</p>
                 {grant.status === 'AVAILABLE' ? (
@@ -880,25 +1019,25 @@ function GrantForm({
                       })
                     }
                   >
-                    <Field label={`Revocation reason for ${grant.id}`}>
+                    <Field label={`${t('Revocation reason')} ${grant.id}`}>
                       <input name="reason" required />
                     </Field>
-                    <button type="submit">Revoke authorization</button>
+                    <button type="submit">{t('Revoke authorization')}</button>
                   </AsyncForm>
                 ) : null}
               </section>
             ))}
             <div className="action-group">
               <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 20))}>
-                Previous grants
+                {t('Previous grants')}
               </button>
               <button disabled={page.nextOffset === null} onClick={() => setOffset(page.nextOffset!)}>
-                Next grants
+                {t('Next grants')}
               </button>
             </div>
           </>
         ) : !error ? (
-          <p className="muted">Loading grants…</p>
+          <p className="muted">{t('Loading grants…')}</p>
         ) : null}
       </section>
     </Modal>

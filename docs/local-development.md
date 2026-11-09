@@ -1,6 +1,6 @@
 # Local development and MCP bridge
 
-Requires Node 24.9+ and Git. The current implementation is a development slice of the full specification, not the complete packaged plugin.
+Requires Node 24.9+ and Git. The current implementation is a development slice of the full specification. The approved desktop application package remains pending; this guide starts its existing browser/service entry.
 
 ## Start
 
@@ -25,11 +25,13 @@ Open the printed local URL and enter the one-use code. It expires after five min
 
 The workspace includes Backlog, Board, Reviews, Runs, and Settings. Register a project directory, create an unstarted requirement, write/submit its design, and review the exact revision/hash with a reason. A requirement's New task action creates its child using the required naming convention. Edit plan changes title/priority/dates without changing artifact approval. Assign worker and Configure QA select scoped identities, harnesses, and approved command profiles; Dispatch worker starts a real configured host run. The web view does not impersonate the product lead or independently pass QA. Those agent gates use their existing scoped connections.
 
+Settings starts with Language and display. Choose English or Simplified Chinese; the initial language follows the browser language. Ctrl/Command + mouse wheel changes application zoom by 5 percentage points within 50–200%. Plain wheel input scrolls normally. Use the labeled slider/buttons or Ctrl/Command + 0 to reset. Language and zoom are stored in `agiledev.ui.preferences.v1` and sync across same-origin tabs; blocked storage falls back to in-memory preferences. They never rewrite requirement text, evidence, IDs, commands, approvals, or agent permissions. Layout breakpoints use the available viewport after application zoom, including the space occupied by a scrollbar.
+
 Final user acceptance shows the delivery digest, complete sealed manifest, initial/QA/final review references, and applicable commit or artifact mode. Stale dialogs fail with input retained. Evidence and paginated history come from the same service; the browser never invents a successful transition. Human hold/resume/abandon/reopen and run interruption/reconciliation use the existing guarded commands. Operator confirmation cannot override a still-existing recorded process.
 
 Committed updates are polled every second. Disconnection leaves the last snapshot visible and pauses changes; reconnect reloads current state. Search/state filters and issue/run pages are bounded. Direct links use `/w/<workspace-id>/issues/<issue-id>` and still require a human session. User Markdown/HTML source is shown as text; no raw HTML is executed. Browser storage does not hold project records or credentials. Rich Markdown rendering, workspace gap management, batch decisions, native embedded surfaces, large-data performance, and release acceptance remain pending.
 
-The frontend uses React 19.3.1, Vite 8.3.6, and the same loopback service. `npm run build` builds both service and browser assets; `npm run check` checks both TypeScript projects. `npm test` builds the web assets before service/API tests. Browser validation used Playwright 1.65.0 with isolated headless Chrome 156.0.8078.80, plus the enabled in-app Browser Use through CUA for the 2026-11-09 execution-recovery pass. This does not install or change a user's harness configuration.
+The frontend uses React 19.3.1, Vite 8.3.6, and the same loopback service. `npm run build` builds both service and browser assets; `npm run check` checks both TypeScript projects. `npm test` builds the web assets before service/API tests. Earlier browser validation used Playwright 1.65.0 with isolated headless Chrome 156.0.8078.80. The 2026-11-09 recovery and display-setting checks use the enabled in-app Browser Use through CUA, including actual input, reloads, cross-tab updates, and responsive viewport checks. This does not install or change a user's harness configuration.
 
 Edit scope changes the requirement description, creates a new scope-bound draft design for a parent, and invalidates affected child evidence. Submit and review that new revision explicitly. Older revisions without captured scope cannot authorize new work or current acceptance; write and approve a current revision. Historical completed records remain readable. Scope editing or adding a child while a requirement is on hold does not resume it.
 

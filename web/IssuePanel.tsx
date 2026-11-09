@@ -1,5 +1,7 @@
+import { useDateText } from './Preferences';
+import { useText } from './Preferences';
 import { useEffect, useRef, useState } from 'react';
-import { command, dateText, errorText, formKey, harnessName, mutation, stateLabel } from './api';
+import { command, errorText, formKey, harnessName, mutation, stateLabel } from './api';
 import type { IssueData, WorkspaceData } from './api';
 import { AsyncForm, Empty, Icon, JsonView, Status } from './components';
 import type { IssueDialog } from './IssueForms';
@@ -19,6 +21,8 @@ export function IssuePanel({
   onRefresh(): void;
   onBack(): void;
 }) {
+  const dateText = useDateText();
+  const t = useText();
   const [tab, setTab] = useState(packet.design?.status === 'IN_REVIEW' ? 'Design' : 'Overview');
   const [revision, setRevision] = useState('');
   const [evidence, setEvidence] = useState<unknown>(null);
@@ -32,8 +36,9 @@ export function IssuePanel({
   const design = packet.designHistory.find((d) => d.id === revision) ?? packet.design;
   const historical = !!design && design.id !== packet.design?.id;
   const actorName = (id?: string | null) =>
-    workspace.actors.find((actor) => actor.id === id)?.name ?? (id ? id.slice(0, 8) : 'Unassigned');
-  const dialog = (kind: IssueDialog['kind'], extra: Partial<IssueDialog> = {}) => onDialog({ kind, packet, ...extra });
+    workspace.actors.find((actor) => actor.id === id)?.name ?? (id ? id.slice(0, 8) : t('Unassigned'));
+  const dialog = (kind: IssueDialog['kind'], extra: Partial<IssueDialog> = {}) =>
+    onDialog({ kind, packet, ...extra });
   const call = (operation: string, input: object, label: string, primary = false) => (
     <AsyncForm
       className="inline-form"
@@ -49,7 +54,7 @@ export function IssuePanel({
       }
     >
       <button type="submit" className={primary ? 'primary' : ''} disabled={!online}>
-        {label}
+        {t(label)}
       </button>
     </AsyncForm>
   );
@@ -93,7 +98,12 @@ export function IssuePanel({
     try {
       setEvidence(
         kind === 'check'
-          ? (await command<{ check: unknown }>('qa_check_get', { workspaceId: issue.workspaceId, checkId: id })).check
+          ? (
+              await command<{ check: unknown }>('qa_check_get', {
+                workspaceId: issue.workspaceId,
+                checkId: id
+              })
+            ).check
           : (
               await command<{ evidence: unknown }>('evidence_get', {
                 workspaceId: issue.workspaceId,
@@ -119,10 +129,10 @@ export function IssuePanel({
       packet.planning.children.inScope > 0 &&
       packet.planning.children.done === packet.planning.children.inScope);
   return (
-    <aside className="inspector" aria-label="Issue details">
+    <aside className="inspector" aria-label={t('Issue details')}>
       <button className="mobile-back text-button" onClick={onBack}>
         <Icon name="back" />
-        Back to workspace
+        {t('Back to workspace')}
       </button>
       <header className="issue-heading">
         <div className="issue-kicker">
@@ -133,7 +143,7 @@ export function IssuePanel({
           />
         </div>
         <h2>{issue.title}</h2>
-        <nav className="tabs" aria-label="Issue sections">
+        <nav className="tabs" aria-label={t('Issue sections')}>
           {['Overview', 'Design', 'Evidence', 'Activity'].map((name) => (
             <button
               key={name}
@@ -143,7 +153,7 @@ export function IssuePanel({
                 setEvidence(null);
               }}
             >
-              {name}
+              {t(name)}
             </button>
           ))}
         </nav>
@@ -151,14 +161,14 @@ export function IssuePanel({
       <div className="inspector-body">
         {error ? (
           <p className="error" role="alert">
-            {error}
+            {t(error)}
           </p>
         ) : null}
         {tab === 'Overview' ? (
           <>
-            <h3>Requirement description</h3>
-            <div className="prose">{issue.description || 'No description yet.'}</div>
-            <h3>Acceptance criteria</h3>
+            <h3>{t('Requirement description')}</h3>
+            <div className="prose">{issue.description || t('No description yet.')}</div>
+            <h3>{t('Acceptance criteria')}</h3>
             {issue.criteria.length ? (
               <ul>
                 {issue.criteria.map((c) => (
@@ -166,56 +176,73 @@ export function IssuePanel({
                 ))}
               </ul>
             ) : (
-              <p className="muted">No criteria mapped yet.</p>
+              <p className="muted">{t('No criteria mapped yet.')}</p>
             )}
             <dl className="metadata">
-              <dt>Lifecycle</dt>
+              <dt>{t('Lifecycle')}</dt>
               <dd>{issue.state}</dd>
-              <dt>Worker</dt>
+              <dt>{t('Worker')}</dt>
               <dd>{actorName(issue.assignee)}</dd>
-              <dt>Harness</dt>
+              <dt>{t('Harness')}</dt>
               <dd>{harnessName(issue.harness)}</dd>
-              <dt>QA reviewer</dt>
+              <dt>{t('QA reviewer')}</dt>
               <dd>{actorName(issue.qaAssignee)}</dd>
-              <dt>QA harness</dt>
+              <dt>{t('QA harness')}</dt>
               <dd>{harnessName(issue.qaHarness)}</dd>
-              <dt>Planned start</dt>
-              <dd>{issue.plannedStart ?? 'Unscheduled'}</dd>
-              <dt>Due date</dt>
-              <dd>{issue.dueDate ?? 'Unscheduled'}</dd>
-              <dt>Iteration</dt>
-              <dd>{issue.iteration ?? 'Not set'}</dd>
-              <dt>Estimate</dt>
+              <dt>{t('Planned start')}</dt>
+              <dd>{issue.plannedStart ?? t('Unscheduled')}</dd>
+              <dt>{t('Due date')}</dt>
+              <dd>{issue.dueDate ?? t('Unscheduled')}</dd>
+              <dt>{t('Iteration')}</dt>
+              <dd>{issue.iteration ?? t('Not set')}</dd>
+              <dt>{t('Estimate')}</dt>
               <dd>
                 {issue.estimate
-                  ? `${issue.estimate.value} ${issue.estimate.unit} · ${issue.estimate.confidence} confidence`
-                  : 'Not estimated'}
+                  ? `${issue.estimate.value} ${t(issue.estimate.unit)} · ${t(issue.estimate.confidence)} ${t('confidence')}`
+                  : t('Not estimated')}
               </dd>
-              <dt>Delivery mode</dt>
-              <dd>{issue.artifactMode ?? 'Not declared'}</dd>
-              <dt>Issue version</dt>
+              <dt>{t('Delivery mode')}</dt>
+              <dd>{issue.artifactMode ?? t('Not declared')}</dd>
+              <dt>{t('Issue version')}</dt>
               <dd>{issue.version}</dd>
-              <dt>Scope revision</dt>
+              <dt>{t('Scope revision')}</dt>
               <dd>{issue.scopeRevision}</dd>
-              {issue.scope ? <><dt>Delivery scope</dt><dd><Status value={issue.scope.status} />{issue.scope.decisionId ? <span> · Human decision recorded</span> : null}</dd></> : null}
+              {issue.scope ? (
+                <>
+                  <dt>{t('Delivery scope')}</dt>
+                  <dd>
+                    <Status value={issue.scope.status} />
+                    {issue.scope.decisionId ? <span>{t(' · Human decision recorded')}</span> : null}
+                  </dd>
+                </>
+              ) : null}
             </dl>
-            <section className="gap-panel" aria-label="Issue gaps">
+            <section className="gap-panel" aria-label={t('Issue gaps')}>
               {packet.planning ? (
                 <>
-                  <h3>Requirement plan</h3>
+                  <h3>{t('Requirement plan')}</h3>
                   <p>
                     <Status value={packet.planning.status} /> · {packet.planning.children.done}/
-                    {packet.planning.children.inScope} in-scope tasks implemented · {packet.planning.children.excluded} excluded · {packet.planning.children.abandoned} unresolved abandoned · {packet.planning.children.staleExclusions} stale exclusions
+                    {packet.planning.children.inScope}
+                    {t(' in-scope tasks implemented · ')}
+                    {packet.planning.children.excluded}
+                    {t(' excluded · ')}
+                    {packet.planning.children.abandoned}
+                    {t(' unresolved abandoned · ')}
+                    {packet.planning.children.staleExclusions}
+                    {t(' stale exclusions')}
                   </p>
                   <p className="muted">
-                    Task counts describe delivery status. Parent integration and user acceptance remain separate gates.
+                    {t(
+                      'Task counts describe delivery status. Parent integration and user acceptance remain separate gates.'
+                    )}
                   </p>
                   <button disabled={!online} onClick={() => dialog('decomposition')}>
-                    Review decomposition
+                    {t('Review decomposition')}
                   </button>
                 </>
               ) : null}
-              <h3>Gaps to resolve</h3>
+              <h3>{t('Gaps to resolve')}</h3>
               {packet.readiness.blocking.length ? (
                 <ul>
                   {packet.readiness.blocking.map((code) => (
@@ -225,12 +252,12 @@ export function IssuePanel({
                   ))}
                 </ul>
               ) : (
-                <p className="muted">No implementation-readiness blockers.</p>
+                <p className="muted">{t('No implementation-readiness blockers.')}</p>
               )}
-              {!issue.plannedStart ? <p className="muted">SCHEDULE_UNSET · optional</p> : null}
+              {!issue.plannedStart ? <p className="muted">{t('SCHEDULE_UNSET · optional')}</p> : null}
               {packet.closureBlocked.length ? (
                 <>
-                  <h4>Closure blockers</h4>
+                  <h4>{t('Closure blockers')}</h4>
                   <ul>
                     {packet.closureBlocked.map((code) => (
                       <li key={code}>
@@ -243,7 +270,8 @@ export function IssuePanel({
             </section>
             {packet.parent ? (
               <p className="muted">
-                Parent: {packet.parent.key} · {packet.parent.title}
+                {t('Parent: ')}
+                {packet.parent.key} · {packet.parent.title}
               </p>
             ) : null}
           </>
@@ -252,11 +280,15 @@ export function IssuePanel({
           <>
             {packet.designHistory.length > 1 ? (
               <label className="field">
-                <span>Design revision</span>
-                <select value={revision || packet.design?.id} onChange={(event) => setRevision(event.target.value)}>
+                <span>{t('Design revision')}</span>
+                <select
+                  value={revision || packet.design?.id}
+                  onChange={(event) => setRevision(event.target.value)}
+                >
                   {packet.designHistory.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.id === packet.design?.id ? 'Current' : 'Historical'} · {item.hash.slice(0, 10)}
+                      {item.id === packet.design?.id ? t('Current') : t('Historical')} ·{' '}
+                      {item.hash.slice(0, 10)}
                     </option>
                   ))}
                 </select>
@@ -264,39 +296,43 @@ export function IssuePanel({
             ) : null}
             {design ? (
               <>
-                <h3>{historical ? 'Historical design' : 'Proposed design'}</h3>
+                <h3>{historical ? t('Historical design') : t('Proposed design')}</h3>
                 <div className="prose">{design.content}</div>
                 <details className="scope-details">
-                  <summary>Captured requirement scope</summary>
-                  <div className="prose">{design.requirementDescription ?? 'Not captured by this older revision.'}</div>
+                  <summary>{t('Captured requirement scope')}</summary>
+                  <div className="prose">
+                    {design.requirementDescription ?? t('Not captured by this older revision.')}
+                  </div>
                 </details>
-                <h3>Acceptance criteria</h3>
+                <h3>{t('Acceptance criteria')}</h3>
                 <ul>
                   {design.criteria.map((c) => (
                     <li key={c}>{c}</li>
                   ))}
                 </ul>
                 <dl className="metadata">
-                  <dt>Revision</dt>
-                  <dd>{historical ? 'Historical' : `r${packet.revision}`}</dd>
-                  <dt>Design state</dt>
+                  <dt>{t('Revision')}</dt>
+                  <dd>{historical ? t('Historical') : `r${packet.revision}`}</dd>
+                  <dt>{t('Design state')}</dt>
                   <dd>
                     <Status value={design.status} />
                   </dd>
                   <dt>SHA-256</dt>
                   <dd className="mono">{design.hash}</dd>
-                  <dt>Revision ID</dt>
+                  <dt>{t('Revision ID')}</dt>
                   <dd className="mono">{design.id}</dd>
                 </dl>
                 {historical ? (
                   <p className="notice">
-                    Historical evidence is retained. Decisions below apply to the current revision only.
+                    {t(
+                      'Historical evidence is retained. Decisions below apply to the current revision only.'
+                    )}
                   </p>
                 ) : null}
               </>
             ) : (
-              <Empty title="Design not written">
-                <p>Create a design before asking for human approval.</p>
+              <Empty title={t('Design not written')}>
+                <p>{t('Create a design before asking for human approval.')}</p>
               </Empty>
             )}
           </>
@@ -305,17 +341,17 @@ export function IssuePanel({
           <>
             {packet.snapshot ? (
               <dl className="metadata">
-                <dt>Sealed files</dt>
+                <dt>{t('Sealed files')}</dt>
                 <dd>{packet.snapshot.files.length}</dd>
-                <dt>Snapshot hash</dt>
+                <dt>{t('Snapshot hash')}</dt>
                 <dd className="mono">{packet.snapshot.hash}</dd>
               </dl>
             ) : (
-              <p className="muted">No sealed delivery snapshot.</p>
+              <p className="muted">{t('No sealed delivery snapshot.')}</p>
             )}
             {packet.git ? (
               <section className="evidence-block">
-                <h3>Final commit</h3>
+                <h3>{t('Final commit')}</h3>
                 <a className="mono" href={packet.git.url} target="_blank" rel="noreferrer">
                   {packet.git.sha}
                 </a>
@@ -323,40 +359,57 @@ export function IssuePanel({
                   <Status value={packet.git.state} />
                 </p>
                 {packet.git.errorCode ? <p className="error">{packet.git.errorCode}</p> : null}
-                <p className="muted">Verified: {dateText(packet.git.verifiedAt)}</p>
+                <p className="muted">
+                  {t('Verified: ')}
+                  {dateText(packet.git.verifiedAt)}
+                </p>
               </section>
             ) : null}
-            <h3>Captured checks</h3>
+            <h3>{t('Captured checks')}</h3>
             {packet.checks.length ? (
               packet.checks.map((check) => (
-                <button className="evidence-row" key={check.id} onClick={() => void openEvidence('check', check.id)}>
+                <button
+                  className="evidence-row"
+                  key={check.id}
+                  onClick={() => void openEvidence('check', check.id)}
+                >
                   <span>
-                    Check · {check.criteria.join(', ')}
+                    {t('Check · ')}
+                    {check.criteria.join(', ')}
                     <small>
-                      Exit {check.exitCode ?? 'not recorded'} · {check.id.slice(0, 8)}
+                      {t('Exit ')}
+                      {check.exitCode ?? t('not recorded')} · {check.id.slice(0, 8)}
                     </small>
                   </span>
                   <Status value={check.state} />
                 </button>
               ))
             ) : (
-              <p className="muted">No captured checks yet.</p>
+              <p className="muted">{t('No captured checks yet.')}</p>
             )}
-            <h3>Evidence records</h3>
+            <h3>{t('Evidence records')}</h3>
             {packet.evidence.map((item) => (
-              <button className="evidence-row" key={item.id} onClick={() => void openEvidence(item.kind, item.id)}>
+              <button
+                className="evidence-row"
+                key={item.id}
+                onClick={() => void openEvidence(item.kind, item.id)}
+              >
                 <span>
                   {item.kind.replaceAll('_', ' ')}
                   <small>
                     {item.id.slice(0, 8)} · {dateText(item.createdAt)}
                   </small>
                 </span>
-                {item.state || item.verdict ? <Status value={item.state ?? item.verdict!} /> : <Icon name="chevron" />}
+                {item.state || item.verdict ? (
+                  <Status value={item.state ?? item.verdict!} />
+                ) : (
+                  <Icon name="chevron" />
+                )}
               </button>
             ))}
             {evidence ? (
               <>
-                <h3>Recorded evidence</h3>
+                <h3>{t('Recorded evidence')}</h3>
                 <JsonView value={evidence} />
               </>
             ) : null}
@@ -364,17 +417,19 @@ export function IssuePanel({
         ) : null}
         {tab === 'Activity' ? (
           <>
-            <h3>Audit history</h3>
+            <h3>{t('Audit history')}</h3>
             <ol className="activity">
               {history.map((item) => (
                 <li key={item.sequence}>
                   <strong>{item.operation.replaceAll('_', ' ')}</strong>
                   <p>{item.actorName}</p>
                   <small>
-                    {dateText(item.at)} · event {item.sequence}
+                    {dateText(item.at)}
+                    {t(' · event ')}
+                    {item.sequence}
                   </small>
                   <details>
-                    <summary>Recorded changes</summary>
+                    <summary>{t('Recorded changes')}</summary>
                     <JsonView value={item.data} />
                   </details>
                 </li>
@@ -382,30 +437,34 @@ export function IssuePanel({
             </ol>
             {nextAfter !== null ? (
               <button disabled={loading} onClick={() => void loadHistory()}>
-                {loading ? 'Loading…' : 'Load more activity'}
+                {loading ? t('Loading…') : t('Load more activity')}
               </button>
             ) : (
-              <p className="muted">All available activity loaded.</p>
+              <p className="muted">{t('All available activity loaded.')}</p>
             )}
           </>
         ) : null}
       </div>
       <footer className="inspector-actions">
         <div className="action-group">
-          {!historical && packet.design?.status === 'IN_REVIEW' && !['DONE', 'ABANDONED'].includes(root.state) ? (
+          {!historical &&
+          packet.design?.status === 'IN_REVIEW' &&
+          !['DONE', 'ABANDONED'].includes(root.state) ? (
             <button className="primary" disabled={!online} onClick={() => dialog('design-review')}>
-              Review design
+              {t('Review design')}
             </button>
           ) : null}
           {!historical && !['DONE', 'ABANDONED'].includes(root.state) ? (
             <button disabled={!online} onClick={() => dialog('design')}>
-              {packet.design ? 'Edit design' : 'Write design'}
+              {packet.design ? t('Edit design') : t('Write design')}
             </button>
           ) : null}
-          {!historical && packet.design?.status === 'DRAFT' ? rootCall('design_submit', 'Request design review') : null}
+          {!historical && packet.design?.status === 'DRAFT'
+            ? rootCall('design_submit', 'Request design review')
+            : null}
           {issue.state === 'USER_ACCEPTANCE' && packet.deliveryDigest ? (
             <button className="primary" disabled={!online} onClick={() => dialog('delivery')}>
-              Review delivery
+              {t('Review delivery')}
             </button>
           ) : null}
           {issue.state === 'USER_ACCEPTANCE' && issue.acceptedDigest
@@ -414,62 +473,74 @@ export function IssuePanel({
         </div>
         {issue.state === 'LEAD_REVIEW' ? (
           <p className="muted">
-            Waiting for the product lead's {issue.stage === 'FINAL' ? 'final' : 'initial'} review through its scoped
-            agent connection.
+            {t("Waiting for the product lead's ")}
+            {issue.stage === 'FINAL' ? t('final') : t('initial')}
+            {t(' review through its scoped agent connection.')}
           </p>
         ) : null}
         <details className="more-actions">
-          <summary>Plan and lifecycle actions</summary>
+          <summary>{t('Plan and lifecycle actions')}</summary>
           <div className="action-group">
             <button disabled={!online} onClick={() => dialog('grants')}>
-              Manage authorization
+              {t('Manage authorization')}
             </button>
-            {packet.executionRecovery.required && issue.state !== 'DONE' ? <button disabled={!online} onClick={() => dialog('execution-recovery')}>Reconcile unbound execution</button> : null}
-            {issue.parentId && (issue.state === 'ABANDONED' || issue.scopeDecisionId && issue.scope?.action !== 'RESTORE') ? <button disabled={!online} onClick={() => dialog('scope-decision')}>Review delivery scope</button> : null}
+            {packet.executionRecovery.required && issue.state !== 'DONE' ? (
+              <button disabled={!online} onClick={() => dialog('execution-recovery')}>
+                {t('Reconcile unbound execution')}
+              </button>
+            ) : null}
+            {issue.parentId &&
+            (issue.state === 'ABANDONED' || (issue.scopeDecisionId && issue.scope?.action !== 'RESTORE')) ? (
+              <button disabled={!online} onClick={() => dialog('scope-decision')}>
+                {t('Review delivery scope')}
+              </button>
+            ) : null}
             {packet.planning && tab !== 'Overview' ? (
               <button disabled={!online} onClick={() => dialog('decomposition')}>
-                Review decomposition
+                {t('Review decomposition')}
               </button>
             ) : null}
             {!issue.parentId && !terminal ? (
               <button disabled={!online} onClick={() => dialog('create', { parent: issue })}>
-                New task
+                {t('New task')}
               </button>
             ) : null}
             {!terminal ? (
               <button disabled={!online} onClick={() => dialog('plan')}>
-                Edit plan
+                {t('Edit plan')}
               </button>
             ) : null}
             {!terminal ? (
               <button disabled={!online} onClick={() => dialog('scope')}>
-                Edit scope
+                {t('Edit scope')}
               </button>
             ) : null}
             {canAssign ? (
               <button disabled={!online} onClick={() => dialog('assignment')}>
-                Assign worker
+                {t('Assign worker')}
               </button>
             ) : null}
             {canAssign && packet.readiness.ready ? (
               <button disabled={!online} onClick={() => dialog('dispatch')}>
-                Dispatch worker
+                {t('Dispatch worker')}
               </button>
             ) : null}
             {!['DONE', 'ABANDONED', 'USER_ACCEPTANCE'].includes(issue.state) &&
             !(issue.state === 'LEAD_REVIEW' && issue.stage === 'FINAL') ? (
               <button disabled={!online} onClick={() => dialog('qa')}>
-                Configure QA
+                {t('Configure QA')}
               </button>
             ) : null}
             {issue.candidate?.snapshotId &&
             issue.artifactMode === 'git' &&
             ['LEAD_REVIEW', 'QA_TEST', 'USER_ACCEPTANCE'].includes(issue.state) ? (
               <button disabled={!online} onClick={() => dialog('git')}>
-                Attach final commit
+                {t('Attach final commit')}
               </button>
             ) : null}
-            {packet.git && ['UNAVAILABLE', 'FAILED'].includes(packet.git.state) && issue.state === 'USER_ACCEPTANCE'
+            {packet.git &&
+            ['UNAVAILABLE', 'FAILED'].includes(packet.git.state) &&
+            issue.state === 'USER_ACCEPTANCE'
               ? call('git_retry', { submissionId: packet.git.id }, 'Retry verification')
               : null}
             {(terminal
@@ -477,11 +548,15 @@ export function IssuePanel({
               : issue.state === 'ON_HOLD'
                 ? (['resume', 'abandon'] as const)
                 : (['hold', 'abandon'] as const)
-            ).filter(action => action !== 'reopen' || !issue.scopeDecisionId || issue.scope?.action === 'RESTORE').map((action) => (
-              <button disabled={!online} key={action} onClick={() => dialog('transition', { action })}>
-                {action[0].toUpperCase() + action.slice(1)}
-              </button>
-            ))}
+            )
+              .filter(
+                (action) => action !== 'reopen' || !issue.scopeDecisionId || issue.scope?.action === 'RESTORE'
+              )
+              .map((action) => (
+                <button disabled={!online} key={action} onClick={() => dialog('transition', { action })}>
+                  {t(action[0].toUpperCase() + action.slice(1))}
+                </button>
+              ))}
           </div>
         </details>
       </footer>

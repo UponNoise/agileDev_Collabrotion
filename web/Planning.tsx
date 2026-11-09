@@ -1,15 +1,30 @@
+import { useText } from './Preferences';
 import { useEffect, useState } from 'react';
 import { command, dateText, errorText, formKey, lines, mutation } from './api';
 import type { IssueData, PlanData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
 
-export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; onClose(): void; onSaved(): void }) {
+export function PlanningForm({
+  packet,
+  onClose,
+  onSaved
+}: {
+  packet: IssueData;
+  onClose(): void;
+  onSaved(): void;
+}) {
+  const t = useText();
   const root = packet.parent ?? packet.issue;
   const [data, setData] = useState<PlanData | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
     let active = true;
-    command<PlanData>('plan_get', { workspaceId: root.workspaceId, issueId: root.id, view: 'full', limit: 100 })
+    command<PlanData>('plan_get', {
+      workspaceId: root.workspaceId,
+      issueId: root.id,
+      view: 'full',
+      limit: 100
+    })
       .then((result) => {
         if (active) setData(result);
       })
@@ -21,13 +36,13 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
     };
   }, [root.id, root.workspaceId]);
   return (
-    <Modal title="Requirement decomposition" subtitle={`${root.key} · ${root.title}`} onClose={onClose}>
+    <Modal title={t('Requirement decomposition')} subtitle={`${root.key} · ${root.title}`} onClose={onClose}>
       {error ? (
         <p className="error" role="alert">
-          {error}
+          {t(error)}
         </p>
       ) : null}
-      {!data && !error ? <p className="muted">Loading the current plan and task versions…</p> : null}
+      {!data && !error ? <p className="muted">{t('Loading the current plan and task versions…')}</p> : null}
       {data ? (
         <AsyncForm
           onDone={() => {
@@ -59,7 +74,10 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
               integrationCriteria: form.getAll('integration').map(String),
               overlapReasons: Object.fromEntries(
                 data.coverage.criteria
-                  .map((row) => [row.criterionId, String(form.get(`overlap:${row.criterionId}`) ?? '').trim()])
+                  .map((row) => [
+                    row.criterionId,
+                    String(form.get(`overlap:${row.criterionId}`) ?? '').trim()
+                  ])
                   .filter(([, reason]) => reason)
               )
             })
@@ -67,13 +85,18 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
         >
           <div className="form-body">
             <p className="notice">
-              Save an incomplete draft or activate complete coverage of the approved design. These actions do not start
-              model runs. Create tasks in the workspace first; all existing tasks stay in the plan.
+              {t(
+                'Save an incomplete draft or activate complete coverage of the approved design. These actions do not start model runs. Create tasks in the workspace first; all existing tasks stay in the plan.'
+              )}
             </p>
             <p>
-              <Status value={data.coverage.status} /> · {data.coverage.children.done}/{data.coverage.children.inScope}{' '}
-              in-scope tasks implemented · {data.coverage.children.excluded} excluded · {data.coverage.children.abandoned} unresolved abandoned
-              {' '}· {data.coverage.children.staleExclusions} stale exclusions
+              <Status value={data.coverage.status} /> · {data.coverage.children.done}/
+              {data.coverage.children.inScope} {t('in-scope tasks implemented · ')}
+              {data.coverage.children.excluded}
+              {t(' excluded · ')}
+              {data.coverage.children.abandoned}
+              {t(' unresolved abandoned')} · {data.coverage.children.staleExclusions}
+              {t(' stale exclusions')}
             </p>
             {data.coverage.blocking.length ? (
               <ul>
@@ -84,11 +107,13 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
                 ))}
               </ul>
             ) : (
-              <p className="muted">Current criterion coverage is ready. Integration acceptance remains separate.</p>
+              <p className="muted">
+                {t('Current criterion coverage is ready. Integration acceptance remains separate.')}
+              </p>
             )}
-            <h3>Task ownership and dependencies</h3>
+            <h3>{t('Task ownership and dependencies')}</h3>
             {!data.children.length ? (
-              <p className="muted">Add at least one task before activating the decomposition.</p>
+              <p className="muted">{t('Add at least one task before activating the decomposition.')}</p>
             ) : null}
             {data.children.map((child) => {
               const editable = child.state === 'NOT_STARTED' || child.state.endsWith('REJECTED');
@@ -105,10 +130,12 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
                   <summary>
                     {child.key} · {child.titleSuffix}
                   </summary>
-                  <p className="prose">{child.description || 'Draft scope is empty. Use Edit scope on the task.'}</p>
+                  <p className="prose">
+                    {child.description || t('Draft scope is empty. Use Edit scope on the task.')}
+                  </p>
                   <Field
                     label={`Criteria for ${child.key}`}
-                    hint="One parent criterion ID per line. Active and completed scope is read-only."
+                    hint={t('One parent criterion ID per line. Active and completed scope is read-only.')}
                   >
                     <textarea
                       name={`criteria:${child.id}`}
@@ -119,7 +146,7 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
                   </Field>
                   <Field
                     label={`Dependencies for ${child.key}`}
-                    hint="Select tasks that must finish first. Use Ctrl or Command to select multiple."
+                    hint={t('Select tasks that must finish first. Use Ctrl or Command to select multiple.')}
                   >
                     <select
                       name={`dependencies:${child.id}`}
@@ -138,11 +165,14 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
                 </details>
               );
             })}
-            <h3>Integration-only criteria and intentional overlap</h3>
+            <h3>{t('Integration-only criteria and intentional overlap')}</h3>
             {data.coverage.criteria.map((row) => (
               <section className="evidence-block" key={row.criterionId}>
                 <h3>{row.criterionId}</h3>
-                <p className="muted">Current task owners: {row.tasks.map((task) => task.key).join(', ') || 'None'}</p>
+                <p className="muted">
+                  {t('Current task owners: ')}
+                  {row.tasks.map((task) => task.key).join(', ') || t('None')}
+                </p>
                 <label className="check-row">
                   <input
                     type="checkbox"
@@ -150,11 +180,11 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
                     value={row.criterionId}
                     defaultChecked={data.plan?.integrationCriteria.includes(row.criterionId)}
                   />
-                  <span>Explicit integration coverage</span>
+                  <span>{t('Explicit integration coverage')}</span>
                 </label>
                 <Field
                   label={`Overlap reason for ${row.criterionId}`}
-                  hint="Required if more than one task or integration check owns this criterion."
+                  hint={t('Required if more than one task or integration check owns this criterion.')}
                 >
                   <input
                     name={`overlap:${row.criterionId}`}
@@ -165,7 +195,11 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
             ))}
             {data.history.length ? (
               <details>
-                <summary>Previous plan revisions ({data.history.length} recent)</summary>
+                <summary>
+                  {t('Previous plan revisions (')}
+                  {data.history.length}
+                  {t(' recent)')}
+                </summary>
                 {data.history.map((plan) => (
                   <p key={plan.id}>
                     <Status value={plan.mode} /> · {dateText(plan.createdAt)}
@@ -175,20 +209,25 @@ export function PlanningForm({ packet, onClose, onSaved }: { packet: IssueData; 
                 ))}
               </details>
             ) : null}
-            <Field label="Planning reason">
-              <textarea name="reason" rows={3} required placeholder="Explain this decomposition or amendment" />
+            <Field label={t('Planning reason')}>
+              <textarea
+                name="reason"
+                rows={3}
+                required
+                placeholder={t('Explain this decomposition or amendment')}
+              />
             </Field>
           </div>
           <footer className="form-footer">
             <button type="button" onClick={onClose}>
-              Cancel
+              {t('Cancel')}
             </button>
             <span className="footer-actions">
               <button type="submit" name="mode" value="DRAFT">
-                Save draft
+                {t('Save draft')}
               </button>
               <button type="submit" name="mode" value="READY" className="primary">
-                Activate plan
+                {t('Activate plan')}
               </button>
             </span>
           </footer>
