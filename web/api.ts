@@ -38,6 +38,7 @@ export interface IssueData {
   git: GitSubmission | null;
   closureBlocked: string[];
   readiness: { ready: boolean; blocking: string[] };
+  executionRecovery: { required: boolean; fence: number; candidateId: string | null };
   planning: {
     planId: string | null;
     ready: boolean;

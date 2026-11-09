@@ -424,6 +424,7 @@ export function IssuePanel({
             <button disabled={!online} onClick={() => dialog('grants')}>
               Manage authorization
             </button>
+            {packet.executionRecovery.required && issue.state !== 'DONE' ? <button disabled={!online} onClick={() => dialog('execution-recovery')}>Reconcile unbound execution</button> : null}
             {issue.parentId && (issue.state === 'ABANDONED' || issue.scopeDecisionId && issue.scope?.action !== 'RESTORE') ? <button disabled={!online} onClick={() => dialog('scope-decision')}>Review delivery scope</button> : null}
             {packet.planning && tab !== 'Overview' ? (
               <button disabled={!online} onClick={() => dialog('decomposition')}>

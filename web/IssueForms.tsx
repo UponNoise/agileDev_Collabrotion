@@ -22,6 +22,7 @@ export type IssueDialog = {
     | 'decomposition'
     | 'scope'
     | 'scope-decision'
+    | 'execution-recovery'
     | 'plan';
   packet?: IssueData;
   parent?: Issue;
@@ -131,6 +132,20 @@ export function IssueForm({
   if (!packet || !issue || !root) return null;
   if (dialog.kind === 'decomposition') return <PlanningForm packet={packet} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'scope-decision') return <ScopeReview packet={packet} onClose={onClose} onSaved={onSaved} />;
+  if (dialog.kind === 'execution-recovery') return (
+    <Modal title="Reconcile unbound execution" subtitle={`${issue.key} · ${issue.titleSuffix}`} onClose={onClose}>
+      <AsyncForm onDone={done} onSave={data => mutation('work_reconcile',{ ...base,...formKey(data),fence: packet.executionRecovery.fence,candidateId: packet.executionRecovery.candidateId,confirmStopped: data.has('confirmStopped'),reason: String(data.get('reason')) })}>
+        <div className="form-body">
+          <p className="notice">This older work has no managed execution binding. Inspect and stop its external worker before confirming. Recovery clears current ownership and reviews, keeps historical evidence, and requires a fresh isolated dispatch. An effective hold remains.</p>
+          <p className="prose">{issue.description}</p>
+          <dl className="metadata"><dt>Lifecycle</dt><dd>{issue.state}</dd><dt>Lease fence</dt><dd>{packet.executionRecovery.fence}</dd><dt>Lease owner</dt><dd className="mono">{issue.lease?.actorId ?? 'No current lease'}</dd><dt>Candidate</dt><dd className="mono">{packet.executionRecovery.candidateId ?? 'No current candidate'}</dd><dt>Prior handoff</dt><dd className="prose">{issue.candidate?.summary ?? 'None recorded'}</dd></dl>
+          <Field label="I verified the old external worker has stopped" hint="The service has no provider identity for this legacy work. This records your confirmation rather than an automatic process check."><input type="checkbox" name="confirmStopped" required /></Field>
+          <Field label="Recovery reason"><textarea name="reason" rows={4} required /></Field>
+        </div>
+        {footer('Confirm stopped and reset')}
+      </AsyncForm>
+    </Modal>
+  );
   if (dialog.kind === 'grants')
     return <GrantForm packet={packet} workspace={workspace} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'scope')

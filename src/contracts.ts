@@ -46,7 +46,7 @@ export interface Issue {
   finalReview: string | null; savedState: { state: State; stage: Issue['stage'] } | null;
   qaAssignee?: string; qaHarness?: Harness; checkProfileIds?: string[];
   artifactMode?: 'git' | 'artifact'; artifactReason?: string; acceptedDigest?: string; gitSubmissionId?: string;
-  aggregate?: boolean; planId?: string; scopeDecisionId?: string; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null;
+  aggregate?: boolean; planId?: string; scopeDecisionId?: string; unmanagedExecution?: boolean; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null;
 }
 export class DomainError extends Error {
   constructor(public code: string, message: string, public statusCode = 409, public details?: unknown) { super(message); }
@@ -91,6 +91,7 @@ export const schemas = {
   work_claim: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive() }).strict(),
   work_heartbeat: z.object({ ...change, fence: z.number().int().positive() }).strict(),
   work_submit: z.object({ ...change, fence: z.number().int().positive(), summary: text, files: z.array(z.string().min(1).max(500)).min(1).max(32) }).strict(),
+  work_reconcile: z.object({ ...change,fence: z.number().int().nonnegative(),candidateId: id.nullable().default(null),confirmStopped: z.literal(true),reason: text }).strict(),
   review_submit: z.object({ ...change, candidateId: id, verdict: z.enum(['PASS', 'FAIL']), reason: text }).strict(),
   issue_transition: z.object({ ...change, action: z.enum(['hold', 'resume', 'abandon', 'reopen']), reason: text, grantId: id.optional() }).strict(),
   work_dispatch: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive() }).strict(),
@@ -113,4 +114,4 @@ export const schemas = {
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile'].includes(k)) as Operation[];

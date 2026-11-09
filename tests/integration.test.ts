@@ -302,6 +302,7 @@ test(
       );
       const catalogue = await bridge.listTools();
       assert.equal(catalogue.tools.some(t => t.name === 'scope_decide'),false);
+      assert.equal(catalogue.tools.some(t => t.name === 'work_reconcile'),false);
       assert.equal(catalogue.tools.find(t => t.name === 'scope_get')?.annotations?.readOnlyHint,true);
       const packet = (
         await bridge.callTool({ name: 'integration_get', arguments: { workspaceId: workspace.id, issueId: parent.id } })

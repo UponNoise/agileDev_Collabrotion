@@ -4,10 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Actor, DomainError, Issue } from '../src/contracts.js';
-import { Store } from '../src/store.js';
+import { Actor, DomainError, Issue, Run, agentOperations } from '../src/contracts.js';
+import { Store, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, bindFixtureImplementation } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
@@ -34,8 +34,14 @@ function setup() {
   };
   const task = () => { const issue = run(pm.actor, 'issue_create', { parentId: parent.id, expectedParentVersion: current(parent.id).version, title: '[Feature] Binding: select active root -> scoped commands', description: 'Implement explicit root binding', criteria: ['AC-1'] }).issue as Issue; applyFixturePlan(workflow,pm.actor,parent.id); return issue; };
   const assign = (i: Issue) => change(pm.actor, 'issue_assign', i.id, { actorId: worker.actor.id, harness: 'codex' });
-  const claim = (i: Issue) => change(worker.actor, 'work_claim', i.id, { designId: current(parent.id).designId ?? 'unapproved', scopeRevision: current(i.id).scopeRevision });
-  return { root, store, human, lead, pm, worker, qa, run, call, parent, current, change, approve, task, assign, claim, advance: () => { clock += 300001; } };
+  const executions = new Map<string,ReturnType<typeof bindFixtureImplementation>>();
+  const claim = (i: Issue) => {
+    if (!workflow.readiness(current(i.id)).ready) return change(worker.actor,'work_claim',i.id,{ designId: current(parent.id).designId ?? 'unapproved',scopeRevision: current(i.id).scopeRevision });
+    const binding = bindFixtureImplementation(workflow,pm.actor,worker.actor,i.id); cleanup.push(binding.dispose); executions.set(i.id,binding);
+    const result = change(binding.actor,'work_claim',i.id,{ designId: current(parent.id).designId,scopeRevision: current(i.id).scopeRevision }); binding.activate(); return result;
+  };
+  const execution = (id: string) => executions.get(id)!;
+  return { root, store, human, lead, pm, worker, qa, run, call, parent, current, change, approve, task, assign, claim,execution,advance: () => { clock += 300001; } };
 }
 function rejects(code: string) { return (error: unknown) => error instanceof DomainError && error.code === code; }
 
@@ -127,10 +133,10 @@ test('design approval and explicit scope acknowledgment gate implementation', ()
   f.approve();
   assert.throws(() => f.change(f.worker.actor, 'work_claim', task.id, { designId: 'stale', scopeRevision: 1 }), rejects('APPROVAL_STALE'));
   const claim = f.claim(task).issue;
-  assert.equal(claim.state, 'IN_PROGRESS'); assert.equal(claim.lease.actorId, f.worker.actor.id);
+  assert.equal(claim.state, 'IN_PROGRESS'); assert.equal(claim.lease.actorId, f.execution(task.id).actor.id);
   assert.equal(f.current(f.parent.id).state, 'IN_PROGRESS');
   f.advance();
-  assert.throws(() => f.change(f.worker.actor, 'work_heartbeat', task.id, { fence: claim.fence }), rejects('LEASE_EXPIRED'));
+  assert.throws(() => f.change(f.execution(task.id).actor, 'work_heartbeat', task.id, { fence: claim.fence }), rejects('LEASE_EXPIRED'));
 });
 
 test('replayed mutations return the original result; changed payload and stale version fail', () => {
@@ -152,34 +158,86 @@ test('dependency cycles and cross-workspace references are rejected atomically',
   assert.throws(() => f.store.workspace(f.worker.actor, randomUUID()), rejects('SCOPE_DENIED'));
 });
 
-test('submitted artifacts are hashed and changing them invalidates review', () => {
+test('bound submissions are hashed but unsealed or live producer output cannot enter review', () => {
   const f = setup(); const task = f.task(); f.approve(); f.assign(task); f.claim(task);
-  writeFileSync(join(f.root, 'output.txt'), 'version one');
-  f.change(f.worker.actor, 'work_submit', task.id, { fence: f.current(task.id).fence, summary: 'Implemented test output', files: ['output.txt'] });
+  writeFileSync(join(f.execution(task.id).root, 'output.txt'), 'version one');
+  f.change(f.execution(task.id).actor, 'work_submit', task.id, { fence: f.current(task.id).fence, summary: 'Implemented unit fixture output', files: ['output.txt'] });
   const submitted = f.current(task.id);
   assert.equal(submitted.stage, 'PRE_QA'); assert.equal(submitted.candidate!.files.length, 1);
-  writeFileSync(join(f.root, 'output.txt'), 'version two');
-  assert.throws(() => f.change(f.lead.actor, 'review_submit', task.id, { candidateId: submitted.candidate!.id, verdict: 'PASS', reason: 'reviewed' }), rejects('EVIDENCE_STALE'));
+  assert.equal(submitted.candidate!.files[0]!.hash,hash('version one'));
+  writeFileSync(join(f.execution(task.id).root, 'output.txt'), 'version two');
+  assert.throws(() => f.change(f.lead.actor, 'review_submit', task.id, { candidateId: submitted.candidate!.id, verdict: 'PASS', reason: 'reviewed' }), rejects('RUN_STILL_LIVE'));
 });
 
-test('lead review hands off to QA and narrative approval cannot fake independent tests', () => {
-  const f = setup(); const task = f.task(); f.approve(); f.assign(task); f.claim(task);
-  writeFileSync(join(f.root, 'output.txt'), 'implementation');
-  f.change(f.worker.actor, 'work_submit', task.id, { fence: f.current(task.id).fence, summary: 'Implemented test output', files: ['output.txt'] });
-  const candidateId = f.current(task.id).candidate!.id;
-  assert.throws(() => f.change(f.worker.actor, 'review_submit', task.id, { candidateId, verdict: 'PASS', reason: 'self pass' }), rejects('REVIEW_INDEPENDENCE_REQUIRED'));
-  f.change(f.lead.actor, 'review_submit', task.id, { candidateId, verdict: 'PASS', reason: 'Initial review' });
-  assert.equal(f.current(task.id).state, 'QA_TEST');
-  assert.throws(() => f.change(f.qa.actor, 'review_submit', task.id, { candidateId, verdict: 'PASS', reason: 'Unassigned reviewer' }), rejects('SCOPE_DENIED'));
-  assert.throws(() => f.change(f.qa.actor, 'review_submit', task.id, { candidateId, verdict: 'FAIL', reason: 'Unassigned narrative failure' }), rejects('SCOPE_DENIED'));
-  assert.equal(f.current(task.id).state, 'QA_TEST');
+test('historical unbound candidates stay readable but cannot advance a lead or QA gate', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task);
+  const issue = f.current(task.id); const candidateId = randomUUID();
+  issue.state = 'LEAD_REVIEW'; issue.stage = 'PRE_QA'; issue.candidate = { id: candidateId,workerId: f.worker.actor.id,sessionId: f.worker.actor.sessionId,designId: f.current(f.parent.id).designId!,files: [],hash: hash('legacy'),summary: 'Seeded legacy unit fixture, not completed execution evidence' }; f.store.put('issue',issue,issue.workspaceId);
+  assert.equal(f.run(f.lead.actor,'issue_get',{ issueId: task.id }).executionRecovery.required,true);
+  assert.throws(() => f.change(f.lead.actor,'review_submit',task.id,{ candidateId,verdict: 'PASS',reason: 'Cannot approve legacy output' }),rejects('EXECUTION_BINDING_REQUIRED'));
+  assert.equal(f.current(task.id).state,'LEAD_REVIEW');
+});
+
+test('human legacy recovery is exact, idempotent, retains history and clears ownership without inventing execution evidence', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task);
+  const issue = f.current(task.id); issue.state = 'IN_PROGRESS'; issue.fence = 7; issue.lease = { actorId: f.worker.actor.id,fence: 7,expiresAt: Date.now()+300000 };
+  f.store.put('issue',issue,issue.workspaceId);
+  assert.equal(agentOperations.includes('work_reconcile'),false);
+  assert.throws(() => f.change(f.worker.actor,'work_heartbeat',task.id,{ fence: 7 }),rejects('EXECUTION_BINDING_REQUIRED'));
+  assert.throws(() => f.change(f.worker.actor,'work_submit',task.id,{ fence: 7,summary: 'Unbound source checkout',files: ['never-read.txt'] }),rejects('EXECUTION_BINDING_REQUIRED'));
+  const request = { workspaceId: task.workspaceId,issueId: task.id,expectedVersion: issue.version,fence: 7,candidateId: null,confirmStopped: true,reason: 'Automated human fixture confirms the untracked worker stopped',idempotencyKey: randomUUID() };
+  assert.throws(() => f.call(f.pm.actor,'work_reconcile',request),rejects('ROLE_DENIED'));
+  assert.throws(() => f.call(f.human.actor,'work_reconcile',{ ...request,confirmStopped: false }),rejects('INVALID_INPUT'));
+  assert.throws(() => f.call(f.human.actor,'work_reconcile',{ ...request,fence: 6 }),rejects('EVIDENCE_STALE'));
+  assert.deepEqual(f.current(task.id),issue);
+  assert.equal(f.call(f.human.actor,'work_reconcile',request).issue.state,'NOT_STARTED');
+  assert.equal(f.call(f.human.actor,'work_reconcile',request).replayed,true);
+  const restored = f.current(task.id);
+  assert.equal(restored.fence,8); assert.equal(restored.lease,null); assert.equal(restored.unmanagedExecution,undefined);
+  assert.equal(f.run(f.human.actor,'issue_get',{ issueId: task.id }).executionRecovery.required,false);
+  assert.equal(f.run(f.human.actor,'event_list').events.filter((e: any) => e.operation === 'work_reconcile').length,1);
+  assert.equal(f.store.list('run',task.workspaceId).length,0);
+  assert.equal(f.claim(task).issue.state,'IN_PROGRESS');
+});
+
+test('legacy holds and scope resets preserve the recovery requirement; old candidates remain immutable evidence', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task);
+  const issue = f.current(task.id); const candidate = { id: randomUUID(),workerId: f.worker.actor.id,sessionId: f.worker.actor.sessionId,designId: f.current(f.parent.id).designId!,files: [],hash: hash('legacy-test'),summary: 'Explicit legacy fixture candidate' };
+  issue.state = 'LEAD_REVIEW'; issue.stage = 'PRE_QA'; issue.candidate = candidate; f.store.put('issue',issue,issue.workspaceId);
+  f.change(f.human.actor,'issue_transition',task.id,{ action: 'hold',reason: 'Pause legacy work' });
+  assert.equal(f.current(task.id).unmanagedExecution,true);
+  f.change(f.lead.actor,'design_set',f.parent.id,{ content: 'Revised test design',criteria: ['AC-1'] });
+  assert.equal(f.current(task.id).candidate,null);
+  assert.equal(f.run(f.human.actor,'issue_get',{ issueId: task.id }).executionRecovery.required,true);
+  f.change(f.human.actor,'work_reconcile',task.id,{ fence: f.current(task.id).fence,candidateId: null,confirmStopped: true,reason: 'Old fixture worker was explicitly stopped' });
+  assert.equal(f.current(task.id).state,'ON_HOLD');
+  assert.equal(f.current(task.id).savedState?.state,'NOT_STARTED');
+  assert.equal(f.run(f.human.actor,'issue_get',{ issueId: task.id }).executionRecovery.required,false);
+  assert.deepEqual(f.store.get<any>('candidate',candidate.id),candidate);
+});
+
+test('legacy reset cannot clear uncertain managed execution or rewrite completion and preserves abandonment', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task);
+  const issue = f.current(task.id); issue.unmanagedExecution = true; f.store.put('issue',issue,issue.workspaceId);
+  const run: Run = { id: randomUUID(),issueId: task.id,workspaceId: task.workspaceId,actorId: f.worker.actor.id,harness: 'codex',state: 'UNCERTAIN',version: 1,createdAt: new Date().toISOString(),designId: f.current(f.parent.id).designId!,scopeRevision: issue.scopeRevision };
+  f.store.put('run',run,issue.workspaceId);
+  const reset = () => f.change(f.human.actor,'work_reconcile',task.id,{ fence: issue.fence,confirmStopped: true,reason: 'Negative fixture recovery' });
+  assert.throws(reset,rejects('RUN_EXISTS'));
+  run.state = 'CANCELLED'; f.store.put('run',run,issue.workspaceId);
+  const terminal = f.current(task.id); terminal.state = 'DONE'; f.store.put('issue',terminal,terminal.workspaceId);
+  assert.throws(reset,rejects('ISSUE_CLOSED'));
+  terminal.state = 'ABANDONED'; f.store.put('issue',terminal,terminal.workspaceId);
+  reset();
+  assert.equal(f.current(task.id).state,'ABANDONED');
+  assert.equal(f.current(task.id).unmanagedExecution,undefined);
 });
 
 test('ancestor holds stop submission and material design changes invalidate active ownership', () => {
   const f = setup(); const task = f.task(); f.approve(); f.assign(task); f.claim(task);
   f.change(f.human.actor, 'issue_transition', f.parent.id, { action: 'hold', reason: 'Pause requirement' });
-  assert.throws(() => f.change(f.worker.actor, 'work_heartbeat', task.id, { fence: f.current(task.id).fence }), rejects('NOT_READY'));
+  assert.throws(() => f.change(f.execution(task.id).actor, 'work_heartbeat', task.id, { fence: f.current(task.id).fence }), rejects('NOT_READY'));
   f.change(f.human.actor, 'issue_transition', f.parent.id, { action: 'resume', reason: 'Continue requirement' });
+  f.execution(task.id).stop(f.human.actor);
   f.change(f.lead.actor, 'design_set', f.parent.id, { content: 'Changed requirement', criteria: ['AC-2'] });
   assert.equal(f.current(task.id).lease, null); assert.equal(f.current(task.id).state, 'NOT_STARTED');
 });
@@ -205,6 +263,8 @@ test('agent credentials persist as hashes and are excluded from receipts and eve
 test('editing requirement scope creates a fresh draft and invalidates old child approval and ownership', () => {
   const f = setup(); const task = f.task(); f.approve(); f.assign(task); f.claim(task);
   const previous = f.store.get<any>('design',f.current(f.parent.id).designId!);
+  assert.throws(() => f.change(f.pm.actor,'issue_update',f.parent.id,{ description: 'Must reconcile active execution first' }),rejects('RUN_EXISTS'));
+  f.execution(task.id).stop(f.human.actor);
   f.change(f.pm.actor,'issue_update',f.parent.id,{ description: 'Changed root requirement scope' });
   const current = f.current(f.parent.id); const design = f.store.get<any>('design',current.designId!);
   assert.notEqual(design.id,previous.id); assert.notEqual(design.hash,previous.hash); assert.equal(design.status,'DRAFT');

@@ -9,6 +9,10 @@ import { inScopeChildren, scopeState } from './scope.js';
 
 export function candidateSnapshot(store: Store, issue: Issue) {
   if (!issue.candidate?.snapshotId) throw new DomainError('SNAPSHOT_REQUIRED','Seal the complete delivery before QA or acceptance');
+  if (!issue.candidate.runId || issue.unmanagedExecution) throw new DomainError('EXECUTION_BINDING_REQUIRED','Legacy unbound candidates cannot enter QA or delivery acceptance');
+  const producer = store.get<Run>('run',issue.candidate.runId);
+  const actor = store.get<Actor>('actor',issue.candidate.workerId);
+  if (producer.state !== 'SUCCEEDED' || producer.kind === 'qa' || !producer.providerSessionId || producer.issueId !== issue.id || producer.workspaceId !== issue.workspaceId || producer.executionActorId !== actor.id || producer.executionRoot !== issue.candidate.executionRoot || producer.actorId !== actor.principalId || actor.runId !== producer.id || actor.sessionId !== issue.candidate.sessionId) throw new DomainError('EXECUTION_EVIDENCE_REQUIRED','Reviewed artifacts require a successfully stopped bound implementation producer');
   const snapshot = store.get<Snapshot>('snapshot',issue.candidate.snapshotId);
   if (snapshot.issueId !== issue.id || snapshot.candidateId !== issue.candidate.id || snapshot.workspaceId !== issue.workspaceId) throw new DomainError('EVIDENCE_STALE','Snapshot does not belong to this candidate');
   verifySnapshot(snapshot); return snapshot;

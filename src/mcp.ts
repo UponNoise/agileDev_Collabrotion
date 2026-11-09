@@ -19,7 +19,7 @@ const descriptions: Record<string, string> = {
   grant_list: 'List this agent\'s human-issued grants for the exact issue, including scope, expiry, uses and current status. This cannot issue or revoke authority.',
   issue_transition: 'Perform a guarded lifecycle action. Lead/PM must supply a current human grantId for this exact issue and action; authority does not extend to children.',
   work_dispatch: 'Queue a ready assignment for the selected harness. Queued is not running or completed.',
-  work_claim: 'Acknowledge the current scope/design and atomically claim assigned work.',
+  work_claim: 'Acknowledge exact approved scope and claim only this coordinator-reserved STARTING implementation run. Requires a run-scoped actor and prepared isolated directory; a logical worker must ask PM to dispatch.',
   work_submit: 'Hash real workspace artifacts and submit them for initial lead review.',
   review_submit: 'Record an initial or final lead review of the exact sealed candidate. This cannot advance the independent QA gate.',
   qa_check_run: 'Queue a human-approved fixed test command against this QA copy of the sealed snapshot. Test sources must be under .qa.',

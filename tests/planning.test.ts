@@ -2,9 +2,12 @@ import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { Actor, DomainError, Issue, Plan } from '../src/contracts.js';
 import { Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
+import { bindFixtureImplementation } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -14,6 +17,8 @@ function fixture(criteria = ['A', 'B', 'ASSEMBLY']) {
   const store = new Store(':memory:');
   cleanup.push(() => store.close());
   const flow = new Workflow(store);
+  const source = mkdtempSync(join(tmpdir(),'agiledev-plan-unit-'));
+  cleanup.push(() => rmSync(source,{ recursive: true,force: true }));
   const human = store.bootstrap().actor;
   const call = (actor: Actor, op: string, input: object) =>
     flow.execute(actor, op, {
@@ -21,7 +26,7 @@ function fixture(criteria = ['A', 'B', 'ASSEMBLY']) {
       ...(['plan_get', 'issue_get'].includes(op) ? {} : { idempotencyKey: randomUUID() })
     }) as any;
   const workspace = call(human, 'workspace_register', {
-    root: tmpdir(),
+    root: source,
     name: 'Planning fixture',
     prefix: 'PLAN'
   }).workspace;
@@ -221,12 +226,14 @@ test('scope edits stale admission while metadata preserves coverage and unrelate
   const a = plan.taskIds.client;
   const b = plan.taskIds.service;
   f.change('issue_assign', a, { actorId: f.worker.id, harness: 'codex' });
-  f.change('work_claim', a, { designId: f.current().designId, scopeRevision: f.current(a).scopeRevision }, f.worker);
+  const execution = bindFixtureImplementation(f.flow,f.pm,f.worker,a); cleanup.push(execution.dispose);
+  f.change('work_claim', a, { designId: f.current().designId, scopeRevision: f.current(a).scopeRevision }, execution.actor);
+  execution.activate();
   f.change('issue_update', b, { description: 'Refined unstarted B scope under the same approved criterion' }, f.pm);
   assert.equal(f.run('plan_get', { issueId: f.root.id }).coverage.status, 'STALE');
   assert.ok(f.flow.readiness(f.current(a)).blocking.includes('PLAN_STALE'));
   assert.equal(f.flow.readiness(f.current(a), false).ready, true);
-  f.change('work_heartbeat', a, { fence: f.current(a).fence }, f.worker);
+  f.change('work_heartbeat', a, { fence: f.current(a).fence }, execution.actor);
   f.change('issue_assign', b, { actorId: f.worker.id, harness: 'dsh' });
   assert.throws(
     () => f.change('work_dispatch', b, { designId: f.current().designId, scopeRevision: f.current(b).scopeRevision }),

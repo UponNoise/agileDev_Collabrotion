@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
 import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, liveRunStates, schemas } from './contracts.js';
@@ -119,7 +119,7 @@ export class Workflow {
       const git = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
       const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
       const coverage = isAggregate(s,root) ? planCoverage(s,root) : null;
-      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue), deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
+      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue),executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
     }
     if (op === 'evidence_get') {
       const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
@@ -149,8 +149,12 @@ export class Workflow {
     return { ...issue, title, titleSuffix: issue.title, url: `/w/${issue.workspaceId}/issues/${issue.id}`,...(scope ? { scope: { status: scope.status,decisionId: scope.decision?.id ?? null,action: scope.decision?.action ?? null,blocking: scope.blocking } } : {}) };
   }
   private nextActions(actor: Actor, i: Issue): string[] {
-    if (i.state === 'NOT_STARTED' && actor.role === 'worker' && !this.readiness(i).blocking.length) return ['work_claim'];
-    if (i.state === 'IN_PROGRESS' && i.lease?.actorId === actor.id) return ['work_heartbeat', 'work_submit'];
+    if (this.unmanagedWork(i)) return actor.role === 'human' && i.state !== 'DONE' ? ['work_reconcile'] : [];
+    if ((['NOT_STARTED','LEAD_REJECTED','QA_REJECTED','USER_REJECTED'].includes(i.state) || this.integrationIdle(i)) && !this.readiness(i).blocking.length) {
+      if (['human','lead','pm'].includes(actor.role) && !this.store.list<Run>('run',i.workspaceId).some(r => r.issueId === i.id && (liveRunStates as readonly string[]).includes(r.state))) return ['work_dispatch'];
+      if (actor.role === 'worker') { try { this.implementationRun(actor,i,['STARTING']); return ['work_claim']; } catch {} }
+    }
+    if (i.state === 'IN_PROGRESS' && i.lease?.actorId === actor.id && i.lease.expiresAt > this.now()) { try { const run = this.implementationRun(actor,i,['RUNNING']); return ['work_heartbeat',...(run.providerSessionId ? ['work_submit'] : [])]; } catch { return []; } }
     if (i.state === 'LEAD_REVIEW' && actor.role === 'lead') return ['review_submit'];
     if (i.state === 'QA_TEST' && actor.role === 'qa') return ['qa_check_run', 'qa_check_get', 'qa_report_submit'];
     if (i.state === 'USER_ACCEPTANCE' && ['human','lead','pm'].includes(actor.role)) return [...(actor.role === 'human' ? ['delivery_decide'] : []),'git_submit','git_retry','delivery_complete'];
@@ -162,6 +166,8 @@ export class Workflow {
   }
   readiness(i: Issue, admission = true) {
     const blocking: string[] = [];
+    if (this.unmanagedWork(i)) blocking.push('UNMANAGED_EXECUTION');
+    if (i.lease && i.lease.expiresAt <= this.now()) blocking.push('LEASE_EXPIRED');
     const workspace = this.store.get<Workspace>('workspace',i.workspaceId); const root = i.parentId ? this.store.get<Issue>('issue',i.parentId) : i;
     if (i.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) blocking.push('DESIGN_BINDING_STALE');
     if (this.design(i)?.status !== 'APPROVED') blocking.push('DESIGN_APPROVAL_REQUIRED');
@@ -180,6 +186,7 @@ export class Workflow {
   }
   private save(actor: Actor, op: string, i: Issue, data: unknown = {}) {
     const before = this.store.get<Issue>('issue', i.id);
+    if (op !== 'work_reconcile' && (this.unmanagedWork(before) || this.unmanagedWork(i))) i.unmanagedExecution = true;
     i.version++;
     this.store.put('issue', i, i.workspaceId);
     const changes = Object.fromEntries(Object.entries(i).filter(([key, value]) => canonical(value) !== canonical((before as any)[key])).map(([key, value]) => [key, { before: (before as any)[key], after: value }]));
@@ -187,9 +194,28 @@ export class Workflow {
     return { issue: this.display(i) };
   }
   private invalidate(i: Issue) {
+    if (i.candidate) this.store.put('candidate',i.candidate,i.workspaceId);
     i.candidate = null; i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.stage = null; i.acceptedDigest = undefined; i.gitSubmissionId = undefined;
     if (i.state === 'ON_HOLD') i.savedState = { state: 'NOT_STARTED',stage: null };
     else if (!['NOT_STARTED', 'ABANDONED'].includes(i.state)) i.state = 'NOT_STARTED';
+  }
+  private unmanagedWork(issue: Issue) {
+    if (issue.unmanagedExecution || issue.candidate && !issue.candidate.runId) return true;
+    if (!issue.lease) return false;
+    try { return !this.store.get<Actor>('actor',issue.lease.actorId).runId; }
+    catch { return true; }
+  }
+  private implementationRun(actor: Actor, issue: Issue, allowed: Run['state'][]) {
+    if (!actor.runId || !actor.principalId) throw new DomainError('EXECUTION_BINDING_REQUIRED','Ask the lead or PM to dispatch a managed isolated execution; logical worker credentials cannot claim or submit');
+    const run = this.store.get<Run>('run',actor.runId);
+    if (run.workspaceId !== issue.workspaceId || run.issueId !== issue.id || run.kind === 'qa' || run.executionActorId !== actor.id || run.actorId !== actor.principalId || issue.assignee !== actor.principalId || run.harness !== issue.harness || !run.coordinatorId) throw new DomainError('EXECUTION_BINDING_REQUIRED','Worker identity, assignment and harness must match this reserved implementation run');
+    if (!allowed.includes(run.state) || run.scopeRevision !== issue.scopeRevision || run.designId !== this.design(issue)?.id) throw new DomainError('RUN_UNCERTAIN','The execution is not active at the current approved scope');
+    if (this.store.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && r.id !== run.id && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile competing live execution before acquiring or extending ownership');
+    if (!run.executionRoot || !isAbsolute(run.executionRoot) || !existsSync(run.executionRoot) || !statSync(run.executionRoot).isDirectory()) throw new DomainError('EXECUTION_ROOT_INVALID','A prepared isolated execution directory is required');
+    const source = realpathSync(this.store.get<Workspace>('workspace',issue.workspaceId).root);
+    const root = realpathSync(run.executionRoot); const rel = relative(source,root);
+    if (root !== run.executionRoot || !rel || !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)) throw new DomainError('EXECUTION_ROOT_INVALID','The execution directory must retain its prepared identity outside the source workspace');
+    return run;
   }
   private draftDesign(actor: Actor, issue: Issue, content: string, criteria: string[]) {
     const workspace = this.store.get<Workspace>('workspace',issue.workspaceId);
@@ -523,6 +549,19 @@ export class Workflow {
     version(i, a.expectedVersion);
     if (op === 'plan_apply') return this.applyPlan(actor,i,a);
     if (op === 'scope_decide') return this.decideScope(actor,i,a);
+    if (op === 'work_reconcile') {
+      requireRole(actor,'human');
+      if (i.state === 'DONE') throw new DomainError('ISSUE_CLOSED','Explicitly reopen historical delivery before reconciling it');
+      if (!this.unmanagedWork(i)) throw new DomainError('LEGACY_EXECUTION_REQUIRED','Use run reconciliation for managed executions; this issue has no unbound work');
+      if (i.fence !== a.fence || (i.candidate?.id ?? null) !== a.candidateId) throw new DomainError('EVIDENCE_STALE','Confirm the exact legacy lease and candidate shown in the recovery packet');
+      this.assertParentMutable(i);
+      if (s.list<Run>('run',w.id).some(r => r.issueId === i.id && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile known active or uncertain execution before clearing unbound work');
+      const oldLease = i.lease;
+      this.invalidate(i); i.fence++; i.unmanagedExecution = undefined;
+      const result = this.save(actor,op,i,{ reason: a.reason,externalStopConfirmedBy: actor.id,oldFence: a.fence,oldLease,candidateId: a.candidateId });
+      this.childScopeChanged(actor,i);
+      return result;
+    }
     if (op === 'grant_create') {
       requireRole(actor,'human');
       const grantee = s.get<Actor>('actor',a.granteeId);
@@ -689,13 +728,11 @@ export class Workflow {
       if (this.design(i)?.id !== a.designId || i.scopeRevision !== a.scopeRevision) throw new DomainError('APPROVAL_STALE', 'Acknowledge the current design and task scope');
       if (op === 'work_dispatch') {
         if (s.list<Run>('run', w.id).some(r => r.issueId === i.id && (liveRunStates as readonly string[]).includes(r.state))) throw new DomainError('RUN_EXISTS', 'A live or uncertain dispatch already owns this task');
-        const run: Run = { id: randomUUID(), issueId: i.id, workspaceId: w.id, actorId: i.assignee!, harness: i.harness!, state: 'QUEUED', version: 1, createdAt: new Date(this.now()).toISOString(), designId: a.designId, scopeRevision: a.scopeRevision };
+        const run: Run = { id: randomUUID(), issueId: i.id, workspaceId: w.id, actorId: i.assignee!, harness: i.harness!,kind: 'implementation',state: 'QUEUED', version: 1, createdAt: new Date(this.now()).toISOString(), designId: a.designId, scopeRevision: a.scopeRevision };
         s.put('run', run, w.id); this.save(actor, op, i, { runId: run.id });
         return { run, issue: this.display(i) };
       }
-      const live = s.list<Run>('run', w.id).find(r => r.issueId === i.id && (liveRunStates as readonly string[]).includes(r.state));
-      if (live && (live.id !== actor.runId || live.executionActorId !== actor.id || !live.executionRoot)) throw new DomainError('RUN_EXISTS', 'A managed execution already owns this task');
-      if (i.assignee !== (actor.principalId ?? actor.id)) throw new DomainError('ROLE_DENIED', 'Only the assigned worker can claim this task', 403);
+      this.implementationRun(actor,i,['STARTING']);
       i.fence++; i.lease = { actorId: actor.id, expiresAt: this.now() + 300000, fence: i.fence }; i.state = 'IN_PROGRESS'; i.stage = null;
       if (i.parentId) { const parent = s.get<Issue>('issue', i.parentId); if (parent.state === 'NOT_STARTED') { parent.state = 'IN_PROGRESS'; this.save(actor, 'child_started', parent); } }
       return this.save(actor, op, i);
@@ -704,11 +741,11 @@ export class Workflow {
       requireRole(actor, 'worker');
       if (i.state !== 'IN_PROGRESS' || i.lease?.actorId !== actor.id || i.lease.fence !== a.fence) throw new DomainError('STALE_FENCE', 'Run does not own the current implementation lease');
       if (i.lease.expiresAt <= this.now()) throw new DomainError('LEASE_EXPIRED', 'Reconcile execution before renewing or submitting');
+      const run = this.implementationRun(actor,i,['RUNNING']);
       if (this.readiness(i,false).blocking.length) throw new DomainError('NOT_READY', 'Work is blocked by a changed requirement or hold');
       if (op === 'work_heartbeat') { i.lease.expiresAt = this.now() + 300000; return this.save(actor, op, i); }
-      const run = actor.runId ? s.get<Run>('run', actor.runId) : null;
-      if (run && (run.state !== 'RUNNING' || run.executionActorId !== actor.id || !run.executionRoot || run.scopeRevision !== i.scopeRevision || run.designId !== this.design(i)?.id)) throw new DomainError('RUN_UNCERTAIN', 'Run is not the current active execution');
-      const root = run?.executionRoot ?? w.root;
+      if (!run.providerSessionId) throw new DomainError('PROVIDER_ID_REQUIRED','Submission requires the actual provider session identity');
+      const root = run.executionRoot!;
       const files = (a.files as string[]).map(path => {
         if (isAbsolute(path)) throw new DomainError('PATH_DENIED', 'Use workspace-relative artifact paths', 403);
         const file = inside(root, path);
@@ -716,7 +753,7 @@ export class Workflow {
         return { path: relative(root, file), hash: hash(readFileSync(file)) };
       });
       const integration = integrationManifest(s,i);
-      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary, ...(run ? { executionRoot: root, runId: run.id, baseSha: run.baseSha } : {}),...(integration ? { integration } : {}) };
+      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary,executionRoot: root,runId: run.id,baseSha: run.baseSha,...(integration ? { integration } : {}) };
       s.put('candidate',i.candidate,w.id);
       i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.state = 'LEAD_REVIEW'; i.stage = 'PRE_QA';
       i.gitSubmissionId = undefined; i.acceptedDigest = undefined;
@@ -724,9 +761,9 @@ export class Workflow {
     }
     if (op === 'review_submit') {
       if (!i.candidate || i.candidate.id !== a.candidateId) throw new DomainError('EVIDENCE_STALE', 'Review must reference the current candidate');
+      if (this.unmanagedWork(i)) throw new DomainError('EXECUTION_BINDING_REQUIRED','Reconcile the old unbound candidate before dispatching a fresh reviewed implementation');
       if (i.candidate.runId && (liveRunStates as readonly string[]).includes(s.get<Run>('run', i.candidate.runId).state)) throw new DomainError('RUN_STILL_LIVE', 'Confirm execution stopped before reviewing its artifacts');
-      if (i.candidate.runId) candidateSnapshot(s,i);
-      else for (const file of i.candidate.files) if (hash(readFileSync(inside(w.root, file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Submitted artifact changed; resubmit before review');
+      candidateSnapshot(s,i);
       validateIntegration(s,i);
       if (i.candidate.sessionId === actor.sessionId) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED', 'Implementer cannot review its own delivery');
       if (i.state === 'LEAD_REVIEW') requireRole(actor, 'lead');

@@ -94,6 +94,48 @@ test('provider success without a submission fails the run and preserves the busi
   } finally { await f.close(); }
 });
 
+test('logical workers cannot claim and every heartbeat/submission binds the exact live isolated provider run', { timeout: 20000 }, async () => {
+  const adapter = new ControlledAdapter(); const f = await setup(1,adapter);
+  try {
+    const job = f.jobs[0]!; const principal = f.store.get<Actor>('actor',job.actorId);
+    const change = (actor: Actor,op: string,extra: object = {}) => { const issue = f.store.get<Issue>('issue',job.issueId); return f.flow.execute(actor,op,{ workspaceId: f.workspace.id,issueId: issue.id,expectedVersion: issue.version,designId: job.designId,scopeRevision: job.scopeRevision,...extra,idempotencyKey: randomUUID() }); };
+    assert.throws(() => change(principal,'work_claim'),(e: any) => e.code === 'EXECUTION_BINDING_REQUIRED');
+    assert.deepEqual((f.flow.execute(principal,'issue_get',{ workspaceId: f.workspace.id,issueId: job.issueId }) as any).nextActions,[]);
+    await f.coordinator.tick(); await waitFor(() => adapter.contexts.length === 1);
+    const context = adapter.contexts[0]!; const actor = f.store.authenticate(context.token);
+    const baseline = f.store.get<Run>('run',job.id);
+    const heartbeat = () => { const issue = f.store.get<Issue>('issue',job.issueId); return f.flow.execute(actor,'work_heartbeat',{ workspaceId: f.workspace.id,issueId: issue.id,expectedVersion: issue.version,fence: issue.fence,idempotencyKey: randomUUID() }); };
+    for (const patch of [{ state: 'UNCERTAIN' },{ state: 'STOPPING' },{ state: 'FAILED' },{ state: 'QUEUED' },{ scopeRevision: 999 },{ designId: 'different' }]) {
+      f.store.put('run',{ ...baseline,...patch },f.workspace.id);
+      assert.throws(heartbeat,(e: any) => e.code === 'RUN_UNCERTAIN');
+    }
+    for (const patch of [{ harness: 'dsh' },{ actorId: 'different' },{ executionActorId: 'different' },{ kind: 'qa' },{ coordinatorId: undefined },{ workspaceId: 'different' }]) {
+      f.store.put('run',{ ...baseline,...patch },f.workspace.id);
+      assert.throws(heartbeat,(e: any) => e.code === ('executionActorId' in patch ? 'SCOPE_DENIED' : 'EXECUTION_BINDING_REQUIRED'));
+    }
+    for (const executionRoot of [f.source,join(f.source,'..still-inside')]) {
+      mkdirSync(executionRoot,{ recursive: true });
+      f.store.put('run',{ ...baseline,executionRoot },f.workspace.id);
+      assert.throws(heartbeat,(e: any) => e.code === 'EXECUTION_ROOT_INVALID');
+    }
+    f.store.put('run',baseline,f.workspace.id);
+    const duplicate = { ...baseline,id: randomUUID(),state: 'QUEUED' as const };
+    f.store.put('run',duplicate,f.workspace.id);
+    assert.throws(heartbeat,(e: any) => e.code === 'RUN_EXISTS');
+    f.store.put('run',{ ...duplicate,state: 'CANCELLED' },f.workspace.id);
+    heartbeat();
+    const current = f.store.get<Issue>('issue',job.issueId);
+    const submit = () => f.flow.execute(actor,'work_submit',{ workspaceId: f.workspace.id,issueId: current.id,expectedVersion: current.version,fence: current.fence,summary: 'Binding fault injection fixture',files: ['source.txt'],idempotencyKey: randomUUID() });
+    f.store.put('run',{ ...baseline,providerSessionId: undefined },f.workspace.id);
+    assert.throws(submit,(e: any) => e.code === 'PROVIDER_ID_REQUIRED');
+    assert.equal(f.store.get<Issue>('issue',job.issueId).candidate,null);
+    f.store.put('run',baseline,f.workspace.id);
+    submit(); adapter.finish.get(context.cwd)!({ outcome: 'succeeded' });
+    await waitFor(() => f.store.get<Run>('run',job.id).state === 'SUCCEEDED');
+    assert.equal(readFileSync(join(f.source,'source.txt'),'utf8'),'original');
+  } finally { await f.close(); }
+});
+
 test('capacity bounds active jobs and confirmed interruption cancels before a replacement starts', { timeout: 20000 }, async () => {
   const adapter = new ControlledAdapter(); const f = await setup(3, adapter, 2);
   try {
