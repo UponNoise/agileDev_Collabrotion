@@ -1,26 +1,31 @@
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from './http.js';
-import { Store } from './store.js';
 import { LocalClient } from './client.js';
 import { connectMcp } from './mcp.js';
 import { discoverHarnesses, probeHarness } from './harness.js';
 import { probeHosts } from './probe.js';
-import { Coordinator } from './runner.js';
-import { GitVerifier } from './git-verifier.js';
+import { serve } from './daemon.js';
+import { dataDirectory, ensureService, requireService, ServiceError, stopService } from './service-launcher.js';
 import { verifyExecution,verifyGit } from './verify-execution.js';
 import { harnesses, Harness } from './contracts.js';
 
-const dataDir = resolve(process.env.AGILEDEV_DATA_DIR ?? join(process.env.LOCALAPPDATA ?? join(homedir(), '.local/share'), 'AgileDev'));
-const descriptorFile = join(dataDir, 'daemon.json');
-function descriptor() { return JSON.parse(readFileSync(descriptorFile, 'utf8')) as { endpoint: string; ownerToken: string; pid: number; instance: string }; }
+const dataDir = dataDirectory();
+const service = () => ensureService({ dataDir, node: process.execPath, script: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js') });
+async function commandClient() {
+  const endpoint = process.env.AGILEDEV_ENDPOINT;
+  const token = process.env.AGILEDEV_TOKEN;
+  if (endpoint !== undefined) {
+    if (!token) throw new ServiceError('AGENT_CREDENTIAL_REQUIRED', 'An explicit AGILEDEV_ENDPOINT requires an explicit AGILEDEV_TOKEN agent credential. The local owner credential is not forwarded.');
+    return new LocalClient(endpoint, token);
+  }
+  const config = await requireService(dataDir);
+  return new LocalClient(config.endpoint, token ?? config.ownerToken);
+}
 async function main() {
   const [command = 'help', ...args] = process.argv.slice(2);
   if (command === 'ui') {
-    const config = descriptor(); const pairing = await new LocalClient(config.endpoint,config.ownerToken).request('/api/ui/pairing',{});
+    const config = await service(); const pairing = await new LocalClient(config.endpoint,config.ownerToken).request('/api/ui/pairing',{});
     console.log(JSON.stringify({ url: config.endpoint,code: pairing.code,expiresAt: new Date(pairing.expiresAt).toISOString(),instruction: 'Open the local URL and enter this one-use code. Keep it private; do not add it to the URL.' },null,2)); return;
   }
   if (command === 'verify-git') { console.log(JSON.stringify(await verifyGit(args[0] ?? process.cwd()),null,2)); return; }
@@ -36,74 +41,43 @@ async function main() {
     console.log(JSON.stringify({ harnesses: await Promise.all(entries.map(probeHarness)), missing: ['codex', 'claude-code', 'dsh'].filter(id => !entries.some(e => e.id === id)) }, null, 2));
     return;
   }
-  if (command === 'serve') {
-    mkdirSync(dataDir, { recursive: true });
-    const lockFile = join(dataDir, 'daemon.lock');
-    if (existsSync(lockFile)) {
-      const previous = JSON.parse(readFileSync(lockFile, 'utf8')) as { pid: number };
-      let alive = true;
-      try { process.kill(previous.pid, 0); } catch (error: any) { if (error.code === 'ESRCH') alive = false; }
-      if (alive) throw new Error('A daemon lock is owned by a live process; use its endpoint or reconcile it before restarting.');
-      unlinkSync(lockFile);
-    }
-    const instance = randomUUID();
-    writeFileSync(lockFile, JSON.stringify({ pid: process.pid, instance }), { flag: 'wx', mode: 0o600 });
-    const store = new Store(join(dataDir, 'workflow.sqlite'));
-    const app = createServer(store);
-    let coordinator: Coordinator | undefined;
-    let gitVerifier: GitVerifier | undefined;
-    try {
-      const endpoint = await app.listen({ host: '127.0.0.1', port: Number(process.env.AGILEDEV_PORT ?? 43170) });
-      const old = existsSync(descriptorFile) ? descriptor() : null;
-      let ownerToken = old?.ownerToken;
-      try { if (!ownerToken || store.authenticate(ownerToken).role !== 'human') ownerToken = undefined; } catch { ownerToken = undefined; }
-      ownerToken ??= store.bootstrap().token;
-      writeFileSync(descriptorFile, JSON.stringify({ endpoint, ownerToken, pid: process.pid, instance }), { mode: 0o600 });
-      gitVerifier = new GitVerifier(store); gitVerifier.start();
-      if (process.env.AGILEDEV_RUNNER_ENABLED !== '0') {
-        coordinator = new Coordinator(store, { endpoint, directory: join(dataDir, 'runs'), bridgeScript: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), concurrency: Number(process.env.AGILEDEV_CONCURRENCY ?? 2), maxRunMs: Number(process.env.AGILEDEV_MAX_RUN_MS ?? 1800000) });
-        await coordinator.start();
-      }
-      console.log(JSON.stringify({ endpoint, pid: process.pid, dataDir }));
-      const stop = async () => { await coordinator?.close(); await gitVerifier?.close(); await app.close(); store.close(); unlinkSync(lockFile); process.exit(0); };
-      process.once('SIGINT', stop); process.once('SIGTERM', stop);
-    } catch (error) { await coordinator?.close(); await gitVerifier?.close(); await app.close(); store.close(); unlinkSync(lockFile); throw error; }
-    return;
-  }
+  if (command === 'serve') { await serve(dataDir); return; }
+  if (command === 'service-start') { const { endpoint, pid, instance } = await service(); console.log(JSON.stringify({ endpoint, pid, instance })); return; }
+  if (command === 'stop') { console.log(JSON.stringify({ stopped: await stopService(dataDir) })); return; }
   if (command === 'mcp') {
-    const endpoint = process.env.AGILEDEV_ENDPOINT ?? descriptor().endpoint;
     const token = process.env.AGILEDEV_TOKEN;
     if (!token) throw new Error('Set AGILEDEV_TOKEN to an enrolled agent credential. The owner credential is never used automatically for MCP.');
+    const endpoint = process.env.AGILEDEV_ENDPOINT ?? (await requireService(dataDir)).endpoint;
     await connectMcp(new LocalClient(endpoint, token));
     return;
   }
   if (command === 'command') {
     if (!args[0]) throw new Error('Usage: command <operation> [JSON file|-]; input defaults to stdin');
-    const config = descriptor();
+    const client = await commandClient();
     const input = JSON.parse(readFileSync(!args[1] || args[1] === '-' ? 0 : args[1], 'utf8'));
-    const client = new LocalClient(process.env.AGILEDEV_ENDPOINT ?? config.endpoint, process.env.AGILEDEV_TOKEN ?? config.ownerToken);
     console.log(JSON.stringify(await client.command(args[0], input), null, 2));
     return;
   }
   if (command === 'connection') {
     const token = process.env.AGILEDEV_TOKEN;
     if (!token) throw new Error('Enroll an agent and set AGILEDEV_TOKEN first.');
-    const endpoint = process.env.AGILEDEV_ENDPOINT ?? descriptor().endpoint;
+    const endpoint = process.env.AGILEDEV_ENDPOINT ?? (await requireService(dataDir)).endpoint;
     const client = new LocalClient(endpoint, token);
     if ((await client.request('/api/session')).actor.role === 'human') throw new Error('Connection configuration requires an agent credential.');
     const script = resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js');
     const nodeArgs = [script, 'mcp'];
+    const target = process.env.AGILEDEV_ENDPOINT ? { AGILEDEV_ENDPOINT: endpoint } : { AGILEDEV_DATA_DIR: dataDir };
     const format = args[0] ?? 'claude-code';
     if (format === 'codex') {
-      console.log(`[mcp_servers.agiledev]\ncommand = ${JSON.stringify(process.execPath)}\nargs = ${JSON.stringify(nodeArgs)}\nenv_vars = ["AGILEDEV_TOKEN"]\n\n[mcp_servers.agiledev.env]\nAGILEDEV_ENDPOINT = ${JSON.stringify(endpoint)}`);
+      console.log(`[mcp_servers.agiledev]\ncommand = ${JSON.stringify(process.execPath)}\nargs = ${JSON.stringify(nodeArgs)}\nenv_vars = ["AGILEDEV_TOKEN"]\n\n[mcp_servers.agiledev.env]\n${Object.entries(target).map(([key,value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}`);
     } else if (format === 'dsh') {
-      console.log(`- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: ${JSON.stringify(nodeArgs)}\n        env:\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n          AGILEDEV_ENDPOINT: ${JSON.stringify(endpoint)}`);
+      console.log(`- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: ${JSON.stringify(nodeArgs)}\n        env:\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n${Object.entries(target).map(([key,value]) => `          ${key}: ${JSON.stringify(value)}`).join('\n')}`);
     } else if (format === 'claude-code') {
-      const connection = { type: 'stdio', command: process.execPath, args: nodeArgs, env: { AGILEDEV_ENDPOINT: endpoint, AGILEDEV_TOKEN: '${AGILEDEV_TOKEN}' } };
+      const connection = { type: 'stdio', command: process.execPath, args: nodeArgs, env: { ...target, AGILEDEV_TOKEN: '${AGILEDEV_TOKEN}' } };
       console.log(JSON.stringify({ mcpServers: { agiledev: connection } }, null, 2));
     } else throw new Error('Connection format must be codex, claude-code, or dsh.');
     return;
   }
-  console.log('agiledev: serve | ui | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
+  console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
-main().catch(error => { console.error(error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
+main().catch(error => { console.error(error instanceof ServiceError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
