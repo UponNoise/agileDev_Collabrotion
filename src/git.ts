@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { DomainError, GitBinding, GitSubmission, Snapshot, Workspace } from './contracts.js';
+import { DomainError, GitAttempt, GitBinding, GitSubmission, Snapshot, Workspace } from './contracts.js';
 import { inside } from './paths.js';
 import { cleanGitEnv, verifySnapshot } from './snapshots.js';
 
@@ -37,8 +37,13 @@ export function submissionEntries(submission: { entries?: { repository: string; 
   if (submission.repository && submission.sha && submission.url) return [{ repository: submission.repository,subdirectory: submission.subdirectory ?? '',sha: submission.sha,url: submission.url }];
   return [];
 }
-export function normalizeLegacyAttempt<T extends { entryIndex?: number; treeComparison?: boolean; evidenceRole?: string; repository?: string; sha?: string }>(attempt: T, entries: { repository: string; sha: string }[]): T {
-  if (attempt.entryIndex === undefined && entries.length === 1 && entries[0]!.repository === attempt.repository && entries[0]!.sha === attempt.sha) return { ...attempt,entryIndex: 0,treeComparison: true,evidenceRole: 'snapshot' };
+export function normalizeLegacyAttempt<T extends Partial<GitAttempt>>(attempt: T, submission: Pick<GitSubmission, 'id' | 'workspaceId' | 'issueId' | 'attempt' | 'currentAttemptId'> & { entries?: unknown; repository?: string; sha?: string; url?: string }): T {
+  if (!Object.hasOwn(submission,'entries') && !['entryIndex','treeComparison','evidenceRole'].some(key => Object.hasOwn(attempt,key)) &&
+    submission.id && submission.workspaceId && submission.issueId && submission.repository && submission.sha && submission.url &&
+    Number.isSafeInteger(submission.attempt) && submission.attempt > 0 && submission.currentAttemptId &&
+    attempt.id === submission.currentAttemptId && attempt.submissionId === submission.id && attempt.attempt === submission.attempt &&
+    attempt.workspaceId === submission.workspaceId && attempt.issueId === submission.issueId &&
+    attempt.repository === submission.repository && attempt.sha === submission.sha) return { ...attempt,entryIndex: 0,treeComparison: true,evidenceRole: 'snapshot' };
   return attempt;
 }
 export function inspectGitBinding(workspace: Workspace, remote: string, actorId: string): GitBinding {

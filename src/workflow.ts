@@ -119,7 +119,7 @@ export class Workflow {
       const submission = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
       const git = submission ? (() => {
         const entries = submissionEntries(submission);
-        const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === submission.id && a.attempt === submission.attempt).map(a => normalizeLegacyAttempt(a,entries));
+        const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === submission.id && a.attempt === submission.attempt).map(a => normalizeLegacyAttempt(a,submission));
         return { ...submission,entries: entries.map((entry,entryIndex) => ({ ...entry,attempt: round.find(a => a.entryIndex === entryIndex) ?? null })) };
       })() : null;
       const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
@@ -426,9 +426,12 @@ export class Workflow {
           if (entries.length > 1) blockers.push('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED');
           if (git.state !== 'VERIFIED') blockers.push(git.errorCode ?? (['QUEUED','VERIFYING'].includes(git.state) ? 'GIT_VERIFICATION_PENDING' : 'GIT_VERIFICATION_REQUIRED'));
           else {
-            const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt).map(a => normalizeLegacyAttempt(a,entries));
+            const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt).map(a => normalizeLegacyAttempt(a,git));
             const primary = round.find(a => a.entryIndex === 0);
-            if (!git.verifiedAt || !git.treeSha || git.treeSha !== git.expectedTreeSha || round.length !== entries.length || round.some(a => a.state !== 'VERIFIED') || !primary || primary.state !== 'VERIFIED' || primary.submissionId !== git.id || primary.treeSha !== git.treeSha || primary.expectedTreeSha !== git.expectedTreeSha) blockers.push('GIT_EVIDENCE_STALE');
+            if (!git.verifiedAt || !git.treeSha || git.treeSha !== git.expectedTreeSha || round.length !== entries.length || round.some(a => a.state !== 'VERIFIED') ||
+              !primary || primary.id !== git.currentAttemptId || primary.state !== 'VERIFIED' || primary.submissionId !== git.id ||
+              primary.workspaceId !== git.workspaceId || primary.issueId !== git.issueId || primary.repository !== entries[0]?.repository || primary.sha !== entries[0]?.sha ||
+              primary.treeComparison !== true || primary.evidenceRole !== 'snapshot' || primary.treeSha !== git.treeSha || primary.expectedTreeSha !== git.expectedTreeSha) blockers.push('GIT_EVIDENCE_STALE');
           }
         }
       }
@@ -447,7 +450,7 @@ export class Workflow {
       attempt.finishedAt ??= new Date(this.now()).toISOString();
       s.put('git_attempt',attempt,git.workspaceId);
       const entries = submissionEntries(git);
-      const round = s.list<GitAttempt>('git_attempt',git.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt).map(a => normalizeLegacyAttempt(a,entries));
+      const round = s.list<GitAttempt>('git_attempt',git.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt).map(a => normalizeLegacyAttempt(a,git));
       if (round.length < entries.length || round.some(a => a.state === 'VERIFYING')) return;
       const primary = round.find(a => a.entryIndex === 0);
       const failing = round.find(a => a.state === 'FAILED' || a.state === 'STALE');

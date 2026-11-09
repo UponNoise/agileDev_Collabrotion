@@ -249,6 +249,10 @@ async function buildAcceptedLeaf(f: Awaited<ReturnType<typeof multiRepoFixture>>
   s.token(actor);
   s.put('run', { id: runId, issueId, workspaceId: w.id, actorId: actor.principalId, harness: 'codex', kind: 'implementation', state: 'SUCCEEDED', version: 1, createdAt: new Date().toISOString(), designId, scopeRevision: 1, providerSessionId: `session-${runId}`, executionActorId: actor.id, executionRoot: f.source }, w.id);
   const sealed = seal(f.source, ['data.txt'], join(f.root, 'snapshots'), true, w.id, issueId, actor.id, actor.sessionId, runId);
+  if (options.legacySubmission) {
+    sealed.snapshot.files = sealed.snapshot.files.map(({ blob, ...file }) => file);
+    sealed.snapshot.hash = hash(canonical(sealed.snapshot.files));
+  }
   sealed.candidate.snapshotId = sealed.snapshot.id;
   s.put('snapshot', sealed.snapshot, w.id);
   const candidate = sealed.candidate; candidate.designId = designId;
@@ -264,9 +268,10 @@ async function buildAcceptedLeaf(f: Awaited<ReturnType<typeof multiRepoFixture>>
   const git: any = options.legacySubmission
     ? { id: randomUUID(), workspaceId: w.id, issueId, candidateId: candidate.id, snapshotId: sealed.snapshot.id, bindingId, repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}`, actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }
     : { id: randomUUID(), workspaceId: w.id, issueId, candidateId: candidate.id, snapshotId: sealed.snapshot.id, bindingId, entries: [{ repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}` }], actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
+  const attemptId = randomUUID(); git.currentAttemptId = attemptId;
   s.put('git_submission', git, w.id);
-  if (options.legacySubmission) s.put('git_attempt', { id: randomUUID(), submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }, w.id);
-  else s.put('git_attempt', { id: randomUUID(), submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, entryIndex: 0, treeComparison: true, evidenceRole: 'snapshot', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }, w.id);
+  if (options.legacySubmission) s.put('git_attempt', { id: attemptId, submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: expectedTreeSha }, w.id);
+  else s.put('git_attempt', { id: attemptId, submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, entryIndex: 0, treeComparison: true, evidenceRole: 'snapshot', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: expectedTreeSha }, w.id);
   const issue = s.get<Issue>('issue', issueId);
   issue.candidate = candidate; issue.initialReview = initialReview; issue.qaReview = qaReview; issue.finalReview = finalReview; issue.gitSubmissionId = git.id; issue.lease = null; issue.designId = issue.parentId ? issue.designId : designId;
   s.put('issue', issue, w.id);
@@ -394,6 +399,12 @@ test('pre-upgrade accepted children keep parent integration valid', async () => 
     assert.equal(manifest.children.length, 1);
     assert.equal(manifest.children[0]!.issueId, child.id);
     assert.equal(manifest.children[0]!.commitUrl, `https://github.com/fixture/delivery/commit/${f.primarySha}`);
+    const parentProof = await buildAcceptedLeaf(f, parent.id, s.get<Issue>('issue', parent.id).designId!, s.get<Issue>('issue', parent.id).description, { legacySubmission: true });
+    const parentIssue = s.get<Issue>('issue', parent.id); parentIssue.candidate!.integration = manifest;
+    s.put('candidate', parentIssue.candidate!, w.id); s.put('issue', parentIssue, w.id);
+    const parentDigest = hash(canonical({ policyVersion: 3, designId: parentProof.designId, scopeRevision: parentIssue.scopeRevision, candidateId: parentProof.candidate.id, snapshotHash: parentProof.snapshot.hash, initialReview: parentIssue.initialReview, qaReview: parentIssue.qaReview, finalReview: parentIssue.finalReview, artifactMode: parentIssue.artifactMode, gitBindingId: parentProof.git.bindingId, git: { id: parentProof.git.id, bindingId: parentProof.git.bindingId, sha: parentProof.git.sha, repository: parentProof.git.repository, subdirectory: parentProof.git.subdirectory }, integrationHash: manifest.hash }));
+    assert.equal(acceptanceDigest(s, parentIssue), parentDigest);
+    assert.equal(acceptanceDigest(s, s.get<Issue>('issue', parent.id)), parentDigest);
   } finally { await f.close(); }
 });
 
@@ -403,6 +414,7 @@ async function legacyClosureFixture(mutate?: (git: any, attempt: any) => void) {
   const expectedTreeSha = snapshotGitTree(f.snapshot);
   const git: any = { id: randomUUID(), workspaceId: f.workspace.id, issueId: f.issue.id, candidateId: f.candidate.id, snapshotId: f.snapshot.id, bindingId, repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}`, actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
   const attempt: any = { id: randomUUID(), submissionId: git.id, workspaceId: f.workspace.id, issueId: f.issue.id, attempt: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
+  git.currentAttemptId = attempt.id;
   mutate?.(git, attempt);
   f.store.put('git_submission', git, f.workspace.id);
   f.store.put('git_attempt', attempt, f.workspace.id);
@@ -544,4 +556,71 @@ test('a failed entry keeps its error code when another entry is merely unavailab
     assert.equal(round.find((a: any) => a.entryIndex === 1)!.state, 'UNAVAILABLE');
     assert.equal(round.find((a: any) => a.entryIndex === 1)!.errorCode, 'PROVIDER_UNAVAILABLE');
   } finally { await verifier.close(); await f.close(); }
+});
+
+test('historical proof projection and idempotent completion retain the stored evidence', async () => {
+  const f = await acceptedLeaf(await multiRepoFixture(), randomUUID(), { legacySubmission: true });
+  try {
+    const s = f.store; const issue = s.get<Issue>('issue', f.issue.id);
+    const digest = acceptanceDigest(s, issue); issue.acceptedDigest = digest; s.put('issue', issue, f.workspace.id);
+    s.put('delivery_approval', { id: randomUUID(), issueId: issue.id, actorId: f.owner.id, candidateId: issue.candidate!.id, digest, decision: 'ACCEPT', reason: 'Historical fixture acceptance' }, f.workspace.id);
+    const beforeGit = canonical(s.get('git_submission', f.built.git.id));
+    const beforeAttempt = canonical(s.get('git_attempt', f.built.git.currentAttemptId));
+    const input = { workspaceId: f.workspace.id, issueId: issue.id, expectedVersion: issue.version, idempotencyKey: randomUUID() };
+    const closed = f.flow.execute(f.owner, 'delivery_complete', input) as any;
+    const replayed = f.flow.execute(f.owner, 'delivery_complete', input) as any;
+    assert.equal(closed.issue.state, 'DONE'); assert.equal(replayed.replayed, true);
+    assert.equal(replayed.issue.version, closed.issue.version);
+    assert.equal(s.list('delivery_approval', f.workspace.id).length, 1);
+    const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: issue.id }) as any;
+    assert.equal(view.git.entries[0].attempt.id, f.built.git.currentAttemptId);
+    assert.equal(view.git.entries[0].attempt.evidenceRole, 'snapshot');
+    assert.equal(canonical(s.get('git_submission', f.built.git.id)), beforeGit);
+    assert.equal(canonical(s.get('git_attempt', f.built.git.currentAttemptId)), beforeAttempt);
+    assert.equal(acceptanceDigest(s, s.get<Issue>('issue', issue.id)), digest);
+  } finally { await f.close(); }
+});
+
+test('only genuine legacy shape and exact current proof identities can clear delivery', async () => {
+  for (const legacy of [true, false]) {
+    const f = await acceptedLeaf(await multiRepoFixture(), randomUUID(), { legacySubmission: legacy, ...(legacy ? {} : { digestPolicy: 4 }) });
+    try {
+      const s = f.store; const issue = s.get<Issue>('issue', f.issue.id);
+      const digest = acceptanceDigest(s, issue); issue.acceptedDigest = digest; s.put('issue', issue, f.workspace.id);
+      s.put('delivery_approval', { id: randomUUID(), issueId: issue.id, actorId: f.owner.id, candidateId: issue.candidate!.id, digest, decision: 'ACCEPT', reason: 'Negative fixture acceptance' }, f.workspace.id);
+      const originalGit = s.get<any>('git_submission', f.built.git.id);
+      const originalAttempt = s.get<any>('git_attempt', originalGit.currentAttemptId);
+      const cases: [string, (git: any, attempt: any) => void][] = [
+        ['missing pointer', git => { delete git.currentAttemptId; }],
+        ['wrong pointer', git => { git.currentAttemptId = randomUUID(); }],
+        ['wrong submission', (_git, attempt) => { attempt.submissionId = randomUUID(); }],
+        ['wrong workspace', (_git, attempt) => { attempt.workspaceId = randomUUID(); }],
+        ['wrong issue', (_git, attempt) => { attempt.issueId = randomUUID(); }],
+        ['wrong attempt round', (_git, attempt) => { attempt.attempt++; }],
+        ['wrong submission round', git => { git.attempt++; }],
+        ['wrong repository', (_git, attempt) => { attempt.repository = 'fixture/other'; }],
+        ['wrong SHA', (_git, attempt) => { attempt.sha = '9'.repeat(40); }],
+        ['reference without index', (_git, attempt) => { delete attempt.entryIndex; attempt.treeComparison = false; attempt.evidenceRole = 'reference'; }],
+        ['explicit reference', (_git, attempt) => { attempt.entryIndex = 0; attempt.treeComparison = false; attempt.evidenceRole = 'reference'; }],
+        ['index only', (_git, attempt) => { attempt.entryIndex = 0; delete attempt.treeComparison; delete attempt.evidenceRole; }],
+        ['comparison only', (_git, attempt) => { delete attempt.entryIndex; attempt.treeComparison = true; delete attempt.evidenceRole; }],
+        ['role only', (_git, attempt) => { delete attempt.entryIndex; delete attempt.treeComparison; attempt.evidenceRole = 'snapshot'; }]
+      ];
+      if (legacy) cases.push(
+        ['empty entries', git => { git.entries = []; }],
+        ['null entries', git => { git.entries = null; }],
+        ['modern entry with historical attempt', git => { git.entries = [{ repository: git.repository, subdirectory: git.subdirectory, sha: git.sha, url: git.url }]; }]
+      );
+      else cases.push(['missing modern metadata', (_git, attempt) => { delete attempt.entryIndex; delete attempt.treeComparison; delete attempt.evidenceRole; }]);
+      for (const [name, mutate] of cases) {
+        const git = structuredClone(originalGit); const attempt = structuredClone(originalAttempt); mutate(git, attempt);
+        s.put('git_submission', git, f.workspace.id); s.put('git_attempt', attempt, f.workspace.id);
+        const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: issue.id }) as any;
+        assert.ok(view.closureBlocked.includes('GIT_EVIDENCE_STALE'), `${legacy ? 'legacy' : 'modern'}: ${name}`);
+        const completed = f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: issue.id, expectedVersion: s.get<Issue>('issue', issue.id).version, idempotencyKey: randomUUID() }) as any;
+        assert.equal(completed.issue.state, 'USER_ACCEPTANCE', name);
+        assert.equal(canonical(s.get('git_attempt', attempt.id)), canonical(attempt), name);
+      }
+    } finally { await f.close(); }
+  }
 });
