@@ -24,7 +24,7 @@ A draft issue is still `NOT_STARTED`. A running process does not prove an issue 
 | `QA_TEST` | Independent QA | Required candidate snapshot and QA assignment/request |
 | `QA_REJECTED` | Tests failed | Required QA report and blocking defect/failure references |
 | `USER_ACCEPTANCE` | User acceptance | Final lead report and exact delivery snapshot |
-| `USER_REJECTED` | User requested rework | Required user decision and failed criteria or clarification |
+| `USER_REJECTED` | User requested rework | Required user decision with a classification (`DEFECT`, `SCOPE_CHANGE`, or `CLARIFICATION`) and the related defects, failed criteria, or clarification |
 | `ON_HOLD` | Suspended | Reason, authorizing decision, previous state/stage, affected runs, optional review date |
 | `ABANDONED` | Abandoned | Terminal non-delivery outcome; reason, authorization, and scope disposition |
 | `DONE` | Implemented and closed | Terminal successful delivery; current approvals, evidence, and closure event |
@@ -56,7 +56,7 @@ Hold, resume, abandon, and scope-amendment transitions are defined separately be
 
 ## 3. Transition contract
 
-All mutations require authenticated actor scope, `expected_version`, and an idempotency key. Every successful transition appends an event in the same database transaction as the issue update. UI, MCP, runners, and later connectors use this contract without bypass routes.
+All mutations require authenticated actor scope, `expected_version`, and an idempotency key. Every successful transition appends an event in the same database transaction as the issue update. UI, MCP, runners, and later connectors use this contract without bypass routes. Git or CI events and automation may record facts, trigger verification, or send reminders; they never advance a lifecycle state (revision R1, 2026-11-09).
 
 | From | Action / actor | To | Required guards and evidence |
 | --- | --- | --- | --- |
@@ -69,8 +69,8 @@ All mutations require authenticated actor scope, `expected_version`, and an idem
 | `QA_TEST` | Fail / assigned QA | `QA_REJECTED` | Failure report with expected/actual behavior, reproduction, severity, criterion, and artifact |
 | `LEAD_REVIEW:FINAL` | Pass / assigned lead | `USER_ACCEPTANCE` | Initial review + QA still current; requirement fit and integration implications assessed |
 | `LEAD_REVIEW:FINAL` | Fail / assigned lead | `LEAD_REJECTED` | Recorded final-stage rejection; rework owner retained or explicitly reassigned |
-| `USER_ACCEPTANCE` | Reject / human | `USER_REJECTED` | Exact snapshot/revision and actionable feedback; classify defect vs requested scope change |
-| `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest; all closure checks pass |
+| `USER_ACCEPTANCE` | Reject / human | `USER_REJECTED` | Exact snapshot/revision and actionable feedback; classification `DEFECT` (creates defects on the rejected digest), `SCOPE_CHANGE` (rework blocked by `SCOPE_REVISION_REQUIRED` until a newer approved design), or `CLARIFICATION` |
+| `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest; optional MINOR waivers in the same transaction; batch acceptance per §5; all closure checks pass |
 | `USER_ACCEPTANCE` | Complete / lead or PM | `DONE` | Exact-snapshot human close grant or prior current human acceptance; all closure checks still pass |
 | Any rework state | Claim rework / assigned worker | `IN_PROGRESS` | Valid assignment/binding, dependencies, fresh lease, required approved scope |
 | Nonterminal state | Hold / human or granted lead/PM | `ON_HOLD` | Reason, action scope, prior state/stage saved; cancellation/reconciliation of active runs requested |
@@ -90,12 +90,14 @@ Human acceptance is an immutable decision record. If the human accepts while Git
 | Create parent / task drafts | Yes | Yes | Yes | Propose only | Defect proposal/report |
 | Edit unapproved designs | Yes | Owned design | Draft decomposition | Propose changes | Propose changes |
 | Approve design or material scope change | Yes | No | No | No | No |
-| Plan tasks, dependencies, dates, assignees | Yes | Yes | Yes | No | No |
+| Plan tasks, dependencies, dates, iterations, assignees | Yes | Yes | Yes | No | No |
 | Dispatch implementation | Approved policy | Coordinate | Yes | No | No |
 | Claim / submit implementation | Through worker assignment | Only if separately assigned worker | Only if separately assigned worker | Own assignment | No |
 | Initial / final lead review | Can perform explicitly as reviewer | Assigned reviewer | No | No | No |
 | QA report and pass/fail | Separate reviewer context | No self-QA | No | No self-QA | Assigned independent review |
 | User acceptance | Yes | Exact human grant only | Exact human grant only | No | No |
+| Propose a defect | Report directly | Within read scope | Within read scope | Within read scope | Within read scope |
+| Triage defects, waive MINOR defects, batch-accept deliveries | Yes | No | No | No | No |
 | Hold / abandon / exceptional close / reopen | Yes, subject to invariants | Scoped human grant | Scoped human grant | No | No |
 
 Human manual entry does not bypass the independent QA or evidence requirements. A person may deliberately assume the QA role, with a separate reviewer record; the result must be labeled human QA rather than attributed to an agent.
@@ -117,6 +119,14 @@ Implementation refinement, 2026-11-07: one grant authorizes one named logical le
 A completion grant additionally binds the currently reviewed candidate and delivery digest. Its human confirmation must expose the same requirement/review/manifest/commit packet as delivery acceptance. Successful delegated closure records the original human authorization and the executing agent separately. It cannot approve design, supply missing QA, ignore child disposition, or bypass Git/defect/closure guards. A blocked delegated close rolls back its use and acceptance record; an expired or revoked unused grant cannot later close through a provider callback. A previously completed authorized decision remains historical evidence after revocation.
 
 For MVP, human decisions/grants originate in the authenticated web approval flow. A host adapter may later accept direct human events only after AC14 proves attribution; a model's statement that the user agreed is never such an event. Batch decisions enumerate exact item versions/digests; no hidden approval of unseen items is allowed.
+
+### Decision inbox and batch acceptance, 2026-11-09
+
+Accepted revision R1 (D11, D13, D14): the service derives a human decision inbox from current records. It lists design revisions `IN_REVIEW`, deliveries in `USER_ACCEPTANCE` without a decision on the current digest, abandoned in-scope children without a current scope decision, uncertain runs or legacy unbound work, accepted deliveries whose closure is blocked, and defect proposals awaiting triage. Each entry carries its exact target version and revision hash or digest, the time it became pending, and a link to the decision view. There is no separate queue: agents cannot create, dismiss, reorder, or resolve entries, and the proposed `approval_request` tool is withdrawn. An entry older than the workspace threshold (default 24 hours) produces the advisory gap `HUMAN_DECISION_AGING`.
+
+Batch decisions are limited to delivery acceptance: 2 to 20 deliveries from one workspace, each listed with key, title, candidate, and digest, and applied in one transaction. Any changed item fails the whole batch without accepting anything. Deliveries with an open MINOR defect needing a waiver, design approvals, and all rejections are decided individually. Each item keeps its own immutable decision record that references the batch.
+
+Attention signals (inbox count, window title, taskbar flash and overlay, and operating-system notifications where verified) only open the decision view; none can decide. A signal shows kind, workspace, and key unless the human enables titles, and signals exist only while the desktop runs. See [revision R1 §3](proposals/r1-inbox-iterations-defects.md#3-part-a-human-decision-inbox-and-attention-signals).
 
 ### Local human web session, 2026-11-06
 
@@ -142,7 +152,7 @@ Acceptance impact: AC09/14/16/17/20/24/35 additionally exercise principal-creden
 2. A material revision enters review, blocks new affected claims, and requests active affected runs to stop or reconcile. Unaffected completed requirements stay intact.
 3. Existing task mappings, approvals, and reports remain readable but are marked stale where affected. PM proposes revised task coverage.
 4. A worker replaces a candidate by opening a new implementation round. Initial review, QA, final review, and human acceptance for the old candidate cannot authorize the new one.
-5. Metadata-only edits such as schedule or assignee display corrections do not invalidate artifact approval. The service categorizes allowed metadata fields; callers cannot assert that a scope edit is metadata.
+5. Metadata-only edits such as schedule, iteration membership, or assignee display corrections do not invalidate artifact approval. The service categorizes allowed metadata fields; callers cannot assert that a scope edit is metadata.
 
 Implementation refinement, 2026-11-07: design hashes bind the immutable requirement description as well as design content, criteria, delivery mode, and repository binding. Editing a top-level requirement description creates a fresh draft design and invalidates affected child execution/review evidence. Active or uncertain child runs must first be reconciled. The review view shows that captured requirement scope alongside the proposed design. Older revisions without captured scope remain historical evidence, but cannot authorize new execution or a new current approval until a scope-bound revision is reviewed. A hold remains effective while scope is edited or a child is added; editing is not an implicit resume. Run output and heartbeat observations do not change the state version used to request interruption.
 
@@ -169,6 +179,18 @@ QA authors tests under `.qa`, queues `qa_check_run`, reads `qa_check_get`, and s
 The report cannot advance the issue until the native QA producer has stopped successfully and the evidence is revalidated. `PASS` advances to final lead review; `FAIL` creates assigned defects and enters `QA_REJECTED`; `BLOCKED` or `NOT_RUN` cannot pass. A fresh successful QA round resolves prior open defects for the same task, retaining the old reports and failure evidence. Narrative `review_submit` cannot pass or fail the QA gate. Lost check execution stays uncertain and consumes check capacity until explicit recovery; recorded live test PIDs block operator reconciliation.
 
 Final lead pass exposes an exact delivery digest. Human `delivery_decide` can accept/reject only that digest. Reviewed artifact mode can close after all guards; Git mode retains acceptance with closure blocked until remote commit verification matches that snapshot. These commands refine the existing gates and do not waive Git, parent integration, UI/human attribution, minor-risk waiver, or release acceptance requirements. The present implementation is stricter than the target waiver policy: any non-INFO current QA finding prevents a pass.
+
+### Defect register, verification, and waivers, 2026-11-09
+
+Accepted revision R1 (D11, D15, D16) makes defects register records with a workspace-local key, origin (`QA`, `USER_ACCEPTANCE`, or `ESCAPED`), severity, criterion IDs, reproduction, expected and actual behavior, the observed snapshot or digest, reporter, owner, and source record. Their states are `PROPOSED`, `OPEN`, `RESOLVED`, `WAIVED`, `REJECTED`, and `WITHDRAWN`.
+
+- QA findings create `OPEN` defects as before. A user rejection classified `DEFECT` creates `OPEN` defects on the rejected digest.
+- A defect found after closure references the `DONE` issue and its historical digest without rewriting it. A human may report one directly; any agent may propose one on an issue it can already read. Human triage accepts a proposal with `REOPEN`, `NEW_REQUIREMENT`, or `DEFER`, or rejects it with a reason.
+- Every QA report gives each `OPEN` defect, and each `WAIVED` defect whose waiver digest is no longer current, an explicit result: `FIXED`, `PRESENT`, `BLOCKED`, or `NOT_RUN`. A missing result rejects the report. `PASS` requires every listed BLOCKER or MAJOR defect to be `FIXED`. Only a completed `PASS` resolves `FIXED` defects; a `FAIL` changes no defect state.
+- New BLOCKER or MAJOR findings require `FAIL`. MINOR findings may accompany `PASS`, and closure then requires each open MINOR defect to be fixed or waived. Only a human may waive, only during `USER_ACCEPTANCE`, with a reason bound to the defect version and the current digest. A changed digest makes the waiver stale (`WAIVER_STALE`).
+- Lead and PM cannot resolve, waive, reject, or change the severity of a QA-origin defect. Triage, waivers, withdrawal, and rejection classification are human-only and absent from MCP and grants.
+
+Once implemented, these rules replace the implicit resolution of earlier open defects by a fresh successful QA round, and the interim rule that any non-INFO finding prevents a pass. Until then the current implementation keeps both. See [revision R1 §5](proposals/r1-inbox-iterations-defects.md#5-part-c-defect-register).
 
 ## 8. Hold, abandon, and interrupted execution
 
@@ -249,3 +271,9 @@ A service-owned read job resolves the commit through the GitHub Git database API
 `git_retry` requeues failed/unavailable read verification of the same target. Restarted in-flight verification becomes unavailable and requires an explicit retry; read jobs are never mistaken for agent execution. Current exact human acceptance can close automatically after successful verification; `delivery_complete` rechecks saved acceptance without inventing a new human decision. Holds, children, dependencies, live/uncertain producers, stale snapshots, and review/defect guards still apply. Network/authentication/rate-limit failures leave the issue open with a named blocker. A completed record retains its historical verification even during a later provider outage.
 
 Provider baseline: [GitHub Git commits](https://docs.github.com/en/rest/git/commits), [Git trees](https://docs.github.com/en/rest/git/trees), and [Git object format](https://git-scm.com/book/en/v2/Git-Internals-Git-Objects). The initial API version is `2026-03-10`, verified against [GitHub's supported-version list](https://docs.github.com/en/rest/about-the-rest-api/api-versions). These references specify the implementation; they are not runtime acceptance evidence.
+
+## 11. Iterations, 2026-11-09
+
+Accepted revision R1 (D12) makes iterations planning records, not issues. Each has a name, goal, start and end dates with a recorded time zone, and state `PLANNED`, `ACTIVE`, or `CLOSED`; a workspace has at most one `ACTIVE` iteration. A non-terminal requirement or task may belong to at most one `PLANNED` or `ACTIVE` iteration in its workspace, and membership does not cascade to children. Membership is metadata: it never stales approvals, plans, coverage, reviews, QA reports, acceptance, or grants, and never gates claim or dispatch.
+
+Human, lead, and PM create, edit, start, and close iterations. Closing requires an explicit disposition for each unfinished member, either carry-over to a named `PLANNED` iteration or return to the backlog, and fails atomically if any member changed. Nothing rolls over on a timer; an `ACTIVE` iteration past its end date produces the advisory gap `ITERATION_OVERDUE`. Closing writes an immutable summary of counts and references derived from events. Existing free-text iteration labels stay read-only until explicitly adopted. See [revision R1 §4](proposals/r1-inbox-iterations-defects.md#4-part-b-iterations).

@@ -1,6 +1,6 @@
-# Revision proposal R1: decision inbox, iterations, and defect register
+# Revision R1: decision inbox, iterations, and defect register
 
-Status: **draft for user decision; not approved and not implemented.** Proposed 2026-11-09 at the user's request. Baseline: [product specification 0.1](../product-spec.md), [workflow 0.1](../workflow.md), [agent contract 0.1](../agent-contract.md), and [acceptance catalogue 0.1](../acceptance.md) at `f8cb50f`. R1 changes no requirement, recorded evidence, or product-managed approval until the user accepts specific parts. Accepted text is then copied into the baseline documents listed in §8.
+Status: **accepted by the user on 2026-11-09 with every proposed default (D11–D16); not implemented.** Proposed and recorded at the user's request. Baseline before acceptance: [product specification 0.1](../product-spec.md), [workflow 0.1](../workflow.md), [agent contract 0.1](../agent-contract.md), and [acceptance catalogue 0.1](../acceptance.md) at `f8cb50f`. The accepted text is now part of those documents and the [delivery plan](../delivery-plan.md) (§8). This document keeps the rationale, details, migration notes, and sources. Acceptance changes requirements only: it changes no recorded evidence or product-managed approval, and no behavior is implemented yet.
 
 ## 1. Motivation
 
@@ -20,7 +20,7 @@ Three gaps in the current product motivate R1:
 | B | Iterations as planning records with membership, explicit close disposition, and derived progress | FR15 refined; FR22 amended | New AC40; AC05/24/25/33/34 amended | P3 |
 | C | Defect register with origins, human triage, explicit QA verification, digest-bound MINOR waivers | New FR28; FR22 amended | New AC41; AC12/14/19/24/34/36 amended | P3 register; P4 QA and waiver rules |
 
-Proposed requirement text:
+Accepted requirement text:
 
 | ID | Priority | Requirement | Verification |
 | --- | --- | --- | --- |
@@ -239,9 +239,11 @@ These must be rerun. Existing results remain historical evidence of the old beha
 
 R1 itself invalidates no design approval, delivery acceptance, or grant. Issues with open defects need explicit verification in their next QA round. Product specification 0.1 is still unapproved, so R1 invalidates no specification approval.
 
-## 7. Decisions for user review
+## 7. Decisions
 
-| ID | Proposed default | Reason / alternative |
+The user accepted every proposed default on 2026-11-09.
+
+| ID | Accepted default | Reason / alternative |
 | --- | --- | --- |
 | D11 | Parts A to C are mandatory for P5, while operating-system notifications stay capability-reported | B refines FR15, which already lists optional iterations. C specifies behavior workflow §3 and §7 already require (rejection classification, MINOR waivers) and adds escaped-defect tracking. A replaces the unimplemented inbox tool and batch decisions. Alternative: release them after P5 as 0.2 |
 | D12 | At most one active iteration per workspace | Fits one owner and a small run cap. Parallel iterations would need cross-iteration capacity rules |
@@ -252,7 +254,7 @@ R1 itself invalidates no design approval, delivery acceptance, or grant. Issues 
 
 ## 8. Implementation outline
 
-On acceptance, copy the accepted text into:
+On 2026-11-09 the accepted text was copied into:
 
 - [product specification](../product-spec.md) §4 and §9;
 - [workflow](../workflow.md) §3 for rejection classification, §5 for batch acceptance, and §7 for defect states, verification, and waivers;

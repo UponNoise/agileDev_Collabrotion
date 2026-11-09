@@ -10,6 +10,8 @@ Verified: 82 automated tests cover workflow, shared MCP state, real Git isolatio
 
 The 2026-11-09 real Codex 0.167.0-alpha.3.2 to DSH 0.2.2-rc.1 worker/QA handoff passes the strict execution-binding rules: separate sessions/directories, a sealed two-file artifact, and 14 actual Node checks including negative controls. Its human/design/lead decisions are automated fixture setup. Native-model parent integration, Git publication/closure, and full three-harness execution are separate remaining release scenarios.
 
+Revision R1, accepted on 2026-11-09, adds to the MVP a derived human decision inbox with batch delivery acceptance and local desktop signals, iteration records, and a defect register with explicit QA verification and MINOR waivers. These are specified, not implemented.
+
 To use the web workspace locally, build, run `node dist/cli.js serve`, then run `node dist/cli.js ui` in another terminal. Open the printed loopback URL and enter its one-use pairing code. Do not place the code or owner credential in a URL. The service keeps human browser sessions separate from agent credentials.
 
 `npm run desktop` builds and opens the desktop shell, starting or reusing the local service. For headless operation, the owner runs `node dist/cli.js service-start` first. Configured MCP clients silently attach to that service with explicit scoped credentials; they never start a persistent service from inside a harness. An offline bridge returns `SERVICE_OWNER_START_REQUIRED`. `npm run package:desktop` compiles current sources into fresh private staging and builds a portable Windows x64 directory, recording its path/checksum in ignored `release/latest.json`. The package includes Node, its license, the service, and production dependencies. Use `node dist/cli.js stop` for owner-authorized shutdown. Desktop/window closing is distinct from stopping the shared service. Controlled native exit/reopen still needs revalidation; the test package is not a signed or accepted release.
@@ -29,7 +31,7 @@ See [local setup and commands](docs/local-development.md) for the executable sli
 | [Research](docs/research.md) | Primary sources, compatibility evidence, alternatives, and unresolved feasibility questions |
 | [Delivery plan](docs/delivery-plan.md) | Phase boundaries, seed backlog, dependencies, and release gates |
 | [Acceptance catalogue](docs/acceptance.md) | Executable acceptance scenarios and the evidence each phase must produce |
-| [Revision proposal R1](docs/proposals/r1-inbox-iterations-defects.md) | Draft decision inbox, iterations, and defect register; awaiting user decision |
+| [Revision R1](docs/proposals/r1-inbox-iterations-defects.md) | Accepted 2026-11-09: decision inbox, iterations, and defect register; rationale, migration notes, and sources |
 
 Start with the decisions in the product specification, then review the workflow and phase gates. State transitions are authoritative in `docs/workflow.md`; the other documents reference them.
 

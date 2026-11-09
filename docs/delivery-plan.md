@@ -14,6 +14,8 @@ Approved scope amendment, 2026-11-09: deliver the desktop application as the pri
 
 Service ownership correction: persistent startup is a desktop/explicit-owner responsibility. P1/P5 verify attach-only MCP/commands/configuration, named offline failure without spawn, host-disconnect survival, and explicit owner crash recovery under AC29/35/38. A host-born daemon is not evidence of independent service lifetime. The complete local multi-harness product and all other phase gates remain required.
 
+Accepted scope revision R1, 2026-11-09: the user accepted [revision R1](proposals/r1-inbox-iterations-defects.md) with every proposed default. The decision inbox with batch delivery acceptance, iteration records, and the defect register (FR27/FR28, refined FR15/FR22) join the MVP: service and web in P3, QA verification and MINOR waivers in P4, desktop signals in P5. Operating-system notifications are capability-reported and do not block a portable release.
+
 ## 2. Phase definitions
 
 | Phase | Result | Mandatory exit evidence | Relative size |
@@ -21,9 +23,9 @@ Service ownership correction: persistent startup is a desktop/explicit-owner res
 | P0 Research/specification | Sources, requirements, workflow, architecture, contracts, acceptance catalogue, public planning repository | Document consistency, coverage review, secret/whitespace/link checks, verified GitHub sync; design remains proposed until user approves | This round |
 | P1 Compatibility proof | Reproducible spike results for all target entries, workspace binding, scoped children, UI route, execution recovery, Windows packaging | AC01/02/14/17/29/30 feasibility probes; exact host/runtime versions and negotiated transports; chosen dependency pins; every failed mandatory capability resolved or explicitly rescoped | M, high uncertainty |
 | P2 Workflow authority | Domain model, migrations, guarded commands, approvals/grants, audit, idempotency, parent rules, local storage | AC03–16, AC20–24, AC31/32/35/36 domain/storage tests; no mock success for unimplemented provider verification | L |
-| P3 Human + agent vertical slice | Browser workspace and compact MCP tools with real daemon storage; design review through user acceptance using fixture evidence clearly labeled | AC01–09, AC14/24–30/34/36; actual MCP reads/writes from all three entries; keyboard/UI checks; every write shares domain enforcement | L |
-| P4 Managed collaboration | PM planning/dispatch, isolated workers, real independent QA, rejected-work loops, Git provider verification, recovery | AC10–23/25/31–35 using real runs and a disposable test repository; four-run ownership tests; exact-snapshot acceptance | XL |
-| P5 Packaged MVP | Desktop application, common MCP entry, installation/upgrade/recovery guidance, three-entry end-to-end acceptance, published source/release artifacts | All mandatory AC01–38 under the accepted amendment; recorded supported matrix; Windows fresh-install run; no unresolved blocking defects; human release acceptance | L |
+| P3 Human + agent vertical slice | Browser workspace and compact MCP tools with real daemon storage; design review through user acceptance using fixture evidence clearly labeled | AC01–09, AC14/24–30/34/36/39/40 and the AC41 register parts; actual MCP reads/writes from all three entries; keyboard/UI checks; every write shares domain enforcement | L |
+| P4 Managed collaboration | PM planning/dispatch, isolated workers, real independent QA, rejected-work loops, Git provider verification, recovery | AC10–23/25/31–35 and the AC41 verification and waiver parts, using real runs and a disposable test repository; four-run ownership tests; exact-snapshot acceptance | XL |
+| P5 Packaged MVP | Desktop application, common MCP entry, installation/upgrade/recovery guidance, three-entry end-to-end acceptance, published source/release artifacts | All mandatory AC01–41 under the accepted amendments; recorded supported matrix; Windows fresh-install run; no unresolved blocking defects; human release acceptance | L |
 | P6 Shared team extension | Multi-human server, memberships, remote companions, optional external issue projections | New approved spec: tenant/workspace boundaries, synchronization, operations, privacy, migration and recovery acceptance | Unestimated |
 
 The sizes compare implementation scope, not elapsed time or guaranteed agent speed. After P1, PM estimates tasks against measured adapter complexity and available capacity, then sets optional dates/iterations. No fixed delivery date or token-cost promise is made in P0.
@@ -68,7 +70,11 @@ These are **planned records**, not GitHub issues and not approved/in-progress as
 | B15 | Managed collaboration——[Feature] Git: verify immutable commit evidence -> traceable closure | Git integration worker | B13 | AC21–23 |
 | B16 | Managed collaboration——[Test] Recovery: interrupt and restart runs -> no false completion or duplicate execution | Reliability worker | B13–B15 | AC18/33/35 |
 | B17 | Packaged MVP——[Feature] Desktop: package application and MCP entry -> installable shared workspace | Integration worker | P4 gate | AC29/30/38 |
-| B18 | Packaged MVP——[Test] Delivery: exercise complete workflow -> accepted three-harness release | Independent QA | B17 | AC01–38 |
+| B18 | Packaged MVP——[Test] Delivery: exercise complete workflow -> accepted three-harness release | Independent QA | B17, B19–B22 | AC01–41 |
+| B19 | Human attention——[Feature] Inbox: derive pending human decisions -> no unseen waiting gate | Full-stack worker | B10/B12 | AC39 |
+| B20 | Iteration planning——[Feature] Iterations: record goals and membership -> explicit carry-over without stale approvals | Backend worker | B08/B10 | AC40 |
+| B21 | Defect tracking——[Feature] Register: require explicit verification -> no implicit defect resolution | Domain worker | B14 | AC19/41 |
+| B22 | Human attention——[Feature] Desktop: signal new blocking decisions -> owner notices without polling | Desktop worker | B17/B19 | AC36/39 |
 
 PM can split these after P1; each final task still needs its own acceptance criteria, owned outputs, and approved mapping. Do not assign a single worker to implement and independently QA the same task.
 
@@ -107,7 +113,7 @@ P5 release policy: zero unresolved BLOCKER/MAJOR defects; mandatory scenarios pa
 | Approval drift | Requirement or candidate changes after review | Immutable revisions/digests and affected-gate invalidation |
 | Database/packaging failure | Native driver or filesystem locking fails on Windows | Early clean-install spike, short transactions, tested backup/restore |
 | Process outlives ownership | Expired lease while worker still writes | Fence state changes, retain isolated directory, reconcile/stop before redispatch |
-| Review bottleneck | Lead/QA/user queues stall many workers | Bounded WIP, explicit waiting owner, age/queue gaps, batch decisions for exact snapshots |
+| Review bottleneck | Lead/QA/user queues stall many workers | Bounded WIP, explicit waiting owner, age/queue gaps, batch decisions for exact snapshots, derived decision inbox with local signals (R1) |
 | Scope overload | Team hosting/issue syncing delays core | P6 boundary; preserve seams without implementing unused infrastructure |
 | Public data leakage | Project evidence accidentally published | Local data directory, ignore rules, sanitized fixtures, pre-push inventory/checks |
 

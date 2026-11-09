@@ -31,14 +31,20 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | `work_submit` | Issue, round, scope/design revision, artifact manifest, criterion/self-check evidence, lease fence | Owning worker; transitions to initial lead review only |
 | `review_submit` | Issue, stage, verdict, criterion results, report/evidence, current digest | Assigned lead or independent QA; stage-specific rules; no human impersonation |
 | `issue_transition` | Action enum, reason/evidence references, expected version | Only legal lifecycle commands; hold/abandon/reopen/complete need human authority as specified |
-| `approval_request` | Design/delivery/scope/action digest, explanation, requested decision | Creates a human inbox entry and link; cannot decide or create a grant |
+| `approval_request` | Withdrawn by revision R1, 2026-11-09 | Pending human decisions derive from authoritative state; agents cannot create, dismiss, or resolve inbox entries |
 | `run_get` | Run/dispatch ID, compact status/event cursor | Reports queued/running/uncertain and provider references truthfully |
 | `run_interrupt` | Run ID, reason, expected version | Authorized coordinator; stop request is distinct from confirmed termination |
 | `gap_list` | Workspace/parent, severity/category, cursor | Explains deterministic gaps with IDs and remediation |
+| `iteration_list` / `iteration_get` | Workspace, state, cursor; or an iteration with its members and derived progress | Read within scope |
+| `iteration_create` / `iteration_update` / `iteration_start` / `iteration_close` / `iteration_membership_set` | Iteration fields, member issue versions, close dispositions, expected versions | Lead/PM; membership is metadata and never gates work; closing needs a disposition for every unfinished member |
+| `defect_list` / `defect_get` | Workspace, issue, state, severity, origin, cursor; or a defect | Read within the caller's existing scope |
+| `defect_propose` | Target issue, severity, reproduction, expected/actual behavior, optional criteria | Any agent on an issue it can read; creates `PROPOSED` only, for human triage |
 
 The common schema envelope contains `contract_version`, `workspace_id`, and for mutations `expected_version` plus `idempotency_key`. Multi-record commands list all relevant aggregate preconditions. Lease renewals use the lease version; other commands use the issue/plan version. Read-only queries do not require mutation keys.
 
 Human web endpoints additionally support design decisions, acceptance decisions, grants/revocations, and explicit scope exclusion/reopen decisions. They are not registered as agent-callable tools. A future chat-human adapter must pass the same human attribution tests before forwarding those commands.
+
+Accepted revision R1, 2026-11-09, adds the human-only `inbox_list`, `decision_batch_accept`, direct defect reports, triage, withdrawal, MINOR waivers, and the rejection classification on delivery decisions. None is an agent-callable tool or a grantable action.
 
 Implemented delegation refinement, 2026-11-07: `grant_list` returns this authenticated lead/PM's paginated issue-specific authority and status. Supply an available `grantId` to `issue_transition` or `delivery_complete`; the service rechecks grantee/action/scope/expiry/uses and all normal transition guards atomically. Human-only `grant_create` binds the displayed `authorizationScopeHash`, current issue version, and, for completion, exact candidate/digest. `grant_revoke` checks both issue and grant versions. Neither command is exposed over MCP. See [the executable local contract](local-development.md#human-action-grants) for current camelCase fields and limits. This refinement does not implement batch decisions or arbitrary human-event attribution.
 
@@ -156,17 +162,19 @@ Every assignment packet includes:
 
 The brief contains references and a compact summary; agents fetch the necessary design/evidence sections on demand. Do not copy the whole project history into every child prompt.
 
+Revision R1 additions: packets carry the iteration name, end date, and a goal excerpt as advisory context. QA packets list each open defect, and each defect whose waiver digest is stale, as compact references that the report must answer individually. Both stay within the NF05 budget.
+
 Handoff must state implemented behavior, criteria covered, evidence references, final artifact snapshot, known limitations, and anything still blocked. A narrative such as `finished, all good` is not sufficient.
 
 ## 6. Role playbooks
 
 **Product lead:** resolve workspace; discuss the requirement; create parent draft(s); write measurable design and non-goals; request human approval. After implementation, review the actual snapshot twice at the specified stages and present the final evidence to the user. The product role remains accountable for gaps even when PM handles dispatch.
 
-**PM:** read the approved or draft revision; propose small tasks with valid names and criterion coverage; declare dependencies and shared interfaces; leave assignment/dates empty when intentionally deferred. Apply a reviewed plan, choose compatible execution adapters, and dispatch only ready work. Reconcile failures and reassign with history. Do not declare new approved scope or use deadline pressure to skip gates.
+**PM:** read the approved or draft revision; propose small tasks with valid names and criterion coverage; declare dependencies and shared interfaces; leave assignment/dates empty when intentionally deferred. Apply a reviewed plan, choose compatible execution adapters, and dispatch only ready work. Reconcile failures and reassign with history. Do not declare new approved scope or use deadline pressure to skip gates. Plan optional iterations and close each with an explicit disposition for every unfinished member; an end date never justifies skipping a gate.
 
 **Worker:** fetch the exact work packet, confirm scope, claim atomically, and work only in its assigned execution directory. Renew ownership, run meaningful self-checks, publish immutable evidence, and submit for initial lead review. On rejection read the failed criteria, implement a new round, and resubmit through the full path.
 
-**QA:** start from a fresh assigned context and approved criteria. Independently inspect and test the candidate, including boundary/negative paths where relevant; record pass/fail/blocked/not-run and reproducible defects. Report tool/environment limitations honestly. Do not change implementation under the QA identity; fixes return to the worker.
+**QA:** start from a fresh assigned context and approved criteria. Independently inspect and test the candidate, including boundary/negative paths where relevant; record pass/fail/blocked/not-run and reproducible defects. Report tool/environment limitations honestly. Do not change implementation under the QA identity; fixes return to the worker. Give every listed defect an explicit result; never infer that a defect is fixed from unrelated passing checks.
 
 **Coordinator:** persist dispatch before spawn; attach actual provider IDs; bridge permissions/user-input requests to the human; handle heartbeats/events and interruption. A provider's successful turn is not a successful product acceptance.
 
