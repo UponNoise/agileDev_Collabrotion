@@ -1,10 +1,11 @@
-import { app, BrowserWindow, dialog, Menu, screen, session } from 'electron';
+import { app, BrowserWindow, dialog, Menu, screen, session, shell } from 'electron';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dataDirectory, readDescriptor, serviceAvailable } from './service-launcher.js';
+import { desktopClipboardAllowed, desktopCommitLink, isWorkspaceUrl } from './desktop-policy.js';
 
 const directory = dataDirectory();
 const profile = join(directory, 'desktop');
@@ -34,8 +35,14 @@ async function openWorkspace() {
   if (!login.ok || !cookie) throw new Error('The application browser session could not be created.');
   const { expiresAt } = await login.json() as { expiresAt: number };
   const partition = session.fromPartition('persist:agiledev');
-  partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  partition.setPermissionCheckHandler(() => false);
+  partition.setPermissionRequestHandler((contents, permission, callback, details) => callback(desktopClipboardAllowed(config.endpoint, permission, {
+    workspaceContents: contents === window?.webContents,
+    contentsUrl: contents.getURL(), ...details
+  })));
+  partition.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => desktopClipboardAllowed(config.endpoint, permission, {
+    workspaceContents: contents === window?.webContents,
+    contentsUrl: contents?.getURL(), requestingOrigin, ...details
+  }));
   partition.on('will-download', event => event.preventDefault());
   partition.webRequest.onBeforeRequest((details, callback) => callback({ cancel: new URL(details.url).origin !== config.endpoint }));
   await partition.cookies.set({ url: config.endpoint, name: 'agiledev_ui', value: cookie, httpOnly: true, sameSite: 'strict', path: '/', expirationDate: expiresAt / 1000 });
@@ -49,8 +56,17 @@ async function openWorkspace() {
     } catch {}
   }
   window = new BrowserWindow({ ...bounds, minWidth: 390, minHeight: 500, title: 'AgileDev Collaboration', backgroundColor: '#ffffff', show: false, webPreferences: { session: partition, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, webviewTag: false, devTools: !app.isPackaged } });
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== config.endpoint) event.preventDefault(); });
+  const openCommitLink = (url: string) => {
+    const target = desktopCommitLink(config.endpoint, window?.webContents.getURL(), url);
+    if (target) void shell.openExternal(target).catch(() => dialog.showErrorBox('AgileDev Collaboration', 'The commit link could not be opened in your browser.'));
+  };
+  window.webContents.setWindowOpenHandler(({ url, postBody }) => {
+    if (!postBody) openCommitLink(url);
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isWorkspaceUrl(config.endpoint, url)) { event.preventDefault(); openCommitLink(url); }
+  });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.once('ready-to-show', () => window?.show());
   window.on('close', () => {

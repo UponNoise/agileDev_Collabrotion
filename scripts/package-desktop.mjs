@@ -13,12 +13,17 @@ const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const stage = mkdtempSync(join(tmpdir(), 'agiledev-package-'));
 const app = join(stage, 'app');
 const service = join(stage, 'service');
+const compiled = join(stage, 'dist');
+for (const args of [
+  [join(root, 'node_modules/typescript/bin/tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', compiled],
+  [join(root, 'node_modules/vite/bin/vite.js'), 'build', '--config', join(root, 'vite.config.ts'), '--outDir', join(compiled, 'web')]
+]) execFileSync(process.execPath, args, { cwd: root, stdio: 'inherit', windowsHide: true });
 mkdirSync(join(app, 'dist'), { recursive: true });
 mkdirSync(join(service, 'runtime'), { recursive: true });
-for (const file of ['desktop.js', 'service-launcher.js']) cpSync(join(root, 'dist', file), join(app, 'dist', file));
+for (const file of ['desktop.js', 'desktop-policy.js', 'service-launcher.js']) cpSync(join(compiled, file), join(app, 'dist', file));
 writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'agiledev-collaboration', productName: 'AgileDev Collaboration', author: 'AgileDev contributors', version: manifest.version, type: 'module', main: 'dist/desktop.js', private: true }, null, 2));
 for (const file of ['package.json', 'package-lock.json']) cpSync(join(root, file), join(service, file));
-cpSync(join(root, 'dist'), join(service, 'dist'), { recursive: true });
+cpSync(compiled, join(service, 'dist'), { recursive: true });
 for (const args of [['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], ['rebuild', 'better-sqlite3']]) execFileSync(process.execPath, [process.env.npm_execpath, ...args, '--cache', join(stage, 'npm-cache')], { cwd: service, stdio: 'inherit', windowsHide: true });
 const archiveName = `node-${process.version}-win-x64.zip`;
 const base = `https://nodejs.org/dist/${process.version}`;
