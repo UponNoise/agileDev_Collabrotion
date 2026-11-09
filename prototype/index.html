@@ -1,0 +1,1643 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AgileDev 交互原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: quiet tool shell. 232px sidebar rail, inset main panel, borderless 36px rows, 300px property rail on detail pages. */
+:root{
+  --bg:#f6f6f8;--panel:#ffffff;--side:#f6f6f8;--hover:#efeff3;--sel:#ebe9fb;--soft:#f9f9fb;
+  --line:#e6e6ec;--line-2:#d5d5de;
+  --fg:#16161b;--fg-2:#575864;--fg-3:#8a8b96;
+  --accent:#6250d6;--accent-ink:#5443c8;--accent-soft:#efedfc;--on-accent:#ffffff;
+  --st-todo:#8a8b96;--st-dev:#b97f00;--st-review:#2a78d6;--st-you:#6250d6;--st-done:#1a9e6e;--st-rework:#e05a2b;--st-crit:#d03b3b;
+  --t-todo:#f0f0f3;--t-dev:#fbf3df;--t-review:#e7f0fb;--t-you:#efedfc;--t-done:#e3f4ec;--t-rework:#fcebe3;--t-crit:#fbe8e8;
+  --shadow:0 1px 2px rgba(20,20,30,.06),0 14px 36px rgba(20,20,30,.12);
+  --scrim:rgba(22,22,30,.28);
+  --f-ui:"Geist",system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --f-mono:"Geist Mono","JetBrains Mono",ui-monospace,"Cascadia Code",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0c0c0f;--panel:#141418;--side:#0c0c0f;--hover:#1e1e24;--sel:#25233b;--soft:#18181d;
+  --line:#25252d;--line-2:#34343e;
+  --fg:#ececf1;--fg-2:#a4a5b0;--fg-3:#71727d;
+  --accent:#7466e6;--accent-ink:#a397f3;--accent-soft:#25223f;--on-accent:#ffffff;
+  --st-todo:#71727d;--st-dev:#c98500;--st-review:#3987e5;--st-you:#9085e9;--st-done:#199e70;--st-rework:#d95926;--st-crit:#e66767;
+  --t-todo:#1e1e24;--t-dev:#2a2312;--t-review:#13233a;--t-you:#25223f;--t-done:#10281e;--t-rework:#33190f;--t-crit:#341717;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 36px rgba(0,0,0,.55);--scrim:rgba(0,0,0,.55);color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0c0c0f;--panel:#141418;--side:#0c0c0f;--hover:#1e1e24;--sel:#25233b;--soft:#18181d;
+  --line:#25252d;--line-2:#34343e;
+  --fg:#ececf1;--fg-2:#a4a5b0;--fg-3:#71727d;
+  --accent:#7466e6;--accent-ink:#a397f3;--accent-soft:#25223f;--on-accent:#ffffff;
+  --st-todo:#71727d;--st-dev:#c98500;--st-review:#3987e5;--st-you:#9085e9;--st-done:#199e70;--st-rework:#d95926;--st-crit:#e66767;
+  --t-todo:#1e1e24;--t-dev:#2a2312;--t-review:#13233a;--t-you:#25223f;--t-done:#10281e;--t-rework:#33190f;--t-crit:#341717;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 36px rgba(0,0,0,.55);--scrim:rgba(0,0,0,.55);color-scheme:dark}
+html{height:100%;box-sizing:border-box}
+*,*::before,*::after{box-sizing:border-box}
+body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 var(--f-ui);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0;text-align:inherit}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:5px}
+svg{flex:none;display:block}
+h1,h2,h3,p{margin:0}
+.mono{font-family:var(--f-mono);font-size:12px;letter-spacing:-.01em}
+.muted{color:var(--fg-3)}.dim{color:var(--fg-2)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+.app{display:grid;grid-template-columns:232px minmax(0,1fr);height:100%}
+.side{display:flex;flex-direction:column;gap:2px;min-height:0;overflow:auto;padding:10px 8px 10px 10px;background:var(--side)}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;margin:8px 8px 8px 0;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.topbar{display:flex;align-items:center;gap:10px;min-height:46px;padding:7px 14px 7px 18px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
+.topbar h1{font-size:14px;font-weight:600}
+.content{flex:1;min-height:0;overflow:auto}
+.grow{flex:1}
+.icon-btn.menu-btn{display:none}
+
+.ws{display:flex;align-items:center;gap:8px;padding:6px 6px;border-radius:7px;font-weight:600;width:100%}
+.ws:hover{background:var(--hover)}
+.logo{width:20px;height:20px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:11px;font-weight:700}
+.ws small{display:block;font-weight:400;color:var(--fg-3);font-size:11.5px}
+.side-tools{display:flex;gap:6px;margin:6px 0 8px}
+.side-search{flex:1;display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--fg-3)}
+.side-search:hover{border-color:var(--line-2);color:var(--fg-2)}
+.kbd{margin-left:auto;font-family:var(--f-mono);font-size:10.5px;color:var(--fg-3);border:1px solid var(--line);border-radius:4px;padding:0 4px;line-height:16px;background:var(--panel)}
+.icon-btn{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:7px;color:var(--fg-2)}
+.icon-btn:hover{background:var(--hover);color:var(--fg)}
+.side-tools .icon-btn{border:1px solid var(--line);background:var(--panel)}
+.nav-item{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 8px;border-radius:7px;color:var(--fg-2);font-weight:500}
+.nav-item:hover{background:var(--hover);color:var(--fg)}
+.nav-item[aria-current="page"]{background:var(--hover);color:var(--fg)}
+.nav-item .count{margin-left:auto;font-size:12px;color:var(--fg-3)}
+.nav-item .count.you{color:var(--accent-ink);font-weight:600}
+.nav-item .later{margin-left:auto;font-size:10.5px;color:var(--fg-3);border:1px dashed var(--line-2);border-radius:4px;padding:0 4px}
+.side-label{font-size:11.5px;color:var(--fg-3);padding:14px 8px 4px;font-weight:500}
+.req-link{font-weight:400}
+.req-link span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.side-foot{margin-top:auto;display:flex;flex-direction:column;gap:6px;padding:10px 4px 2px}
+.conn{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--fg-3);white-space:nowrap;min-width:0}
+.conn .mono{overflow:hidden;text-overflow:ellipsis;font-size:11px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--st-done);flex:none}
+.dot.live{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.foot-row{display:flex;align-items:center;gap:4px}
+.seg{flex:none;display:inline-flex;border:1px solid var(--line);border-radius:7px;padding:2px;background:var(--panel);gap:2px}
+.seg button{height:22px;padding:0 7px;white-space:nowrap;display:inline-flex;align-items:center;border-radius:5px;font-size:12px;color:var(--fg-2)}
+.seg button[aria-pressed="true"]{background:var(--hover);color:var(--fg);font-weight:600}
+.me{display:flex;align-items:center;gap:8px;padding:6px 4px 0;font-size:12px;color:var(--fg-2)}
+
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;border:1px solid var(--line);background:var(--panel);font-weight:500;font-size:12.5px;white-space:nowrap}
+.btn:hover{border-color:var(--line-2);background:var(--soft)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{filter:brightness(1.08);background:var(--accent)}
+.btn.ghost{border-color:transparent;background:none;color:var(--fg-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--fg)}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
+.tabs button{height:26px;padding:0 9px;border-radius:7px;color:var(--fg-2);font-weight:500;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.tabs button:hover{background:var(--hover);color:var(--fg)}
+.tabs button[aria-pressed="true"]{background:var(--hover);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line)}
+.tabs .c{font-size:11.5px;color:var(--fg-3)}
+.search{display:flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid var(--line);border-radius:7px;width:200px;color:var(--fg-3)}
+.search:focus-within{border-color:var(--accent)}
+.search input{border:0;outline:0;background:none;width:100%;min-width:0;color:var(--fg);font-size:12.5px}
+.chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px;border-radius:5px;border:1px solid var(--line);font-size:11.5px;color:var(--fg-2);white-space:nowrap;background:var(--panel)}
+.chip.you{background:var(--t-you);border-color:transparent;color:var(--accent-ink);font-weight:600}
+.chip.flat{border-color:transparent;background:var(--hover)}
+.chip.type{font-family:var(--f-mono);font-size:11px;color:var(--fg-2);background:var(--hover);border-color:transparent}
+.av{width:18px;height:18px;border-radius:50%;display:inline-grid;place-items:center;font-size:8.5px;font-weight:600;background:var(--hover);color:var(--fg-2);border:1px solid var(--line);flex:none;letter-spacing:-.02em}
+.av.you{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-size:9.5px}
+.av.none{background:none;border:1px dashed var(--line-2)}
+.hx{display:inline-grid;place-items:center;height:16px;min-width:22px;padding:0 3px;border-radius:4px;font:600 9.5px/1 var(--f-mono);color:var(--fg-2);background:var(--hover);border:1px solid var(--line)}
+.who{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+
+.page{padding:22px 28px 40px;max-width:1240px;margin:0 auto}
+.home-grid{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(300px,1fr);gap:28px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:28px;min-width:0}
+.greet h2{font-size:20px;font-weight:600;letter-spacing:-.01em;text-wrap:balance}
+.greet p{color:var(--fg-2);margin-top:4px}
+.sec-h{display:flex;align-items:center;gap:8px;padding:0 0 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.sec-h h3{font-size:13px;font-weight:600}
+.sec-h .c{color:var(--fg-3);font-size:12px}
+.sec-h a,.sec-h button.link{margin-left:auto;font-size:12px;color:var(--fg-3)}
+.sec-h a:hover,.sec-h button.link:hover{color:var(--fg)}
+.lrow{display:flex;align-items:center;gap:10px;min-height:38px;padding:6px 8px;margin:0 -8px;border-radius:7px}
+.lrow:hover,.lrow.is-active{background:var(--hover)}
+.lrow .t{flex:1;min-width:0}
+.lrow .t b{font-weight:500}
+.lrow .t .s{display:block;font-size:12px;color:var(--fg-3);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.lrow .t .one{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dec-ic{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:var(--t-you);color:var(--accent-ink);flex:none}
+.dec-ic.crit{background:var(--t-crit);color:var(--st-crit)}
+.go{color:var(--fg-3);display:inline-flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap}
+.lrow:hover .go{color:var(--accent-ink)}
+
+.pipe{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;align-items:end}
+.pstage{display:flex;flex-direction:column;gap:6px;padding:8px 4px 6px;border-radius:7px;min-width:0;text-align:left}
+.pstage:hover{background:var(--hover)}
+.pbar{height:44px;display:flex;align-items:flex-end}
+.pbar i{display:block;width:100%;border-radius:4px 4px 0 0;background:var(--st-review);opacity:.85;min-height:2px}
+.pstage.you .pbar i{background:var(--accent)}
+.pstage .n{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.pstage .l{font-size:11.5px;color:var(--fg-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pstage .l .you-tag{color:var(--accent-ink);font-weight:600}
+.pbase{height:1px;background:var(--line-2);margin-top:-6px}
+.pexc{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.slots{display:flex;gap:6px}
+.slot{flex:1;min-width:0;border:1px solid var(--line);border-radius:8px;padding:7px 8px;display:flex;flex-direction:column;gap:3px;font-size:12px}
+.slot.busy{background:var(--soft)}
+.slot.unc{border-color:color-mix(in srgb,var(--st-crit) 45%,var(--line));background:var(--t-crit)}
+.slot .k{display:flex;align-items:center;gap:6px;font-weight:500}
+.slot .s{color:var(--fg-3);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meter{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--fg-2);margin-top:8px}
+.meter .cells{display:flex;gap:3px}
+.meter .cells i{width:16px;height:6px;border-radius:2px;background:var(--line-2)}
+.meter .cells i.on{background:var(--st-review)}
+.gap-g{font-size:11.5px;color:var(--fg-3);font-weight:500;padding:10px 0 2px;display:flex;gap:6px;align-items:center}
+.sev{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600}
+.sev.block{color:var(--st-crit)}.sev.adv{color:var(--fg-3)}
+.feed{display:flex;flex-direction:column}
+.fitem{display:flex;gap:10px;padding:7px 0;align-items:flex-start}
+.fitem .av{margin-top:1px}
+.fitem .t{flex:1;min-width:0;color:var(--fg-2)}
+.fitem .t b{color:var(--fg);font-weight:500}
+.fitem time{font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+
+.list{padding-bottom:40px}
+.ghead{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;height:38px;padding:0 20px 0 12px;background:var(--soft);border-bottom:1px solid var(--line)}
+.ghead .tg{display:grid;place-items:center;width:22px;height:22px;border-radius:5px;color:var(--fg-3)}
+.ghead .tg:hover{background:var(--hover);color:var(--fg)}
+.ghead .tg svg{transition:transform .15s}
+.ghead.closed .tg svg{transform:rotate(-90deg)}
+.ghead a{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
+.ghead .gt{font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ghead .gm{display:flex;align-items:center;gap:10px;color:var(--fg-3);font-size:12px;flex:none}
+.row{display:flex;align-items:center;gap:10px;height:38px;padding:0 20px 0 22px;border-bottom:1px solid var(--line);min-width:0}
+.row:hover{background:var(--hover)}
+.row.is-active{background:var(--sel)}
+.row .key{width:54px;flex:none;color:var(--fg-3)}
+.row .ttl{flex:1;min-width:0;display:flex;align-items:center;gap:7px}
+.row .ttl .txt{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.row .ttl .par{color:var(--fg-3);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:180px;flex:none}
+.row .meta{display:flex;align-items:center;gap:10px;color:var(--fg-3);font-size:12px;flex:none}
+.row .due{width:44px;text-align:right}
+.row .it{width:26px}
+.row.child{padding-left:44px}
+.empty{padding:60px 20px;text-align:center;color:var(--fg-2)}
+.empty h3{font-size:14px;color:var(--fg);margin-bottom:6px}
+
+.board{display:flex;gap:10px;padding:12px 14px 20px;height:100%;overflow-x:auto;align-items:flex-start}
+.col{flex:0 0 244px;display:flex;flex-direction:column;min-height:0;max-height:100%;border-radius:10px;background:var(--soft);border:1px solid var(--line)}
+.col.drop{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.col-h{display:flex;align-items:center;gap:7px;padding:10px 10px 6px;font-weight:600}
+.col-h .c{color:var(--fg-3);font-weight:400}
+.col-h .sub{margin-left:auto;font-size:11.5px;font-weight:400;color:var(--fg-3)}
+.col-b{display:flex;flex-direction:column;gap:6px;padding:4px 6px 8px;overflow:auto;min-height:60px}
+.card{display:flex;flex-direction:column;gap:7px;padding:9px 10px;border-radius:8px;background:var(--panel);border:1px solid var(--line);box-shadow:0 1px 1px rgba(0,0,0,.03);cursor:pointer;text-align:left}
+.card:hover{border-color:var(--line-2)}
+.card.dragging{opacity:.45}
+.card .top{display:flex;align-items:center;gap:6px;color:var(--fg-3);font-size:12px}
+.card .top .av{margin-left:auto}
+.card .ct{font-weight:500;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card .chips{display:flex;gap:5px;flex-wrap:wrap}
+.card .par{font-size:11.5px;color:var(--fg-3);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.card.hold{opacity:.7}
+
+.detail{display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:100%}
+.d-main{padding:22px 36px 60px;min-width:0;max-width:880px;width:100%;margin:0 auto}
+.d-side{border-left:1px solid var(--line);padding:16px 14px 40px;background:var(--soft)}
+.crumbs{display:flex;align-items:center;gap:6px;min-width:0;color:var(--fg-3);font-size:12.5px;flex:1}
+.crumbs a{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+.crumbs a:hover{color:var(--fg)}
+.crumbs .cur{color:var(--fg);font-weight:500;white-space:nowrap}
+.d-parent{display:inline-flex;align-items:center;gap:6px;color:var(--fg-3);font-size:12.5px;margin-bottom:10px}
+.d-parent:hover{color:var(--fg)}
+.d-title{font-size:21px;font-weight:600;letter-spacing:-.01em;line-height:1.35;text-wrap:balance;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.d-title .chip{transform:translateY(-2px)}
+.d-sub{display:flex;align-items:center;gap:10px;color:var(--fg-3);font-size:12.5px;margin-top:8px;flex-wrap:wrap}
+.flow{display:flex;align-items:flex-start;margin:22px 0 4px;overflow-x:auto;padding-bottom:4px}
+.fs{flex:1 0 92px;display:flex;flex-direction:column;gap:6px;min-width:92px;position:relative}
+.fs .bar{display:flex;align-items:center;gap:0}
+.fs .nd{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;border:1.5px solid var(--line-2);background:var(--panel);color:var(--fg-3);flex:none;z-index:1}
+.fs .ln{height:2px;background:var(--line-2);flex:1}
+.fs.done .nd{background:var(--st-done);border-color:var(--st-done);color:#fff}
+.fs.done .ln{background:var(--st-done)}
+.fs.cur .nd{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);color:var(--accent)}
+.fs.cur.you .nd{background:var(--accent);color:var(--on-accent)}
+.fs.bad .nd{border-color:var(--st-rework);color:var(--st-rework);box-shadow:0 0 0 4px var(--t-rework)}
+.fs:last-child .ln{visibility:hidden}
+.fs .fl{font-size:12px;font-weight:500;padding-right:8px}
+.fs .fd{font-size:11.5px;color:var(--fg-3);padding-right:8px}
+.fs.cur .fl{color:var(--fg)}
+.next{display:flex;gap:12px;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--soft);margin:16px 0 4px;align-items:flex-start}
+.next.you{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));background:var(--t-you)}
+.next.crit{border-color:color-mix(in srgb,var(--st-crit) 40%,var(--line));background:var(--t-crit)}
+.next .nb{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.next .nh{font-weight:600}
+.next .nh small{font-weight:400;color:var(--fg-2);margin-left:6px}
+.blk{display:flex;flex-direction:column;gap:4px;margin-top:2px}
+.blk div{position:relative;padding-left:21px;font-size:12.5px;color:var(--fg-2);line-height:1.5}
+.blk div>svg{position:absolute;left:0;top:2px}
+.blk div>span,.blk div>code{margin-right:6px}
+.blk code{font-family:var(--f-mono);font-size:11px;color:var(--fg-3)}
+.dtabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin:24px 0 16px;overflow-x:auto;scrollbar-width:none}
+.dtabs button{height:34px;color:var(--fg-3);font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.dtabs button:hover{color:var(--fg)}
+.dtabs button[aria-selected="true"]{color:var(--fg);border-color:var(--fg)}
+.dtabs .c{font-size:11.5px;color:var(--fg-3)}
+.blockh{font-size:12px;font-weight:600;color:var(--fg-2);margin:22px 0 8px;display:flex;align-items:center;gap:8px}
+.blockh:first-child{margin-top:0}
+.prose{font-size:13.5px;line-height:1.7;color:var(--fg);white-space:pre-wrap;max-width:68ch}
+.ac{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}
+.ac:last-child{border-bottom:0}
+.ac .id{font-family:var(--f-mono);font-size:11.5px;color:var(--fg-3);width:40px;flex:none;padding-top:1px}
+.ac .tx{flex:1;min-width:0}
+.ac .rs{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex:none;max-width:45%}
+.res{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.res.pass{color:var(--st-done)}.res.fail{color:var(--st-rework)}.res.wait{color:var(--fg-3);font-weight:500}.res.run{color:var(--st-review)}
+.tl{display:flex;flex-direction:column}
+.ti{display:flex;gap:12px;position:relative;padding-bottom:16px}
+.ti::before{content:"";position:absolute;left:9px;top:22px;bottom:2px;width:1px;background:var(--line)}
+.ti:last-child::before{display:none}
+.ti .tc{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.ti .tc .h{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ti .tc .h b{font-weight:600}
+.ti .tc p{color:var(--fg-2);font-size:12.5px}
+.ti time{font-size:11.5px;color:var(--fg-3)}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px 12px;font-size:12.5px}
+.kv dt{color:var(--fg-3)}
+.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.box{border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.box+.box{margin-top:10px}
+.trow{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px;min-width:0}
+.trow:last-child{border-bottom:0}
+.trow .grow{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+details.fold summary{cursor:pointer;color:var(--fg-2);font-size:12.5px;padding:6px 0;list-style:none;display:flex;align-items:center;gap:6px}
+details.fold summary::-webkit-details-marker{display:none}
+details.fold[open] summary svg{transform:rotate(90deg)}
+.files{font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);display:flex;flex-direction:column;gap:3px;padding:6px 0 0 18px}
+.prop-g{display:flex;flex-direction:column;gap:2px;padding:6px 0 12px;border-bottom:1px solid var(--line);margin-bottom:10px}
+.prop-g:last-child{border-bottom:0}
+.prop-h{font-size:11.5px;color:var(--fg-3);font-weight:500;padding:2px 6px 6px}
+.prop{display:grid;grid-template-columns:84px minmax(0,1fr);align-items:center;gap:8px;min-height:30px;padding:0 6px;border-radius:7px;font-size:12.5px;width:100%;text-align:left}
+.prop>span:first-child{color:var(--fg-3)}
+.prop .v{display:flex;align-items:center;gap:6px;min-width:0}
+.prop .v>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+button.prop:hover{background:var(--hover)}
+.props-toggle{display:none}
+
+.layer{position:fixed;inset:0;z-index:50;display:grid;place-items:start center;padding:12vh 16px 16px;background:var(--scrim)}
+.dlg{width:min(560px,100%);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;max-height:76vh}
+.dlg-h{display:flex;align-items:center;gap:8px;padding:14px 16px 10px}
+.dlg-h h2{font-size:14px;font-weight:600}
+.dlg-b{padding:4px 16px 14px;overflow:auto;display:flex;flex-direction:column;gap:12px}
+.dlg-f{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--line);background:var(--soft)}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:12px;color:var(--fg-2);font-weight:500}
+.field input,.field textarea,.field select{border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:7px 9px;font-size:13px;outline:0}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--accent)}
+.field small{color:var(--fg-3);font-size:11.5px}
+.note{font-size:12.5px;color:var(--fg-2);background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+.note.you{background:var(--t-you);border-color:transparent;color:var(--fg)}
+.pal{width:min(620px,100%)}
+.pal-in{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.pal-in input{flex:1;border:0;outline:0;background:none;font-size:15px;color:var(--fg);min-width:0}
+.pal-l{overflow:auto;padding:6px}
+.pal-g{font-size:11.5px;color:var(--fg-3);padding:8px 10px 4px}
+.pal-i{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 10px;border-radius:7px;color:var(--fg)}
+.pal-i[aria-selected="true"]{background:var(--hover)}
+.pal-i .s{margin-left:auto;color:var(--fg-3);font-size:12px}
+.pop{position:fixed;z-index:60;width:260px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:6px}
+.pop-h{font-size:11.5px;color:var(--fg-3);padding:6px 8px 4px}
+.pop-i{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 8px;border-radius:7px}
+.pop-i:hover:not([disabled]){background:var(--hover)}
+.pop-i[disabled]{cursor:not-allowed;color:var(--fg-3)}
+.pop-i small{display:block;color:var(--fg-3);font-size:11.5px}
+.pop-i .ck{margin-left:auto;color:var(--accent-ink)}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:70;background:var(--fg);color:var(--panel);padding:9px 14px;border-radius:9px;font-size:12.5px;box-shadow:var(--shadow);max-width:calc(100% - 32px)}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:12.5px}
+.keys kbd{font-family:var(--f-mono);font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px;background:var(--soft)}
+.ph{max-width:560px;margin:60px auto;padding:0 20px;display:flex;flex-direction:column;gap:12px}
+.ph h2{font-size:18px;font-weight:600}
+.ph ul{margin:0;padding-left:18px;color:var(--fg-2);display:flex;flex-direction:column;gap:6px}
+.scrim{display:none}
+
+@media (max-width:1180px){.home-grid{grid-template-columns:minmax(0,1fr)}.detail{grid-template-columns:minmax(0,1fr) 270px}.d-main{padding:20px 24px 60px}}
+@media (max-width:900px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side{position:fixed;inset:0 auto 0 0;width:min(280px,86vw);z-index:40;transform:translateX(-102%);transition:transform .18s ease;border-right:1px solid var(--line);padding-top:calc(10px + env(safe-area-inset-top,0px));padding-bottom:calc(10px + env(safe-area-inset-bottom,0px))}
+  .app.menu .side{transform:none}
+  .app.menu .scrim{display:block;position:fixed;inset:0;z-index:39;background:var(--scrim)}
+  .main{margin:0;border:0;border-radius:0}
+  .icon-btn.menu-btn{display:inline-grid}
+  .topbar{padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px))}
+  .detail{grid-template-columns:minmax(0,1fr)}
+  .d-side{border-left:0;border-top:1px solid var(--line);order:2}
+  .d-side.collapsed .prop-g{display:none}
+  .props-toggle{display:flex;align-items:center;gap:6px;width:100%;height:32px;color:var(--fg-2);font-weight:500}
+  .page{padding:18px 16px 40px}
+  .d-main{padding:18px 16px 40px}
+  .search{width:100%;order:3}
+  .row .meta .opt{display:none}
+}
+@media (max-width:600px){
+  .row{padding:0 14px 0 16px;gap:8px}.row.child{padding-left:26px}.ghead{padding:0 14px 0 6px}
+  .row .key,.row .meta .due,.row .meta .it,.ghead .gm .opt{display:none}
+  .row .ttl .par{display:none}
+  .pipe{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .col{flex-basis:84vw;scroll-snap-align:start}.board{scroll-snap-type:x mandatory}
+  .kv{grid-template-columns:96px minmax(0,1fr)}
+  .ac .rs{max-width:none}
+  .ac{flex-wrap:wrap}
+  .lrow .opt{display:none}
+  .crumbs>a,.crumbs>svg{display:none}
+  .next{flex-wrap:wrap}.next .nb{flex-basis:calc(100% - 40px)}.next>.btn{width:100%;justify-content:center}
+  .d-title{font-size:19px}
+  .layer{padding-top:8vh}
+}
+.dec{display:grid;grid-template-columns:minmax(0,1fr) 380px;min-height:100%}
+.dec-main{padding:22px 36px 60px;min-width:0;max-width:900px;width:100%;margin:0 auto}
+.dec-panel{border-left:1px solid var(--line);background:var(--soft);padding:16px 16px 32px;position:sticky;top:0;align-self:start;max-height:calc(100dvh - 64px);overflow:auto;display:flex;flex-direction:column;gap:12px}
+.eyebrow{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-3);font-weight:500;margin-bottom:8px;flex-wrap:wrap}
+.eyebrow a:hover{color:var(--fg)}
+.dp-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:12px}
+.dp-h{font-size:13px;font-weight:600}
+.bind{display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+.bind>div{display:grid;grid-template-columns:72px minmax(0,1fr) 24px;gap:8px;align-items:center;min-height:24px}
+.effects{margin:0;padding-left:16px;color:var(--fg-2);font-size:12.5px;display:flex;flex-direction:column;gap:4px}
+.opt-card{display:flex;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;align-items:flex-start;background:var(--panel)}
+.opt-card:hover{border-color:var(--line-2)}
+.opt-card:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.opt-card.off{opacity:.55;cursor:not-allowed}
+.opt-card input,.check-line input{margin-top:3px;accent-color:var(--accent);flex:none}
+.opt-card b{font-weight:600}
+.opt-card small{display:block;color:var(--fg-2);font-size:12px;margin-top:2px;line-height:1.5}
+.sub-opts{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:8px;background:var(--soft);border:1px solid var(--line)}
+.check-line{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;cursor:pointer}
+.conflict{border:1px solid color-mix(in srgb,var(--st-crit) 45%,var(--line));background:var(--t-crit);border-radius:8px;padding:10px 12px;font-size:12.5px}
+.conflict.warn{border-color:color-mix(in srgb,var(--st-dev) 45%,var(--line));background:var(--t-dev)}
+.done-card{border:1px solid color-mix(in srgb,var(--st-done) 45%,var(--line));background:var(--t-done);border-radius:10px;padding:14px}
+.demo{border:1px dashed var(--line-2);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--fg-3)}
+.demo .btn{justify-content:center}
+.dl{display:block;padding:1px 10px;white-space:pre-wrap;border-radius:3px;font-size:13.5px;line-height:1.7}
+.diff-add{background:var(--t-done);box-shadow:inset 2px 0 0 var(--st-done)}
+.diff-del{background:var(--t-rework);box-shadow:inset 2px 0 0 var(--st-rework);text-decoration:line-through;color:var(--fg-2)}
+.diff-key{display:inline-block;padding:0 6px;border-radius:3px;font-size:11.5px;color:var(--fg-2)}
+.diff-key.add{background:var(--t-done);box-shadow:inset 2px 0 0 var(--st-done)}
+.diff-key.del{background:var(--t-rework);box-shadow:inset 2px 0 0 var(--st-rework);text-decoration:line-through}
+.dsec{margin-bottom:16px}
+.dsec h4{font-size:13px;font-weight:600;margin:0 0 4px;display:flex;gap:8px;align-items:center}
+.tag-chg{font-size:11px;font-weight:500;padding:0 6px;border-radius:4px;background:var(--t-review);color:var(--fg-2)}
+.chk{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px;min-width:0}
+.chk:last-child{border-bottom:0}
+.step{display:flex;gap:10px;align-items:flex-start;font-size:12.5px}
+.step .n{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:600;border:1.5px solid var(--line-2);flex:none;color:var(--fg-3)}
+.step.ok .n{background:var(--st-done);border-color:var(--st-done);color:#fff}
+.step.bad .n{border-color:var(--st-crit);color:var(--st-crit)}
+.step.cur .n{border-color:var(--accent);color:var(--accent)}
+.inbox-row{min-height:58px;padding:10px;margin:0 -10px}
+.inbox-row .who{font-size:12px}
+@media (max-width:1100px){.dec{grid-template-columns:minmax(0,1fr)}.dec-panel{position:static;max-height:none;border-left:0;border-top:1px solid var(--line)}}
+</style>
+<div id="app"></div>
+<div id="layer"></div>
+<script>
+'use strict';
+const BOOT = Date.now(), BASE = Date.parse('2026-11-09T15:20:00+08:00');
+const now = () => BASE + (Date.now() - BOOT);
+const M = 6e4, H = 36e5, D = 864e5;
+const keep = { get(k, d) { try { const v = localStorage.getItem('adp.' + k); return v === null ? d : v; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('adp.' + k, v); } catch (e) {} } };
+const S = { lang: keep.get('lang', 'zh'), theme: keep.get('theme', 'system'), tab: 'all', group: 'req', q: '', stage: null, sel: -1, closed: new Set(), dtab: 'overview', boardScope: 'tasks', menu: false, modal: null, pop: null, toast: null, pal: { q: '', i: 0 }, propsOpen: false, gWait: 0 };
+const T = (zh, en) => (S.lang === 'en' ? en : zh);
+const L = o => (o == null ? '' : typeof o === 'string' ? o : S.lang === 'en' ? o.en : o.zh);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function ago(t) { const d = Math.max(0, now() - t), m = Math.floor(d / M); if (m < 1) return T('刚刚', 'just now'); if (m < 60) return T(m + ' 分钟前', m + 'm ago'); const h = Math.floor(m / 60); if (h < 24) return T(h + ' 小时前', h + 'h ago'); const dd = Math.floor(h / 24); return T(dd + ' 天前', dd + 'd ago'); }
+function clock(ms) { const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
+function md(iso) { if (!iso) return '—'; const [, mo, da] = iso.split('-').map(Number); return S.lang === 'en' ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][mo - 1] + ' ' + da : mo + '/' + da; }
+const short = h => (h ? h.slice(0, 8) + '…' + h.slice(-4) : '—');
+
+const P = {
+  home: '<path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/>',
+  inbox: '<path d="M3.5 13h4.5l1.5 3h5l1.5-3h4.5"/><path d="M6 5h12l2.5 8v6a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-6z"/>',
+  issues: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h1M4 12h1M4 18h1" stroke-width="2.4"/>',
+  board: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M9.5 4v16M14.5 4v9"/>',
+  runs: '<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
+  agents: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9.5 13.5h.01M14.5 13.5h.01M2.5 12.5v3M21.5 12.5v3"/>',
+  config: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>', chevd: '<path d="m6 9 6 6 6-6"/>', chevu: '<path d="m6 15 6-6 6 6"/>', left: '<path d="m15 6-6 6 6 6"/>',
+  more: '<path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="2.6"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
+  shield: '<path d="M12 3 4.5 6v6c0 4.5 3.2 7.6 7.5 9 4.3-1.4 7.5-4.5 7.5-9V6z"/><path d="m9 12 2 2 4-4"/>',
+  pkg: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+  alert: '<path d="M12 4 2.5 20h19z"/><path d="M12 10v4M12 17h.01"/>',
+  scope: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>', x: '<path d="M6 6l12 12M18 6 6 18"/>', pause: '<path d="M9 6v12M15 6v12"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  git: '<circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/>',
+  file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17M12 3.5c-2.5 2.6-2.5 14.4 0 17"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
+  moon: '<path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10z"/>',
+  kbd: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  layers: '<path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>', play: '<path d="M8 5.5v13l10-6.5z"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.5 4.5L20 16M20 20v-4h-4"/>',
+  dep: '<circle cx="5.5" cy="12" r="2.5"/><circle cx="18.5" cy="12" r="2.5"/><path d="M8 12h8"/>',
+  bug: '<rect x="7" y="7" width="10" height="13" rx="5"/><path d="M12 11v9M4 13h3M17 13h3M5 8l2 2M19 8l-2 2M9 4l1.5 2.5M15 4l-1.5 2.5"/>',
+  user: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c1-3.5 3.8-5 7-5s6 1.5 7 5"/>'
+};
+const ic = (n, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || P.chev}</svg>`;
+function sic(kind, f = 0) {
+  const c = { todo: '--st-todo', dev: '--st-dev', review: '--st-review', you: '--st-you', done: '--st-done', rework: '--st-rework', hold: '--st-todo', gone: '--st-todo', crit: '--st-crit' }[kind];
+  const o = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style="color:var(${c})">`, ring = '<circle cx="7" cy="7" r="5.75" stroke="currentColor" stroke-width="1.5"/>';
+  if (kind === 'done') return o + '<circle cx="7" cy="7" r="6.5" fill="currentColor"/><path d="m4.4 7.2 1.8 1.8 3.5-3.7" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  if (kind === 'gone') return o + '<circle cx="7" cy="7" r="6.5" fill="currentColor"/><path d="m5 5 4 4M9 5 5 9" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  if (kind === 'hold') return o + ring + '<path d="M5.6 4.9v4.2M8.4 4.9v4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  if (kind === 'rework') return o + ring + '<path d="M9.3 9V7.6A1.7 1.7 0 0 0 7.6 5.9H4.9M6.3 4.4 4.8 5.9l1.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  if (kind === 'crit') return o + '<circle cx="7" cy="7" r="6.5" fill="currentColor"/><path d="M7 3.8v3.7M7 10h.01" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  if (!f) return o + ring + '</svg>';
+  const r = 3.1, a = f * 2 * Math.PI, x = (7 + r * Math.sin(a)).toFixed(2), y = (7 - r * Math.cos(a)).toFixed(2);
+  return o + ring + `<path d="M7 7V${7 - r}A${r} ${r} 0 ${f > 0.5 ? 1 : 0} 1 ${x} ${y}Z" fill="currentColor"/></svg>`;
+}
+function ringP(done, total, size = 14) {
+  if (total && done === total) return sic('done');
+  const C = 2 * Math.PI * 5.5, f = total ? done / total : 0;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5.5" stroke-width="2" style="stroke:var(--line-2)"/><circle cx="7" cy="7" r="5.5" stroke-width="2" stroke-linecap="round" style="stroke:var(--st-done)" stroke-dasharray="${(f * C).toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 7 7)"/></svg>`;
+}
+function prio(p) {
+  const o = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">';
+  if (p === 0) return o + '<rect x="1" y="1" width="12" height="12" rx="3" style="fill:var(--st-crit)"/><path d="M7 3.9v3.8M7 10h.01" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  if (p >= 4) return o + '<path d="M2.5 7h1.5M6.25 7h1.5M10 7h1.5" style="stroke:var(--fg-3)" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  const on = 4 - p;
+  return o + [[1.5, 8], [5.75, 5], [10, 2]].map(([x, y], i) => `<rect x="${x}" y="${y}" width="2.5" height="${12 - y}" rx="1" style="fill:var(${i < on ? '--fg-2' : '--line-2'})"/>`).join('') + '</svg>';
+}
+const PRIO = [['紧急', 'Urgent'], ['高', 'High'], ['中', 'Medium'], ['低', 'Low'], ['无优先级', 'No priority']];
+
+const A = {
+  you: { n: { zh: '你', en: 'You' }, role: 'human', ini: { zh: '你', en: 'Y' } },
+  lead: { n: 'lead-claude', role: 'lead', h: 'claude-code', ini: 'LD' },
+  pm: { n: 'pm-codex', role: 'pm', h: 'codex', ini: 'PM' },
+  deva: { n: 'dev-a', role: 'worker', h: 'codex', ini: 'DA' },
+  devb: { n: 'dev-b', role: 'worker', h: 'dsh', ini: 'DB' },
+  devc: { n: 'dev-c', role: 'worker', h: 'claude-code', ini: 'DC' },
+  qad: { n: 'qa-dsh', role: 'qa', h: 'dsh', ini: 'QD' },
+  qac: { n: 'qa-codex', role: 'qa', h: 'codex', ini: 'QC' },
+  sys: { n: { zh: '工作流服务', en: 'Workflow service' }, role: 'service', ini: 'SV' }
+};
+const ROLE = { human: ['所有者', 'Owner'], lead: ['产品负责人', 'Product lead'], pm: ['PM', 'PM'], worker: ['开发', 'Worker'], qa: ['独立 QA', 'Independent QA'], service: ['服务', 'Service'] };
+const HX = { codex: ['Cx', 'Codex'], 'claude-code': ['CC', 'Claude Code'], dsh: ['DS', 'DSH'] };
+const role = id => (A[id] ? T(...ROLE[A[id].role]) : '');
+const nm = id => (A[id] ? L(A[id].n) : '—');
+const av = id => (!id ? `<span class="av none" title="${T('未指派', 'Unassigned')}"></span>` : `<span class="av ${id === 'you' ? 'you' : ''}" title="${esc(nm(id) + ' · ' + role(id))}">${esc(L(A[id].ini))}</span>`);
+const hx = h => (h ? `<span class="hx" title="${HX[h][1]}">${HX[h][0]}</span>` : '');
+const who = (id, withH = true) => (id ? `<span class="who">${av(id)}<span>${esc(nm(id))}</span>${withH && A[id].h ? hx(A[id].h) : ''}</span>` : `<span class="who muted">${av(null)}${T('未指派', 'Unassigned')}</span>`);
+
+const CODES = {
+  ASSIGNEE_REQUIRED: { w: 'pm', zh: '还没有指派开发者', en: 'No worker assigned' },
+  DESIGN_APPROVAL_REQUIRED: { w: 'you', zh: '父需求设计还未获批', en: 'Parent design is not approved' },
+  PLAN_NOT_READY: { w: 'pm', zh: '拆解计划仍是草稿，未激活', en: 'Decomposition plan is still a draft' },
+  CAPACITY_REACHED: { w: 'sys', zh: '运行槽位已满（3/3），排队等待', en: 'All 3 run slots are busy; queued' },
+  RUN_UNCERTAIN: { w: 'you', zh: '运行状态不确定，确认已停止后才能对账', en: 'Run is uncertain; confirm it stopped before reconciling' },
+  ON_HOLD: { w: 'you', zh: '已挂起，恢复前不会派发', en: 'On hold; nothing dispatches until resumed' },
+  GIT_VERIFICATION_UNAVAILABLE: { w: 'pm', zh: 'GitHub 校验不可用，接受已保存，等待重试', en: 'GitHub verification unavailable; acceptance kept, retry pending' },
+  CHILD_DISPOSITION_REQUIRED: { w: 'you', zh: '已放弃的子任务仍在交付范围内，需要决定排除或替换', en: 'An abandoned task is still in scope; exclude or replace it' },
+  SCHEDULE_UNSET: { w: 'pm', zh: '未排期', en: 'Not scheduled' },
+  REPEATED_REWORK: { w: 'lead', zh: '已返工 2 轮，建议复核任务范围', en: 'Reworked twice; revisit the task scope' }
+};
+
+const WS = { name: { zh: 'AgileDev 协作平台', en: 'AgileDev platform' }, prefix: 'ADC', id: '7d1e4c2a-90b3-4f5e-a1c8-2b6d9e0f3a57', repo: 'github.com/example/agiledev', cap: 3 };
+const I = [
+  { k: 'ADC-1', p: null, tt: '多 Harness 工作区绑定', st: 'IN_PROGRESS', pr: 1, lead: 'lead', it: 'S3', start: '2026-11-03', due: '2026-11-16', mode: 'git', v: 18, sr: 2, phase: 'children', design: 'd1', integ: ['AC-5'], up: -40 * M,
+    ac: [['AC-1', '从 Harness 上下文解析活动工作区，解析不到时要求显式选择'], ['AC-2', '同一仓库的 Git worktree 归并到同一个逻辑工作区'], ['AC-3', 'Windows 大小写与联接点路径不产生重复注册'], ['AC-4', '多个根目录有歧义时必须由人选择'], ['AC-5', '不扫描未授权的磁盘与目录（集成检查）']],
+    desc: '智能体在 Codex、Claude Code、DSH 中打开同一个项目时，应解析到同一个逻辑工作区，避免出现重复项目和跨项目写入。\n\n范围：工作区解析、worktree 归一、Windows 路径规范化、歧义时的人工选择。',
+    nx: { w: 'pm', zh: 'ADC-4 返工排队，ADC-5 待指派开发者', en: 'ADC-4 rework queued, ADC-5 needs a worker' } },
+  { k: 'ADC-2', p: 'ADC-1', tt: '[Feature] Workspace: 解析活动项目 -> 阻止跨项目写入', st: 'DONE', pr: 1, as: 'deva', qa: 'qad', it: 'S3', due: '2026-11-07', mode: 'git', v: 24, sr: 1, ac: ['AC-1'], up: -3 * D, est: [5, 'h', 'mid'], git: { sha: 'a41c9e07d2b54f1e8c3a6b9d0e7f21c4a5b6c7d8', st: 'VERIFIED', at: -3 * D } },
+  { k: 'ADC-3', p: 'ADC-1', tt: '[Feature] Workspace: 识别 Git worktree -> 同仓库多目录归一', st: 'QA_TEST', pr: 1, as: 'devb', qa: 'qac', it: 'S3', due: '2026-11-12', mode: 'git', v: 31, sr: 2, ac: ['AC-2'], deps: ['ADC-2'], run: 'r-3e9b', up: -2 * M, est: [8, 'h', 'mid'], cand: 'c3',
+    nx: { w: 'qac', zh: '独立测试进行中：qa-codex 已完成 9/14 项检查', en: 'Independent QA running: qa-codex finished 9 of 14 checks' } },
+  { k: 'ADC-4', p: 'ADC-1', tt: '[Fix] Workspace: 规范化大小写与联接点 -> 不再重复注册', st: 'LEAD_REJECTED', sg: 'PRE_QA', pr: 2, as: 'deva', qa: 'qad', it: 'S3', due: '2026-11-14', mode: 'git', v: 22, sr: 2, ac: ['AC-3'], rw: 1, run: 'r-77d2', up: -6 * M, est: [4, 'h', 'low'], bl: ['CAPACITY_REACHED'],
+    rej: { by: 'lead', at: -2 * H, zh: '未覆盖 junction 指向工作区外的情况（AC-3），请补充用例并附自测证据。', en: 'Junctions pointing outside the workspace are not covered (AC-3). Add cases and self-check evidence.' },
+    nx: { w: 'sys', zh: '返工已派发，等待运行槽位', en: 'Rework dispatched; waiting for a run slot' } },
+  { k: 'ADC-5', p: 'ADC-1', tt: '[Test] Workspace: 覆盖多根歧义 -> 必须显式选择', st: 'NOT_STARTED', pr: 3, as: null, qa: null, it: null, due: null, mode: 'git', v: 3, sr: 1, ac: ['AC-4'], up: -1 * D, bl: ['ASSIGNEE_REQUIRED'], adv: ['SCHEDULE_UNSET'],
+    nx: { w: 'pm', zh: '等待 PM 指派开发者', en: 'Waiting for PM to assign a worker' } },
+
+  { k: 'ADC-6', p: null, tt: '交付验收流程', st: 'NOT_STARTED', pr: 0, lead: 'lead', it: 'S4', start: '2026-11-17', due: '2026-11-28', mode: 'git', v: 9, sr: 3, phase: 'design-review', design: 'd6', up: -2 * H,
+    ac: [['AC-1', '验收页展示精确的交付摘要、快照、评审链和提交'], ['AC-2', '人的决定只绑定当前 digest，旧对话框提交会被拒绝'], ['AC-3', 'GitHub 不可用时保存接受，但不显示已完成'], ['AC-4', '恢复后重试校验可直接关闭，无需再次确认']],
+    desc: '人在验收交付时，需要看到被绑定的精确快照、评审链与提交证据，并且只能对这一份交付作决定。',
+    nx: { w: 'you', zh: '需要你：审批设计 r3', en: 'You: review design r3', act: 'design' } },
+  { k: 'ADC-7', p: 'ADC-6', tt: '[Feature] Acceptance: 展示交付摘要 -> 人只对精确快照决策', st: 'NOT_STARTED', pr: 1, as: null, it: 'S4', mode: 'git', v: 2, sr: 1, ac: ['AC-1', 'AC-2'], up: -1 * D, bl: ['DESIGN_APPROVAL_REQUIRED', 'ASSIGNEE_REQUIRED', 'PLAN_NOT_READY'], adv: ['SCHEDULE_UNSET'],
+    nx: { w: 'you', zh: '等待父需求设计获批', en: 'Waiting for the parent design approval' } },
+  { k: 'ADC-8', p: 'ADC-6', tt: '[Feature] Git: 关闭前校验提交 -> 可追溯关闭', st: 'NOT_STARTED', pr: 2, as: 'devb', qa: 'qac', it: 'S4', due: '2026-11-26', mode: 'git', v: 3, sr: 1, ac: ['AC-3', 'AC-4'], up: -1 * D, bl: ['DESIGN_APPROVAL_REQUIRED', 'PLAN_NOT_READY'],
+    nx: { w: 'you', zh: '等待父需求设计获批', en: 'Waiting for the parent design approval' } },
+
+  { k: 'ADC-9', p: null, tt: '独立 QA 与返工闭环', st: 'IN_PROGRESS', pr: 1, lead: 'lead', it: 'S3', start: '2026-11-03', due: '2026-11-15', mode: 'git', v: 27, sr: 1, phase: 'children', design: 'd9', up: -1 * M,
+    ac: [['AC-1', '检查由服务捕获命令、退出码、时间与输出'], ['AC-2', 'QA 结论只能来自独立会话，自测不算通过'], ['AC-3', '失败生成可复现缺陷并退回开发'], ['AC-4', '超时、阻塞、未运行都不算通过'], ['AC-5', '向用户说明本地隔离的边界']],
+    desc: '独立 QA 必须在不同会话、不同凭据下复现检查；失败要生成缺陷并驱动返工，所有证据绑定到被评审的快照。',
+    nx: { w: 'you', zh: '2 个任务等你验收，2 个在负责人评审', en: '2 tasks await your acceptance, 2 are in lead review' } },
+  { k: 'ADC-10', p: 'ADC-9', tt: '[Feature] QA: 捕获检查进程 -> 可复现的测试证据', st: 'USER_ACCEPTANCE', pr: 1, as: 'devb', qa: 'qad', it: 'S3', due: '2026-11-10', mode: 'git', v: 41, sr: 1, ac: ['AC-1'], up: -20 * M, est: [6, 'h', 'high'], cand: 'c10',
+    git: { sha: '5d0b3e9f8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e', st: 'VERIFIED', at: -18 * M }, digest: '9c1e7a40d2f3b8e1c6a5f4d3e2b1a09f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b',
+    nx: { w: 'you', zh: '需要你：验收交付', en: 'You: review the delivery', act: 'delivery' } },
+  { k: 'ADC-11', p: 'ADC-9', tt: '[Feature] QA: 失败生成缺陷 -> 返工有据可依', st: 'LEAD_REVIEW', sg: 'PRE_QA', pr: 2, as: 'deva', qa: 'qad', it: 'S3', due: '2026-11-13', mode: 'git', v: 19, sr: 1, ac: ['AC-3'], up: -35 * M,
+    nx: { w: 'lead', zh: '等待产品负责人初审', en: 'Waiting for the product lead’s initial review' } },
+  { k: 'ADC-12', p: 'ADC-9', tt: '[Fix] QA: 拒绝自测冒充独立测试 -> 保证独立性', st: 'IN_PROGRESS', pr: 0, as: 'deva', qa: 'qad', it: 'S3', due: '2026-11-11', mode: 'git', v: 37, sr: 1, ac: ['AC-2'], rw: 2, run: 'r-7a1c', up: -1 * M, adv: ['REPEATED_REWORK'], def: ['D-4'], cand: 'c12',
+    nx: { w: 'deva', zh: 'dev-a（Codex）第 2 轮返工中', en: 'dev-a (Codex) is reworking, round 2' } },
+  { k: 'ADC-13', p: 'ADC-9', tt: '[Fix] QA: 检查超时如实上报 -> 不把超时当通过', st: 'USER_ACCEPTANCE', pr: 1, as: 'devc', qa: 'qac', it: 'S3', due: '2026-11-10', mode: 'git', v: 33, sr: 1, ac: ['AC-4'], up: -25 * M, accepted: -1 * H, bl: ['GIT_VERIFICATION_UNAVAILABLE'],
+    git: { sha: 'e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9', st: 'UNAVAILABLE', at: -25 * M, err: 'PROVIDER_UNAVAILABLE', attempt: 2 }, digest: '7e2d0a91c4b6f8e3d5a7c9b1e3f5a7c9d1b3e5f7a9c1d3e5f7b9a1c3e5d7f9b1',
+    nx: { w: 'pm', zh: '你已接受，关闭受阻：GitHub 校验不可用', en: 'You accepted; closure blocked: GitHub verification unavailable', act: 'retry' } },
+  { k: 'ADC-22', p: 'ADC-9', tt: '[Docs] QA: 说明独立性边界 -> 用户清楚本地隔离的限制', st: 'LEAD_REVIEW', sg: 'FINAL', pr: 3, as: 'devc', qa: 'qac', it: 'S3', due: '2026-11-14', mode: 'artifact', v: 12, sr: 1, ac: ['AC-5'], up: -50 * M,
+    nx: { w: 'lead', zh: '独立测试已通过，等待产品负责人终审', en: 'QA passed; waiting for the product lead’s final review' } },
+
+  { k: 'ADC-14', p: null, tt: '运行恢复与对账', st: 'IN_PROGRESS', pr: 1, lead: 'lead', it: 'S4', start: '2026-11-10', due: '2026-11-21', mode: 'git', v: 15, sr: 2, phase: 'children', design: 'd14', up: -14 * M, bl: ['CHILD_DISPOSITION_REQUIRED'],
+    ac: [['AC-1', '协调器丢失或服务重启后，运行标记为不确定，不盲目重派'], ['AC-2', '人确认已停止后才能对账并重新派发'], ['AC-3', '各 Harness 的恢复能力如实上报']],
+    desc: '协调器丢失或服务重启时，正在执行的运行可能仍在外部继续。系统要如实标记不确定，由人确认已停止后再对账。',
+    nx: { w: 'you', zh: '需要你：对账 ADC-15 的不确定运行，并决定 ADC-17 的范围', en: 'You: reconcile ADC-15’s uncertain run and decide ADC-17’s scope' } },
+  { k: 'ADC-15', p: 'ADC-14', tt: '[Feature] Runner: 中断后标记不确定 -> 不盲目重派', st: 'IN_PROGRESS', pr: 1, as: 'devc', qa: 'qac', it: 'S4', due: '2026-11-18', mode: 'git', v: 14, sr: 2, ac: ['AC-1', 'AC-2'], run: 'r-5f3a', up: -14 * M, bl: ['RUN_UNCERTAIN'],
+    nx: { w: 'you', zh: '需要你：确认运行已停止并对账', en: 'You: confirm the run stopped, then reconcile', act: 'reconcile' } },
+  { k: 'ADC-16', p: 'ADC-14', tt: '[Test] Recovery: 重启服务 -> 无重复执行', st: 'ON_HOLD', saved: 'NOT_STARTED', pr: 2, as: 'devc', qa: 'qad', it: 'S4', due: null, mode: 'git', v: 8, sr: 1, ac: ['AC-1'], up: -1 * D, bl: ['ON_HOLD'], adv: ['SCHEDULE_UNSET'],
+    hold: { by: 'you', at: -1 * D, zh: '等待 Claude Code CLI 登录问题解决后再执行。', en: 'Wait until the Claude Code CLI login issue is fixed.' },
+    nx: { w: 'you', zh: '已挂起：等待 Claude Code 登录问题解决', en: 'On hold until the Claude Code login is fixed', act: 'resume' } },
+  { k: 'ADC-17', p: 'ADC-14', tt: '[Research] Runner: 评估同会话恢复 -> 能力如实上报', st: 'ABANDONED', pr: 3, as: null, it: 'S4', mode: 'artifact', v: 6, sr: 1, ac: ['AC-3'], up: -3 * H, scope: 'PENDING', bl: ['CHILD_DISPOSITION_REQUIRED'],
+    abandon: { by: 'pm', grant: 'G-12', at: -3 * H, zh: '三个 Harness 都不支持可靠的同会话恢复，改为在能力矩阵中如实上报。', en: 'None of the three harnesses supports reliable same-session resume; report it in the capability matrix instead.' },
+    nx: { w: 'you', zh: '需要你：决定范围（排除或替换）', en: 'You: decide scope (exclude or replace)', act: 'scope' } },
+
+  { k: 'ADC-18', p: null, tt: '嵌入式插件视图', st: 'NOT_STARTED', pr: 3, lead: 'lead', it: null, due: null, mode: 'git', v: 4, sr: 1, phase: 'design-draft', design: 'd18', up: -5 * H, ac: [], adv: ['SCHEDULE_UNSET'],
+    desc: '在支持的 Harness 里嵌入概览和评审视图；不支持的地方如实回退到浏览器页面。',
+    nx: { w: 'lead', zh: '产品负责人正在编写设计草稿', en: 'The product lead is drafting the design' } },
+
+  { k: 'ADC-19', p: null, tt: 'Git 提交证据关闭', st: 'DONE', pr: 2, lead: 'lead', it: 'S2', start: '2026-10-27', due: '2026-11-05', mode: 'git', v: 30, sr: 1, phase: 'done', design: 'd19', up: -4 * D,
+    ac: [['AC-1', '只接受完整 40 位 SHA 的规范提交链接'], ['AC-2', '提交树与密封快照逐字节一致才算验证通过']],
+    desc: 'Git 交付必须有可解析、并与快照一致的最终提交链接才能关闭。' },
+  { k: 'ADC-20', p: 'ADC-19', tt: '[Feature] Git: 校验规范提交链接 -> 拒绝分支与短 SHA', st: 'DONE', pr: 2, as: 'deva', qa: 'qad', it: 'S2', due: '2026-11-03', mode: 'git', v: 21, sr: 1, ac: ['AC-1'], up: -5 * D, git: { sha: '7f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e', st: 'VERIFIED', at: -5 * D } },
+  { k: 'ADC-21', p: 'ADC-19', tt: '[Feature] Git: 比对提交树 -> 快照一致才关闭', st: 'DONE', pr: 2, as: 'devb', qa: 'qac', it: 'S2', due: '2026-11-05', mode: 'git', v: 26, sr: 1, ac: ['AC-2'], up: -4 * D, git: { sha: '2c4e6a8b0d1f3e5a7c9b2d4f6a8c0e1b3d5f7a9c', st: 'VERIFIED', at: -4 * D } }
+];
+I.forEach(i => { i.up = BASE + i.up; ['git', 'rej', 'hold', 'abandon'].forEach(f => { if (i[f] && i[f].at) i[f].at = BASE + i[f].at; }); if (i.accepted) i.accepted = BASE + i.accepted; });
+const byKey = Object.fromEntries(I.map(i => [i.k, i]));
+const kids = k => I.filter(i => i.p === k);
+const roots = () => I.filter(i => !i.p);
+const tasks = () => I.filter(i => i.p);
+
+const sec = (h, b) => ({ h, b });
+const DESIGNS = {
+  d6: [
+    { r: 3, st: 'IN_REVIEW', hash: '4f2a19c0e7b3d58a9c1e6f0b2d4a7c3e5f81b9d06a2c4e8f1b3d5a7c9e0f2a4b', by: 'lead', at: -2 * H, body: [
+      sec('问题与受众', '所有者在验收时看不到绑定的快照和评审链，只能相信智能体的总结。验收需要变成对一份精确交付的明确决定。'),
+      sec('目标', '1. 验收页一次展示 digest、快照、初审/QA/终审结论、提交与关闭检查。\n2. 决定只对当前 digest 有效；对话框过期时提交失败并保留输入。\n3. GitHub 不可用时保存接受，显示“已接受，关闭受阻”。'),
+      sec('非目标', '批量验收（拆为独立需求）；自动合并或发布。'),
+      sec('方案', '新增交付验收页：左侧为证据（评审链、验收标准结果、缺陷、清单），右侧为决定面板；提交时携带 candidateId 与 digest。关闭由服务在所有守卫通过后完成。'),
+      sec('风险', '证据过多导致决策疲劳：默认只展开失败项与关闭阻塞项。'),
+      sec('待定问题', '是否允许在手机上完成验收？（建议允许，但完整清单折叠）')] },
+    { r: 2, st: 'CHANGES_REQUESTED', hash: 'b81d04c7e2a9f3b5d6c8e0a1f2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9', by: 'lead', at: -1 * D - 3 * H, dec: { by: 'you', at: -1 * D, zh: '批量决策先拆成独立需求，本需求只覆盖单个交付的验收。', en: 'Split batch decisions into their own requirement; keep this one to single deliveries.' } },
+    { r: 1, st: 'CHANGES_REQUESTED', hash: '0c7e3a95b1d2f4e6a8c0b2d4f6e8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4', by: 'lead', at: -2 * D - 5 * H, dec: { by: 'you', at: -2 * D, zh: '需要说明 GitHub 不可用时，已作出的接受如何处理。', en: 'Explain what happens to an acceptance when GitHub is unavailable.' } }],
+  d1: [
+    { r: 2, st: 'APPROVED', hash: '3b7e0c91d4a6f8b2c5e7a9d1f3b5c7e9a1d3f5b7c9e1a3d5f7b9c1e3a5d7f9b2', by: 'lead', at: -7 * D, dec: { by: 'you', at: -6 * D, zh: '范围清晰，AC-5 作为集成检查。', en: 'Scope is clear; AC-5 is an integration check.' }, body: [sec('方案', '按“宿主上下文 → MCP roots → 显式绑定 → 人工选择”的顺序解析；规范化路径后比较文件系统身份；worktree 通过 common-dir 归一。')] },
+    { r: 1, st: 'CHANGES_REQUESTED', hash: '9a1b3c5d7e9f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5e7f9a1b', by: 'lead', at: -9 * D, dec: { by: 'you', at: -8 * D, zh: '需要覆盖 Windows 联接点。', en: 'Cover Windows junctions.' } }],
+  d9: [{ r: 1, st: 'APPROVED', hash: 'c2d4e6f8a0b1c3d5e7f9a1b3c5d7e9f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3', by: 'lead', at: -8 * D, dec: { by: 'you', at: -7 * D, zh: '同意，超时必须显式上报。', en: 'Approved; timeouts must be reported explicitly.' }, body: [sec('方案', '检查由服务启动并捕获；QA 报告只能引用服务记录的检查 ID；FAIL 自动生成缺陷并退回开发。')] }],
+  d14: [{ r: 2, st: 'APPROVED', hash: 'e4f6a8b0c1d3e5f7a9b1c3d5e7f9a1b3c5d7e9f1a3b5c7d9e1f3a5b7c9d1e3f5', by: 'lead', at: -4 * D, dec: { by: 'you', at: -3 * D, zh: '确认人工对账是必要步骤。', en: 'Human reconciliation is required.' }, body: [sec('方案', '协调器重启时把 STARTING/RUNNING/STOPPING 标记为 UNCERTAIN 并吊销凭据；只有人确认停止后才能对账。')] }],
+  d18: [{ r: 1, st: 'DRAFT', hash: 'f1e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e', by: 'lead', at: -5 * H, body: [sec('草稿', '先探测三个 Harness 的嵌入能力，再决定概览/评审是否嵌入。')] }],
+  d19: [{ r: 1, st: 'APPROVED', hash: 'a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8', by: 'lead', at: -12 * D, dec: { by: 'you', at: -11 * D, zh: '同意。', en: 'Approved.' }, body: [sec('方案', '提交链接必须是完整 SHA；服务读取 GitHub 提交树并与密封快照比较。')] }]
+};
+Object.values(DESIGNS).flat().forEach(r => { r.at = BASE + r.at; if (r.dec) r.dec.at = BASE + r.dec.at; });
+
+const CAND = {
+  c10: { id: 'cand-10-1', by: 'devb', round: 1, files: 12, snap: '9c1e7a40d2f3b8e1c6a5f4d3e2b1a09f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b', at: -4 * H,
+    sum: { zh: '新增服务端检查捕获：记录命令、参数、退出码、起止时间、截断输出与测试源哈希；QA 报告只能引用这些检查 ID。自测：node --test 31 项通过。', en: 'Adds service-side check capture: command, args, exit code, timing, truncated output and test-source hashes; QA reports can only cite these check IDs. Self-check: node --test, 31 passing.' },
+    reviews: [{ s: 'PRE_QA', by: 'lead', v: 'PASS', at: -3 * H, zh: '实现覆盖 AC-1，捕获字段完整。', en: 'Covers AC-1; captured fields are complete.' }, { s: 'QA', by: 'qad', v: 'PASS', at: -1 * H, zh: '14/14 项检查通过，含 5 个负向用例。', en: '14 of 14 checks passed, including 5 negative cases.', n: [14, 14] }, { s: 'FINAL', by: 'lead', v: 'PASS', at: -20 * M, zh: '与需求一致，可交给你验收。', en: 'Matches the requirement; ready for your acceptance.' }],
+    checks: [{ id: 'chk-81', cmd: 'node .qa/capture.test.mjs', ac: 'AC-1', exit: 0, ms: 1840, st: 'PASSED' }, { id: 'chk-82', cmd: 'node .qa/negative.test.mjs', ac: 'AC-1', exit: 0, ms: 960, st: 'PASSED' }, { id: 'chk-83', cmd: 'node .qa/report-ref.test.mjs', ac: 'AC-1', exit: 0, ms: 720, st: 'PASSED' }],
+    manifest: ['src/checks.ts', 'src/qa-policy.ts', 'src/contracts.ts', 'src/verify-execution.ts', 'src/runner.ts', 'src/store.ts', 'tests/qa.test.ts', 'tests/runner.test.ts', 'tests/fixtures.ts', 'docs/workflow.md', 'docs/local-development.md', 'package.json'] },
+  c3: { id: 'cand-3-1', by: 'devb', round: 1, files: 7, snap: '6a8c0e2b4d6f8a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c', at: -70 * M,
+    sum: { zh: '通过 git common-dir 识别 worktree，并在注册时归并到已有工作区；独立克隆不合并。', en: 'Identifies worktrees through git common-dir and merges them into the existing workspace at registration; independent clones stay separate.' },
+    reviews: [{ s: 'PRE_QA', by: 'lead', v: 'PASS', at: -40 * M, zh: '覆盖 AC-2，独立克隆的处理符合设计。', en: 'Covers AC-2; independent clones handled as designed.' }, { s: 'QA', by: 'qac', v: 'RUNNING', at: -3 * M, zh: '已完成 9/14 项检查', en: '9 of 14 checks done', n: [9, 14] }],
+    checks: [{ id: 'chk-91', cmd: 'node .qa/worktree.test.mjs', ac: 'AC-2', exit: 0, ms: 2210, st: 'PASSED' }, { id: 'chk-92', cmd: 'node .qa/clone-separate.test.mjs', ac: 'AC-2', exit: 0, ms: 1530, st: 'PASSED' }, { id: 'chk-93', cmd: 'node .qa/moved-root.test.mjs', ac: 'AC-2', exit: null, ms: null, st: 'RUNNING' }],
+    manifest: ['src/paths.ts', 'src/git.ts', 'src/workflow.ts', 'src/store.ts', 'tests/git.test.ts', 'tests/workflow.test.ts', 'docs/architecture.md'] },
+  c12: { id: 'cand-12-1', by: 'deva', round: 1, files: 4, snap: '1f3b5d7a9c2e4f6b8d0a2c4e6f8b0d2a4c6e8f0b2d4a6c8e0f2b4d6a8c0e2f4b', at: -6 * H,
+    sum: { zh: '在 review_submit 中拒绝 QA 阶段的自测报告。', en: 'Rejects self-check reports at the QA stage in review_submit.' },
+    reviews: [{ s: 'PRE_QA', by: 'lead', v: 'PASS', at: -5.5 * H, zh: '思路正确。', en: 'Right approach.' }, { s: 'QA', by: 'qad', v: 'FAIL', at: -5 * H, zh: 'worker 凭据仍可通过 qa_report_submit 推进关卡（D-4，MAJOR）。', en: 'A worker credential can still advance the gate through qa_report_submit (D-4, MAJOR).', n: [11, 13] }],
+    checks: [{ id: 'chk-71', cmd: 'node .qa/independence.test.mjs', ac: 'AC-2', exit: 1, ms: 1320, st: 'FAILED' }, { id: 'chk-72', cmd: 'node .qa/self-report.test.mjs', ac: 'AC-2', exit: 0, ms: 880, st: 'PASSED' }],
+    manifest: ['src/qa-policy.ts', 'src/workflow.ts', 'tests/qa.test.ts', 'docs/workflow.md'] }
+};
+Object.values(CAND).forEach(c => { c.at = BASE + c.at; c.reviews.forEach(r => (r.at = BASE + r.at)); });
+const DEFECTS = { 'D-4': { k: 'D-4', sev: 'MAJOR', ac: 'AC-2', st: 'OPEN', by: 'qad', at: BASE - 5 * H, zh: 'worker 凭据提交的报告推进了 QA 关卡', en: 'A report submitted with a worker credential advanced the QA gate', exp: { zh: '只有独立 QA 会话提交的报告能推进关卡', en: 'Only an independent QA session can advance the gate' }, rep: { zh: '用 worker 凭据调用 qa_report_submit，观察事项进入终审', en: 'Call qa_report_submit with a worker credential and watch the issue enter final review' } } };
+
+const RUNS = {
+  'r-7a1c': { id: 'r-7a1c', k: 'ADC-12', kind: 'impl', who: 'deva', h: 'codex', st: 'RUNNING', start: BASE - 12 * M, hb: 3, budget: 30, session: '019a6c2e-5b1d-7f3a' },
+  'r-3e9b': { id: 'r-3e9b', k: 'ADC-3', kind: 'qa', who: 'qac', h: 'codex', st: 'RUNNING', start: BASE - 3 * M - 27e3, hb: 6, budget: 30, session: '019a6c41-2e8f-7b04', n: [9, 14] },
+  'r-5f3a': { id: 'r-5f3a', k: 'ADC-15', kind: 'impl', who: 'devc', h: 'claude-code', st: 'UNCERTAIN', start: BASE - 41 * M, lastHb: BASE - 14 * M, err: 'COORDINATOR_LOST', session: 'b7d2c9e4-61f0' },
+  'r-77d2': { id: 'r-77d2', k: 'ADC-4', kind: 'impl', who: 'deva', h: 'codex', st: 'QUEUED', queued: BASE - 6 * M }
+};
+
+const FEED = [
+  { at: -2 * M, by: 'qac', k: 'ADC-3', zh: '通过检查 chk-92（AC-2）', en: 'passed check chk-92 (AC-2)' },
+  { at: -6 * M, by: 'pm', k: 'ADC-4', zh: '派发返工给 dev-a（Codex），排队等待槽位', en: 'dispatched rework to dev-a (Codex); queued for a slot' },
+  { at: -14 * M, by: 'sys', k: 'ADC-15', zh: '协调器丢失，运行 r-5f3a 标记为不确定，凭据已吊销', en: 'lost the coordinator; marked run r-5f3a uncertain and revoked its credential' },
+  { at: -20 * M, by: 'lead', k: 'ADC-10', zh: '终审通过，交给你验收', en: 'passed final review; sent to you for acceptance' },
+  { at: -25 * M, by: 'sys', k: 'ADC-13', zh: 'GitHub 校验第 2 次失败（服务不可用），关闭受阻', en: 'GitHub verification attempt 2 failed (provider unavailable); closure blocked' },
+  { at: -35 * M, by: 'deva', k: 'ADC-11', zh: '提交候选交付，进入负责人初审', en: 'submitted a candidate for initial lead review' },
+  { at: -40 * M, by: 'lead', k: 'ADC-3', zh: '初审通过，进入独立测试', en: 'passed initial review; moved to independent QA' },
+  { at: -50 * M, by: 'qac', k: 'ADC-22', zh: '独立测试通过（文档类交付）', en: 'passed independent QA (document delivery)' },
+  { at: -60 * M, by: 'you', k: 'ADC-13', zh: '接受交付 digest 7e2d0a91…', en: 'accepted delivery digest 7e2d0a91…' },
+  { at: -2 * H, by: 'lead', k: 'ADC-4', zh: '初审驳回：AC-3 未覆盖 junction 越界', en: 'rejected in initial review: AC-3 misses junction escapes' },
+  { at: -2 * H, by: 'lead', k: 'ADC-6', zh: '提交设计 r3 等你审批', en: 'submitted design r3 for your review' },
+  { at: -3 * H, by: 'pm', k: 'ADC-17', zh: '放弃任务（使用你签发的授权 G-12）', en: 'abandoned the task (using your grant G-12)' },
+  { at: -5 * H, by: 'qad', k: 'ADC-12', zh: '测试未通过：AC-2，创建缺陷 D-4（MAJOR）', en: 'failed QA on AC-2; opened defect D-4 (MAJOR)' },
+  { at: -1 * D, by: 'you', k: 'ADC-16', zh: '挂起任务：等待 Claude Code 登录问题解决', en: 'put the task on hold until the Claude Code login is fixed' },
+  { at: -1 * D, by: 'you', k: 'ADC-6', zh: '要求修改设计 r2', en: 'requested changes to design r2' },
+  { at: -3 * D, by: 'you', k: 'ADC-2', zh: '接受交付，Git 校验通过后自动关闭', en: 'accepted the delivery; it closed after Git verification' }
+];
+FEED.forEach(f => (f.at = BASE + f.at));
+
+const stageOf = i => (i.st === 'LEAD_REVIEW' ? (i.sg === 'FINAL' ? 'FINAL' : 'PRE_QA') : i.st);
+const REWORK = ['LEAD_REJECTED', 'QA_REJECTED', 'USER_REJECTED'];
+function prog(i) { const k = kids(i.k).filter(c => c.scope !== 'EXCLUDED'), live = k.filter(c => c.st !== 'ABANDONED'); return { done: live.filter(c => c.st === 'DONE').length, total: live.length, all: k.length, gone: k.length - live.length }; }
+function stMeta(i) {
+  if (!i.p) {
+    const p = prog(i), ph = { 'design-draft': ['todo', '设计草稿', 'Design draft'], 'design-review': ['you', '设计待你审批', 'Design awaiting you'], children: ['dev', '子任务交付中', 'Tasks in delivery'], done: ['done', '已完成', 'Done'], plan: ['todo', '设计已批准 · 待激活计划', 'Approved · plan pending'] }[i.phase];
+    return { tone: ph[0], icon: i.st === 'DONE' ? sic('done') : ringP(p.done, p.total), label: T(ph[1], ph[2]), code: i.st };
+  }
+  const m = {
+    NOT_STARTED: ['todo', 0, '未开始', 'Not started'],
+    IN_PROGRESS: ['dev', 0.25, i.rw ? '返工中' : '开发中', i.rw ? 'Reworking' : 'In development'],
+    PRE_QA: ['review', 0.42, '负责人初审', 'Initial lead review'],
+    QA_TEST: ['review', 0.58, '独立测试', 'Independent QA'],
+    FINAL: ['review', 0.75, '负责人终审', 'Final lead review'],
+    USER_ACCEPTANCE: i.accepted ? ['you', 0.92, '已接受 · 待关闭', 'Accepted · closing'] : ['you', 0.9, '待你验收', 'Awaiting your acceptance'],
+    DONE: ['done', 1, '已完成', 'Done'],
+    LEAD_REJECTED: ['rework', 0, '负责人驳回', 'Rejected by lead'],
+    QA_REJECTED: ['rework', 0, '测试未通过', 'Failed QA'],
+    USER_REJECTED: ['rework', 0, '验收打回', 'Returned by you'],
+    ON_HOLD: ['hold', 0, '已挂起', 'On hold'],
+    ABANDONED: ['gone', 0, '已放弃', 'Abandoned']
+  }[stageOf(i)];
+  return { tone: m[0], icon: sic(m[0], m[1]), label: T(m[2], m[3]), code: i.st + (i.sg ? ' · ' + i.sg : '') };
+}
+const parts = t => { const m = /^\[(\w+)\]\s*([^:]+):\s*(.*?)\s*->\s*(.*)$/.exec(t); return m ? { type: m[1], area: m[2], act: m[3], out: m[4] } : null; };
+function titleHtml(i, withType = true) {
+  const q = parts(i.tt);
+  if (!q) return `<span class="txt">${esc(i.tt)}</span>`;
+  return (withType ? `<span class="chip type">${esc(q.type)}</span>` : '') + `<span class="txt">${esc(q.area)}: ${esc(q.act)} → ${esc(q.out)}</span>`;
+}
+const plainTitle = i => { const q = parts(i.tt); return q ? `${q.area}: ${q.act} → ${q.out}` : i.tt; };
+const fullTitle = i => (i.p ? byKey[i.p].tt + '——' + i.tt : i.tt);
+const youOwn = i => !!(i.nx && i.nx.w === 'you');
+const DEC = { reconcile: ['alert', '运行对账', 'Run reconciliation', 1], delivery: ['pkg', '交付验收', 'Delivery acceptance', 2], design: ['shield', '设计审批', 'Design review', 3], scope: ['scope', '范围决策', 'Scope decision', 4] };
+const decisions = () => I.filter(i => youOwn(i) && DEC[i.nx.act]).sort((a, b) => DEC[a.nx.act][3] - DEC[b.nx.act][3]);
+function decSub(i) {
+  const a = i.nx.act;
+  if (a === 'design') { const r = DESIGNS[i.design][0]; return T(`r${r.r} · sha256 ${short(r.hash)} · ${nm(r.by)} ${ago(r.at)}提交`, `r${r.r} · sha256 ${short(r.hash)} · submitted by ${nm(r.by)} ${ago(r.at)}`); }
+  if (a === 'delivery') { const c = CAND[i.cand]; return T(`digest ${short(i.digest)} · 初审、QA、终审均通过 · 终审 ${ago(c.reviews[2].at)}`, `digest ${short(i.digest)} · initial, QA and final reviews passed · ${ago(c.reviews[2].at)}`); }
+  if (a === 'reconcile') { const r = RUNS[i.run]; return T(`运行 ${r.id} · ${HX[r.h][1]} · 心跳丢失于 ${ago(r.lastHb)} · 占用 1 个槽位`, `run ${r.id} · ${HX[r.h][1]} · heartbeat lost ${ago(r.lastHb)} · holding a slot`); }
+  return T(`${nm(i.abandon.by)} ${ago(i.abandon.at)}放弃 · 仍计入交付范围`, `abandoned by ${nm(i.abandon.by)} ${ago(i.abandon.at)} · still counted in scope`);
+}
+const gapList = () => I.flatMap(i => [...(i.bl || []).map(c => ({ i, c, sev: 'block' })), ...(i.adv || []).map(c => ({ i, c, sev: 'adv' }))]);
+const liveRuns = () => Object.values(RUNS).filter(r => ['RUNNING', 'UNCERTAIN', 'STARTING', 'STOPPING'].includes(r.st));
+const PIPE = [['NOT_STARTED', '未开始', 'Not started', '未开始', 'To do'], ['IN_PROGRESS', '开发中', 'In development', '开发', 'Dev'], ['PRE_QA', '负责人初审', 'Initial lead review', '初审', 'Review'], ['QA_TEST', '独立测试', 'Independent QA', '测试', 'QA'], ['FINAL', '负责人终审', 'Final lead review', '终审', 'Final'], ['USER_ACCEPTANCE', '待你验收', 'Your acceptance', '验收', 'Accept'], ['DONE', '已完成', 'Done', '完成', 'Done']];
+const EXC = [['REWORK', '待返工', 'Rework', 'rework'], ['ON_HOLD', '已挂起', 'On hold', 'hold'], ['ABANDONED', '已放弃', 'Abandoned', 'gone']];
+function inStage(i, s) { const g = stageOf(i); return s === 'REWORK' ? REWORK.includes(g) : g === s; }
+function stageName(s) { const x = PIPE.find(p => p[0] === s) || EXC.find(p => p[0] === s); return x ? T(x[1], x[2]) : s; }
+
+function runChip(i) {
+  const r = i.run && RUNS[i.run];
+  if (!r) return '';
+  if (r.st === 'RUNNING') return `<span class="chip flat" title="${T('运行中', 'Running')} · ${r.id}"><span class="dot live"></span><span data-el="${r.start}">${clock(now() - r.start)}</span></span>`;
+  if (r.st === 'UNCERTAIN') return `<span class="chip" style="color:var(--st-crit)">${sic('crit')}${T('不确定', 'Uncertain')}</span>`;
+  if (r.st === 'STOPPING') return `<span class="chip">${sic('hold')}${T('停止中', 'Stopping')}</span>`;
+  if (r.st === 'QUEUED') return `<span class="chip flat">${ic('clock', 12)}${T('排队', 'Queued')}</span>`;
+  return '';
+}
+function rowChips(i) {
+  let h = '';
+  if (youOwn(i) && i.nx.act) h += `<span class="chip you">${T('等你', 'You')}</span>`;
+  if (i.rw) h += `<span class="chip" title="${T('返工轮次', 'Rework round')}">${sic('rework')}R${i.rw + (REWORK.includes(i.st) ? 1 : 0)}</span>`;
+  const b = (i.bl || []).filter(c => CODES[c] && CODES[c].w !== 'you').length;
+  if (b) h += `<span class="chip" title="${esc((i.bl || []).map(c => L(CODES[c])).join('；'))}">${ic('alert', 12)}${b}</span>`;
+  if (i.st === 'ON_HOLD') h += `<span class="chip">${sic('hold')}${T('挂起', 'Hold')}</span>`;
+  if (i.scope === 'PENDING') h += `<span class="chip">${T('范围待定', 'Scope pending')}</span>`;
+  if (i.scope === 'EXCLUDED') h += `<span class="chip">${T('已排除', 'Excluded')}</span>`;
+  return h + runChip(i);
+}
+
+function sidebar(r) {
+  const dc = decisions().length, lr = liveRuns().length;
+  const nav = [['home', 'home', T('工作台', 'Home')], ['inbox', 'inbox', T('待我决策', 'Decisions'), dc, 'you'], ['issues', 'issues', T('需求', 'Issues')], ['board', 'board', T('看板', 'Board')], ['runs', 'runs', T('运行', 'Runs'), 0, '', 1], ['agents', 'agents', T('智能体', 'Agents'), 0, '', 1], ['config', 'config', T('设置', 'Settings'), 0, '', 1]];
+  const cur = r.view === 'detail' ? 'issues' : r.view === 'decide' ? 'inbox' : r.view;
+  const item = ([id, icon, label, n, cls, later]) => `<a class="nav-item" href="#${id}" ${cur === id ? 'aria-current="page"' : ''}>${ic(icon)}<span>${label}</span>${n ? `<span class="count ${cls}">${n}</span>` : later ? `<span class="later" title="${T('后续轮次', 'Later round')}">R3</span>` : ''}</a>`;
+  const views = [['you', T('等我处理', 'Waiting on me'), I.filter(youOwn).length], ['blocked', T('阻塞中', 'Blocked'), I.filter(i => (i.bl || []).length).length], ['active', T('进行中', 'In flight'), tasks().filter(i => ['IN_PROGRESS', 'LEAD_REVIEW', 'QA_TEST'].includes(i.st)).length]];
+  return `<nav class="side" aria-label="${T('主导航', 'Main navigation')}">
+    <button class="ws" data-act="toast" data-msg="${T('工作区切换将在设置轮次中设计', 'Workspace switching comes with the settings round')}"><span class="logo">A</span><span style="min-width:0">${esc(L(WS.name))}<small>${WS.prefix} · ${T('本地工作区', 'Local workspace')}</small></span><span style="margin-left:auto;color:var(--fg-3)">${ic('chevd', 14)}</span></button>
+    <div class="side-tools"><button class="side-search" data-act="palette">${ic('search', 15)}<span>${T('搜索或跳转', 'Search or jump')}</span><span class="kbd">Ctrl K</span></button><button class="icon-btn" data-act="new" title="${T('新建需求', 'New requirement')} (C)">${ic('plus')}</button></div>
+    ${nav.map(item).join('')}
+    <div class="side-label">${T('视图', 'Views')}</div>
+    ${views.map(([id, l, n]) => `<a class="nav-item" href="#issues" data-act="view" data-tab="${id}" ${r.view === 'issues' && S.tab === id && !S.stage ? 'aria-current="page"' : ''}>${ic(id === 'you' ? 'user' : id === 'blocked' ? 'alert' : 'play', 15)}<span>${l}</span><span class="count">${n}</span></a>`).join('')}
+    <div class="side-label">${T('需求', 'Requirements')}</div>
+    ${roots().map(i => { const p = prog(i); return `<a class="nav-item req-link" href="#issue-${i.k}" ${r.key === i.k ? 'aria-current="page"' : ''}>${i.st === 'DONE' ? sic('done') : ringP(p.done, p.total)}<span>${esc(i.tt)}</span></a>`; }).join('')}
+    <div class="side-foot">
+      <div class="conn"><span class="dot"></span>${T('本地服务已连接', 'Connected')}<span class="mono">127.0.0.1:43170</span></div>
+      <div class="foot-row">
+        <span class="seg" role="group" aria-label="${T('界面语言', 'Language')}"><button data-act="lang" data-v="zh" aria-pressed="${S.lang === 'zh'}">中文</button><button data-act="lang" data-v="en" aria-pressed="${S.lang === 'en'}">EN</button></span>
+        <span class="seg" role="group" aria-label="${T('主题', 'Theme')}"><button data-act="theme" data-v="light" aria-pressed="${S.theme === 'light'}" title="${T('浅色', 'Light')}">${ic('sun', 13)}</button><button data-act="theme" data-v="dark" aria-pressed="${S.theme === 'dark'}" title="${T('深色', 'Dark')}">${ic('moon', 13)}</button><button data-act="theme" data-v="system" aria-pressed="${S.theme === 'system'}" title="${T('跟随系统', 'System')}">A</button></span>
+        <button class="icon-btn" data-act="keys" title="${T('键盘快捷键', 'Keyboard shortcuts')} (?)" style="margin-left:auto">${ic('kbd')}</button>
+      </div>
+      <div class="me">${av('you')}<span>${T('你 · 所有者', 'You · Owner')}</span></div>
+    </div>
+  </nav>`;
+}
+const menuBtn = () => `<button class="icon-btn menu-btn" data-act="menu" aria-label="${T('打开导航', 'Open navigation')}">${ic('menu')}</button>`;
+
+function vHome() {
+  const dec = decisions(), lr = liveRuns(), unc = lr.filter(r => r.st === 'UNCERTAIN').length, gl = gapList();
+  const d = new Date(now()), wk = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+  const date = T(`${d.getMonth() + 1} 月 ${d.getDate()} 日 星期${wk}`, d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }));
+  const hr = d.getHours(), hi = hr < 12 ? T('上午好', 'Good morning') : hr < 18 ? T('下午好', 'Good afternoon') : T('晚上好', 'Good evening');
+  const max = Math.max(...PIPE.map(([s]) => tasks().filter(i => inStage(i, s)).length), 1);
+  const pipe = PIPE.map(([s, zh, en, sz, se]) => { const n = tasks().filter(i => inStage(i, s)).length, you = s === 'USER_ACCEPTANCE'; return `<button class="pstage ${you ? 'you' : ''}" data-act="stage" data-s="${s}" title="${esc(T(zh, en))}: ${n}"><span class="pbar"><i style="height:${Math.max(4, (n / max) * 44)}px;${n ? '' : 'opacity:.25'}"></i></span><span class="n">${n}</span><span class="l">${T(sz, se)}</span></button>`; }).join('');
+  const exc = EXC.map(([s, zh, en, tone]) => `<button class="chip" data-act="stage" data-s="${s}">${sic(tone)}${T(zh, en)} ${tasks().filter(i => inStage(i, s)).length}</button>`).join('');
+  const slots = Array.from({ length: WS.cap }, (_, n) => { const r = lr[n]; if (!r) return `<div class="slot"><span class="k muted">${T('空闲', 'Free')}</span><span class="s">—</span></div>`; const u = r.st === 'UNCERTAIN'; return `<a class="slot busy ${u ? 'unc' : ''}" href="#issue-${r.k}"><span class="k">${u ? sic('crit') : '<span class="dot live"></span>'}${hx(r.h)}<span class="mono">${r.k}</span></span><span class="s">${u ? T('不确定 · 需要你对账', 'Uncertain · needs you') : `${r.kind === 'qa' ? T('QA', 'QA') : T('开发', 'Dev')} · <span data-el="${r.start}">${clock(now() - r.start)}</span>`}</span></a>`; }).join('');
+  const q = Object.values(RUNS).filter(r => r.st === 'QUEUED');
+  const grp = sev => { const m = new Map(); gl.filter(g => g.sev === sev).forEach(g => { if (!m.has(g.c)) m.set(g.c, []); m.get(g.c).push(g.i.k); }); return [...m].sort((a, b) => (CODES[b[0]].w === 'you') - (CODES[a[0]].w === 'you')); };
+  const gb = grp('block'), ga = grp('adv'), ownerTxt = c => (CODES[c].w === 'you' ? T('你', 'you') : CODES[c].w === 'sys' ? T('服务', 'service') : role(CODES[c].w));
+  const gapRow = sev => ([c, ks]) => `<div class="lrow">${sev === 'block' ? sic('crit') : sic('todo')}<span class="t"><span class="one">${esc(L(CODES[c]))}</span><span class="s">${ks.map(k => `<a class="mono" href="#issue-${k}" style="color:var(--fg-2)">${k}</a>`).join(', ')} · ${T('负责', 'Owner')}: ${ownerTxt(c)} · <code class="mono">${c}</code></span></span></div>`;
+  return `<header class="topbar">${menuBtn()}<h1>${T('工作台', 'Home')}</h1><span class="muted">${date}</span><span class="grow"></span><button class="btn" data-act="palette">${ic('search', 14)}<span>${T('搜索', 'Search')}</span></button><button class="btn primary" data-act="new">${ic('plus', 14)}${T('新建需求', 'New requirement')}</button></header>
+  <div class="content"><div class="page"><div class="home-grid">
+    <div class="stack">
+      <div class="greet"><h2>${hi}</h2><p>${T(`${dec.length} 件事等你决定 · ${lr.length}/${WS.cap} 个运行槽位在用${unc ? ` · ${unc} 个运行状态不确定` : ''}`, `${dec.length} decisions waiting on you · ${lr.length}/${WS.cap} run slots in use${unc ? ` · ${unc} uncertain run` : ''}`)}</p></div>
+      <section><div class="sec-h"><h3>${T('等你决定', 'Waiting on your decision')}</h3><span class="c">${dec.length}</span><a href="#inbox">${T('全部', 'View all')}</a></div>
+        ${dec.map(i => `<a class="lrow" data-row href="#${decideRoute(i)}"><span class="dec-ic ${DEC[i.nx.act][3] === 1 ? 'crit' : ''}">${ic(DEC[i.nx.act][0])}</span><span class="t"><span class="one"><b>${T(DEC[i.nx.act][1], DEC[i.nx.act][2])}</b> · <span class="mono muted">${i.k}</span> ${esc(i.p ? plainTitle(i) : i.tt)}</span><span class="s">${esc(decSub(i))}</span></span><span class="go">${T('处理', 'Open')}${ic('arrow', 14)}</span></a>`).join('')}
+      </section>
+      <section><div class="sec-h"><h3>${T('需求进展', 'Requirements')}</h3><span class="c">${roots().length}</span><a href="#issues">${T('打开列表', 'Open list')}</a></div>
+        ${roots().map(i => { const p = prog(i), m = stMeta(i); return `<a class="lrow" data-row href="#issue-${i.k}">${m.icon}<span class="t"><span class="one"><span class="mono muted">${i.k}</span> <b>${esc(i.tt)}</b></span><span class="s">${i.phase === 'children' || i.phase === 'done' ? T(`${p.done}/${p.total} 个任务完成`, `${p.done}/${p.total} tasks done`) + (p.gone ? T(` · ${p.gone} 个已放弃`, ` · ${p.gone} abandoned`) : '') + ' · ' : ''}${esc(L(i.nx) || T('已关闭', 'Closed'))}</span></span><span class="chip flat opt">${m.label}</span>${i.nx ? av(i.nx.w) : ''}<span class="go">${ago(i.up)}</span></a>`; }).join('')}
+      </section>
+      <section><div class="sec-h"><h3>${T('最近动态', 'Recent activity')}</h3></div><div class="feed">
+        ${FEED.slice(0, 8).map(f => `<div class="fitem">${av(f.by)}<span class="t"><b>${esc(nm(f.by))}</b> ${esc(T(f.zh, f.en))} · <a class="mono" href="#issue-${f.k}">${f.k}</a></span><time>${ago(f.at)}</time></div>`).join('')}
+      </div></section>
+    </div>
+    <div class="stack">
+      <section><div class="sec-h"><h3>${T('任务流水线', 'Task pipeline')}</h3><span class="c">${tasks().length} ${T('个任务', 'tasks')}</span></div><div class="pipe">${pipe}</div><div class="pbase"></div><div class="pexc">${exc}</div></section>
+      <section><div class="sec-h"><h3>${T('运行容量', 'Run capacity')}</h3><span class="c">${lr.length}/${WS.cap}</span><a href="#runs">${T('运行', 'Runs')}</a></div>
+        <div class="slots">${slots}</div>
+        ${q.map(r => `<a class="lrow" href="#issue-${r.k}">${ic('clock', 14)}<span class="t"><span class="one">${T('排队', 'Queued')} · <span class="mono">${r.k}</span> · ${esc(nm(r.who))} ${hx(r.h)}</span><span class="s">${T(`等待槽位 ${ago(r.queued)}起`, `waiting for a slot since ${ago(r.queued)}`)}</span></span></a>`).join('')}
+        <div class="meter"><span>${T('QA 检查进程', 'QA check processes')}</span><span class="cells"><i class="on"></i><i></i></span><span class="num">1/2</span></div>
+        <div class="meter"><span>${T('Git 校验任务', 'Git verification jobs')}</span><span class="cells"><i></i><i></i></span><span class="num">0/2</span></div>
+      </section>
+      <section><div class="sec-h"><h3>${T('缺口', 'Gaps')}</h3><span class="c">${gl.length}</span><button class="link" data-act="view" data-tab="blocked">${T('查看阻塞', 'View blocked')}</button></div>
+        <div class="gap-g"><span class="sev block">${T('阻塞', 'Blocking')}</span>${gl.filter(g => g.sev === 'block').length}</div>${gb.slice(0, 6).map(gapRow('block')).join('')}
+        <div class="gap-g"><span class="sev adv">${T('建议', 'Advisory')}</span>${gl.filter(g => g.sev === 'adv').length}</div>${ga.slice(0, 3).map(gapRow('adv')).join('')}
+      </section>
+    </div>
+  </div></div></div>`;
+}
+
+const TABS = [['all', '全部', 'All'], ['you', '等我处理', 'Waiting on me'], ['active', '进行中', 'In flight'], ['blocked', '阻塞', 'Blocked'], ['done', '已结束', 'Closed']];
+function tabMatch(i, tab = S.tab) {
+  if (tab === 'you') return youOwn(i);
+  if (tab === 'active') return ['IN_PROGRESS', 'LEAD_REVIEW', 'QA_TEST', 'USER_ACCEPTANCE'].includes(i.st) || REWORK.includes(i.st);
+  if (tab === 'blocked') return (i.bl || []).length > 0;
+  if (tab === 'done') return ['DONE', 'ABANDONED'].includes(i.st);
+  return true;
+}
+const qMatch = i => { const q = S.q.trim().toLowerCase(); return !q || (i.k + ' ' + fullTitle(i)).toLowerCase().includes(q); };
+const keep2 = i => tabMatch(i) && qMatch(i) && (!S.stage || (i.p && inStage(i, S.stage)));
+const ownerOf = i => (i.st === 'QA_TEST' ? i.qa : i.as);
+function row(i, child) {
+  const m = stMeta(i), o = ownerOf(i);
+  return `<a class="row ${child ? 'child' : ''}" data-row href="#issue-${i.k}">
+    <span title="${T('优先级', 'Priority')}: ${T(...PRIO[i.pr])}">${prio(i.pr)}</span><span class="key mono">${i.k}</span>
+    <span title="${esc(m.label)} · ${m.code}">${m.icon}</span>
+    <span class="ttl">${titleHtml(i)}${!child && i.p ? `<span class="par">· ${esc(byKey[i.p].tt)}</span>` : ''}</span>
+    <span class="meta">${rowChips(i)}<span class="opt it">${i.it ? i.it : ''}</span><span class="due num">${md(i.due)}</span>${av(o)}<span class="opt">${o ? hx(A[o].h) : '<span style="width:22px;display:inline-block"></span>'}</span></span></a>`;
+}
+function ghead(i) {
+  const p = prog(i), m = stMeta(i), closed = S.closed.has(i.k);
+  return `<div class="ghead ${closed ? 'closed' : ''}"><button class="tg" data-act="fold" data-k="${i.k}" aria-expanded="${!closed}" aria-label="${closed ? T('展开', 'Expand') : T('收起', 'Collapse')} ${i.k}">${ic('chevd', 14)}</button>
+    <a href="#issue-${i.k}" data-row>${m.icon}<span class="mono muted">${i.k}</span><span class="gt">${esc(i.tt)}</span></a>
+    <span class="gm">${youOwn(i) && i.nx.act ? `<span class="chip you">${T('等你', 'You')}</span>` : ''}<span class="opt">${m.label}</span><span class="num" title="${T('已完成 / 在范围内的任务', 'Done / in-scope tasks')}">${p.done}/${p.total}</span>${av(i.lead)}</span></div>`;
+}
+function vIssues() {
+  let body = '';
+  if (S.group === 'req') {
+    roots().forEach(r => {
+      const ks = kids(r.k).filter(keep2), self = !S.stage && keep2(r);
+      if (!ks.length && !self) return;
+      body += ghead(r) + (S.closed.has(r.k) ? '' : ks.map(c => row(c, true)).join(''));
+    });
+  } else {
+    [...PIPE, ...EXC].forEach(([s, zh, en]) => {
+      const ks = tasks().filter(i => inStage(i, s) && keep2(i));
+      if (!ks.length) return;
+      body += `<div class="ghead"><span class="tg"></span><span class="gt">${T(zh, en)}</span><span class="gm"><span class="num">${ks.length}</span></span></div>` + ks.map(c => row(c, false)).join('');
+    });
+  }
+  const n = I.filter(keep2).length;
+  const filt = S.stage || S.q ? `<div class="topbar" style="min-height:38px;gap:8px">${S.stage ? `<button class="chip" data-act="stage" data-s="">${T('阶段', 'Stage')}: ${stageName(S.stage)} ${ic('x', 12)}</button>` : ''}${S.q ? `<button class="chip" data-act="clearq">${T('搜索', 'Search')}: ${esc(S.q)} ${ic('x', 12)}</button>` : ''}<span class="muted">${T(`${n} 个事项`, `${n} items`)}</span></div>` : '';
+  return `<header class="topbar">${menuBtn()}<h1>${T('需求', 'Issues')}</h1>
+    <div class="tabs" role="group" aria-label="${T('筛选', 'Filter')}">${TABS.map(([id, zh, en]) => `<button data-act="tab" data-tab="${id}" aria-pressed="${S.tab === id}">${T(zh, en)}<span class="c">${I.filter(i => tabMatch(i, id)).length}</span></button>`).join('')}</div>
+    <span class="grow"></span>
+    <label class="search">${ic('search', 14)}<span class="sr">${T('搜索标题或编号', 'Search title or key')}</span><input id="q" value="${esc(S.q)}" placeholder="${T('搜索标题或编号  /', 'Search title or key  /')}" autocomplete="off"></label>
+    <span class="seg" role="group" aria-label="${T('分组', 'Group by')}"><button data-act="group" data-v="req" aria-pressed="${S.group === 'req'}">${T('按需求', 'By requirement')}</button><button data-act="group" data-v="state" aria-pressed="${S.group === 'state'}">${T('按阶段', 'By stage')}</button></span>
+    <span class="seg" role="group" aria-label="${T('视图', 'View')}"><button aria-pressed="true" title="${T('列表', 'List')}">${ic('issues', 14)}</button><button data-act="go" data-to="board" aria-pressed="false" title="${T('看板', 'Board')}">${ic('board', 14)}</button></span>
+    <button class="btn primary" data-act="new">${ic('plus', 14)}<span>${T('新建', 'New')}</span></button></header>
+    ${filt}<div class="content" id="scroller"><div class="list">${body || `<div class="empty"><h3>${T('没有匹配的事项', 'No matching items')}</h3><p>${T('换个筛选条件，或清除搜索。', 'Try another filter or clear the search.')}</p><p style="margin-top:12px"><button class="btn" data-act="reset">${T('清除筛选', 'Clear filters')}</button></p></div>`}</div></div>`;
+}
+
+const COLS = [
+  ['todo', 'todo', '未开始', 'Not started', i => i.st === 'NOT_STARTED' || (i.st === 'ON_HOLD' && i.saved === 'NOT_STARTED')],
+  ['dev', 'dev', '开发 / 返工', 'Dev / rework', i => i.st === 'IN_PROGRESS' || REWORK.includes(i.st)],
+  ['review', 'review', '负责人评审', 'Lead review', i => i.st === 'LEAD_REVIEW'],
+  ['qa', 'review', '独立测试', 'Independent QA', i => i.st === 'QA_TEST'],
+  ['you', 'you', '待你验收', 'Your acceptance', i => i.st === 'USER_ACCEPTANCE'],
+  ['end', 'done', '已结束', 'Closed', i => i.st === 'DONE' || i.st === 'ABANDONED']
+];
+const colOf = i => { const j = i.st === 'ON_HOLD' ? { ...i, st: i.saved || 'NOT_STARTED' } : i; return (COLS.find(c => c[4](j)) || COLS[0])[0]; };
+function card(i) {
+  const o = ownerOf(i), q = parts(i.tt), m = stMeta(i);
+  const stage = i.st === 'LEAD_REVIEW' ? `<span class="chip">${i.sg === 'FINAL' ? T('终审', 'Final') : T('初审', 'Initial')}</span>` : REWORK.includes(i.st) || i.st === 'ABANDONED' || i.st === 'ON_HOLD' ? '' : '';
+  const extra = REWORK.includes(i.st) || i.st === 'ABANDONED' || (i.st === 'USER_ACCEPTANCE' && i.accepted) ? `<span class="chip">${m.icon}${m.label}</span>` : '';
+  return `<a class="card ${i.st === 'ON_HOLD' ? 'hold' : ''}" href="#issue-${i.k}" draggable="true" data-drag="${i.k}" data-row>
+    <span class="top">${prio(i.pr)}<span class="mono">${i.k}</span>${m.icon}${av(o)}</span>
+    <span class="ct">${esc(q ? `${q.area}: ${q.act} → ${q.out}` : i.tt)}</span>
+    <span class="chips">${q ? `<span class="chip type">${q.type}</span>` : ''}${stage}${extra}${rowChips(i)}${o ? hx(A[o].h) : ''}</span>
+    <span class="par">↳ ${esc(byKey[i.p].tt)}</span></a>`;
+}
+function vBoard() {
+  const list = tasks().filter(i => (!S.boardReq || i.p === S.boardReq) && qMatch(i) && (S.showHold !== false || i.st !== 'ON_HOLD'));
+  const cols = COLS.map(([id, tone, zh, en, f]) => {
+    const cs = list.filter(i => colOf(i) === id);
+    const sub = id === 'review' ? `<span class="sub">${T('初审', 'Initial')} ${cs.filter(i => i.sg !== 'FINAL').length} · ${T('终审', 'Final')} ${cs.filter(i => i.sg === 'FINAL').length}</span>` : id === 'you' ? `<span class="sub" style="color:var(--accent-ink)">${T('需要你', 'Needs you')}</span>` : '';
+    return `<section class="col" data-col="${id}" aria-label="${T(zh, en)}"><div class="col-h">${sic(tone, tone === 'review' ? (id === 'qa' ? 0.58 : 0.42) : tone === 'dev' ? 0.25 : tone === 'you' ? 0.9 : 0)}<span>${T(zh, en)}</span><span class="c">${cs.length}</span>${sub}</div><div class="col-b">${cs.map(card).join('') || `<p class="muted" style="padding:8px 6px;font-size:12px">${T('暂无', 'Nothing here')}</p>`}</div></section>`;
+  }).join('');
+  return `<header class="topbar">${menuBtn()}<h1>${T('看板', 'Board')}</h1>
+    <label class="seg" style="padding:0 6px;gap:6px;align-items:center">${ic('layers', 14)}<span class="sr">${T('需求', 'Requirement')}</span><select data-act="boardReq" style="border:0;background:none;height:24px;font-size:12px;outline:0;max-width:200px"><option value="">${T('全部需求', 'All requirements')}</option>${roots().map(r => `<option value="${r.k}" ${S.boardReq === r.k ? 'selected' : ''}>${r.k} ${esc(r.tt)}</option>`).join('')}</select></label>
+    <span class="seg"><button data-act="hold" aria-pressed="${S.showHold !== false}">${sic('hold')}<span style="margin-left:4px">${T('显示挂起', 'Show on hold')}</span></button></span>
+    <span class="grow"></span><span class="muted" style="font-size:12px">${T('拖动卡片会说明对应命令，不会直接改状态', 'Dragging explains the matching command; it never edits state directly')}</span>
+    <span class="seg" role="group" aria-label="${T('视图', 'View')}"><button data-act="go" data-to="issues" aria-pressed="false" title="${T('列表', 'List')}">${ic('issues', 14)}</button><button aria-pressed="true" title="${T('看板', 'Board')}">${ic('board', 14)}</button></span></header>
+    <div class="content" style="overflow:hidden"><div class="board">${cols}</div></div>`;
+}
+const MOVES = {
+  'you>end': { ok: 1, cmd: 'delivery_decide · ACCEPT', zh: '接受这份交付。你需要先核对 digest、评审链和提交校验；GitHub 不可用时接受会被保存，但不会显示已完成。', en: 'Accept this delivery. Check the digest, review chain and commit verification first. If GitHub is unavailable your acceptance is kept, but the item will not show as done.' },
+  'you>dev': { ok: 1, cmd: 'delivery_decide · REJECT', zh: '要求返工。需要写明原因，并区分是缺陷还是范围变化；新的提交会重新走初审、QA、终审。', en: 'Request rework. Give a reason and say whether it is a defect or a scope change; the next submission repeats initial review, QA and final review.' },
+  'any>end': { ok: 0, cmd: 'issue_transition · abandon', zh: '只有通过你的验收才算完成。如果要停止这项工作，请使用「放弃」并写明理由；放弃不计为已交付。', en: 'Only your acceptance completes work. To stop it, use Abandon with a reason; abandoned work never counts as delivered.' },
+  'todo>dev': { ok: 0, cmd: 'work_dispatch', zh: '开始开发需要 PM 派发，并且设计已批准、已指派、依赖已完成、有空闲槽位。', en: 'Development starts when PM dispatches it, with an approved design, an assignee, finished dependencies and a free slot.' },
+  'dev>review': { ok: 0, cmd: 'work_submit', zh: '只有执行中的开发智能体能提交候选交付，提交会密封快照并进入负责人初审。', en: 'Only the running worker can submit a candidate; submission seals a snapshot and starts the initial lead review.' },
+  'review>qa': { ok: 0, cmd: 'review_submit · PASS', zh: '初审由产品负责人智能体完成。你可以查看候选交付，但看板不会替它通过评审。', en: 'The product lead agent performs the initial review. You can inspect the candidate, but the board never passes a review for it.' },
+  'qa>you': { ok: 0, cmd: 'qa_report_submit → review_submit', zh: 'QA 通过后还要经过负责人终审，才会进入你的验收。', en: 'After QA passes, the final lead review still has to pass before it reaches you.' }
+};
+function explainMove(k, to) {
+  const i = byKey[k], from = colOf(i);
+  if (from === to) return;
+  const mv = (i.accepted && to === 'end' ? { ok: 0, cmd: 'git_retry → delivery_complete', zh: '你已经接受了这份交付。GitHub 校验恢复后会自动关闭，不需要再次确认；PM 或你可以重试校验。', en: 'You already accepted this delivery. It closes automatically once GitHub verification succeeds, with no second confirmation; PM or you can retry verification.' } : null) || MOVES[from + '>' + to] || (to === 'end' ? MOVES['any>end'] : null) || { ok: 0, cmd: 'issue_transition', zh: '状态只能由对应角色通过命令推进，看板拖拽不会直接修改状态。', en: 'State only moves through the responsible role’s command; dragging never edits state directly.' };
+  S.modal = { kind: 'move', k, from, to, mv };
+  render();
+}
+
+const HIST = [
+  { id: 'r-0c4e', k: 'ADC-10', kind: 'impl', who: 'devb', h: 'dsh', st: 'SUCCEEDED', start: -5 * H, end: -4 * H },
+  { id: 'r-21b0', k: 'ADC-10', kind: 'qa', who: 'qad', h: 'dsh', st: 'SUCCEEDED', start: -90 * M, end: -62 * M },
+  { id: 'r-6d03', k: 'ADC-3', kind: 'impl', who: 'devb', h: 'dsh', st: 'SUCCEEDED', start: -2 * H, end: -72 * M },
+  { id: 'r-9f12', k: 'ADC-12', kind: 'impl', who: 'deva', h: 'codex', st: 'SUCCEEDED', start: -7 * H, end: -6 * H },
+  { id: 'r-4a88', k: 'ADC-12', kind: 'qa', who: 'qad', h: 'dsh', st: 'SUCCEEDED', start: -5.4 * H, end: -5 * H },
+  { id: 'r-1b7e', k: 'ADC-4', kind: 'impl', who: 'deva', h: 'codex', st: 'SUCCEEDED', start: -4 * H, end: -3 * H }
+];
+HIST.forEach(r => { r.start = BASE + r.start; r.end = BASE + r.end; });
+const RUNST = { RUNNING: ['dev', '运行中', 'Running'], QUEUED: ['todo', '排队中', 'Queued'], UNCERTAIN: ['crit', '不确定', 'Uncertain'], SUCCEEDED: ['done', '已结束', 'Succeeded'], FAILED: ['rework', '失败', 'Failed'], CANCELLED: ['gone', '已取消', 'Cancelled'] };
+const ACTBTN = { design: ['审批设计', 'Review design'], delivery: ['验收交付', 'Review delivery'], reconcile: ['确认停止并对账', 'Confirm stop & reconcile'], scope: ['决定范围', 'Decide scope'], resume: ['恢复', 'Resume'], retry: ['重试 Git 校验', 'Retry Git verification'] };
+
+function flowHtml(i) {
+  let steps, cur, bad = -1, note = '';
+  const c = i.cand && CAND[i.cand], rv = s => c && c.reviews.find(r => r.s === s);
+  const res = r => (r ? (r.v === 'PASS' ? T('通过 · ', 'Passed · ') + ago(r.at) : r.v === 'FAIL' ? T('未通过 · ', 'Failed · ') + ago(r.at) : `${r.n[0]}/${r.n[1]} ${T('项检查', 'checks')}`) : '');
+  if (!i.p) {
+    const p = prog(i), dz = DESIGNS[i.design][0];
+    steps = [[T('设计审批', 'Design'), i.phase === 'design-draft' ? T('草稿中', 'Drafting') : i.phase === 'design-review' ? `r${dz.r} ${T('等你审批', 'awaiting you')}` : `r${(DESIGNS[i.design].find(r => r.st === 'APPROVED') || dz).r} ${T('已批准', 'approved')}`],
+      [T('拆解计划', 'Plan'), i.phase.startsWith('design') ? T('草稿', 'Draft') : i.phase === 'plan' ? T('待 PM 激活', 'Awaiting PM') : T('已激活', 'Active')],
+      [T('子任务交付', 'Task delivery'), p.all ? `${p.done}/${p.total} ${T('完成', 'done')}` : '—'],
+      [T('集成评审', 'Integration'), i.st === 'DONE' ? T('通过', 'Passed') : T('等待子任务', 'After tasks')],
+      [T('你验收', 'Your acceptance'), i.st === 'DONE' ? T('已接受', 'Accepted') : '—'], [T('完成', 'Done'), i.st === 'DONE' ? ago(i.up) : '—']];
+    cur = { 'design-draft': 0, 'design-review': 0, plan: 1, children: 2, done: 6 }[i.phase];
+  } else {
+    const g = stageOf(i), idx = { NOT_STARTED: 0, IN_PROGRESS: 1, PRE_QA: 2, QA_TEST: 3, FINAL: 4, USER_ACCEPTANCE: 5, DONE: 7 };
+    steps = [[T('待开始', 'Ready'), i.st === 'NOT_STARTED' ? T(`${(i.bl || []).length} 个阻塞`, `${(i.bl || []).length} blockers`) : T('已派发', 'Dispatched')],
+      [T('开发', 'Development'), i.as ? nm(i.as) + (i.rw ? T(` · 第 ${i.rw + (REWORK.includes(i.st) ? 1 : 0)} 轮`, ` · round ${i.rw + (REWORK.includes(i.st) ? 1 : 0)}`) : '') : T('未指派', 'Unassigned')],
+      [T('负责人初审', 'Initial review'), res(rv('PRE_QA')) || nm('lead')], [T('独立测试', 'Independent QA'), res(rv('QA')) || (i.qa ? nm(i.qa) : T('未配置', 'Not set'))],
+      [T('负责人终审', 'Final review'), res(rv('FINAL')) || nm('lead')], [T('你验收', 'Your acceptance'), i.accepted ? T('已接受 · ', 'Accepted · ') + ago(i.accepted) : T('你', 'You')],
+      [T('完成', 'Done'), i.st === 'DONE' ? ago(i.up) : i.mode === 'git' ? T('需 Git 校验', 'Needs Git check') : T('工件交付', 'Artifact')]];
+    if (REWORK.includes(g)) { bad = g === 'QA_REJECTED' ? 3 : g === 'USER_REJECTED' ? 5 : i.sg === 'FINAL' ? 4 : 2; cur = bad; note = T('已退回开发，等待返工', 'Returned to development for rework'); }
+    else if (g === 'ON_HOLD') { cur = idx[i.saved] ?? 0; note = T('已挂起，进度冻结', 'On hold; progress frozen'); }
+    else if (g === 'ABANDONED') { cur = -1; note = T('已放弃，不计入交付', 'Abandoned; not counted as delivered'); }
+    else cur = idx[g];
+    if (i.rw && g === 'IN_PROGRESS') note = T(`第 ${i.rw} 次返工：上一轮在独立测试未通过`, `Rework ${i.rw}: the previous round failed independent QA`);
+  }
+  const you = !i.p ? i.phase === 'design-review' && cur === 0 : cur === 5 && !i.accepted;
+  return `<div class="flow" role="list" aria-label="${T('流程进度', 'Workflow progress')}">${steps.map(([l, d], n) => { const cls = n === bad ? 'bad' : n < cur ? 'done' : n === cur ? 'cur' + (you ? ' you' : '') : ''; return `<div class="fs ${cls}" role="listitem" ${n === cur ? 'aria-current="step"' : ''}><div class="bar"><span class="nd">${n < cur && n !== bad ? ic('check', 12) : n === bad ? ic('refresh', 11) : n === cur ? (you ? ic('user', 11) : '<span class="dot" style="background:var(--accent)"></span>') : ''}</span><span class="ln"></span></div><span class="fl">${l}</span><span class="fd">${esc(d)}</span></div>`; }).join('')}</div>${note ? `<p class="muted" style="font-size:12px">${note}</p>` : ''}`;
+}
+function nextBox(i) {
+  if (!i.nx) return `<div class="next"><span>${sic('done')}</span><div class="nb"><span class="nh">${T('已完成', 'Done')}<small>${ago(i.up)}${i.git ? ` · Git ${T('已校验', 'verified')} <span class="mono">${i.git.sha.slice(0, 8)}</span>` : ''}</small></span></div></div>`;
+  const y = youOwn(i), crit = i.nx.act === 'reconcile', b = i.bl || [], a = i.adv || [];
+  const blk = list => list.map(c => `<div>${ic('alert', 13)}<span>${esc(L(CODES[c]))}</span><span class="muted">· ${T('负责', 'Owner')}: ${CODES[c].w === 'you' ? T('你', 'you') : CODES[c].w === 'sys' ? T('服务', 'service') : role(CODES[c].w)}</span><code>${c}</code></div>`).join('');
+  return `<div class="next ${y ? (crit ? 'crit' : 'you') : ''}">${av(i.nx.w)}<div class="nb"><span class="nh">${T('下一步', 'Next')} · ${esc(nm(i.nx.w))}<small>${role(i.nx.w)}</small></span><span>${esc(L(i.nx))}</span>${b.length ? `<div class="blk">${blk(b)}</div>` : ''}${a.length ? `<div class="blk" style="opacity:.8">${a.map(c => `<div>${ic('clock', 13)}<span>${esc(L(CODES[c]))}</span><span class="muted">· ${T('建议', 'advisory')}</span><code>${c}</code></div>`).join('')}</div>` : ''}</div>${i.nx.act ? `<button class="btn ${y ? 'primary' : ''}" data-act="decide" data-k="${i.k}">${T(...ACTBTN[i.nx.act])}</button>` : ''}</div>`;
+}
+function acRows(i) {
+  const r = i.p ? byKey[i.p] : i;
+  if (!r.ac.length) return `<p class="muted">${T('设计草稿完成后才会列出验收标准。', 'Criteria appear once the design draft is written.')}</p>`;
+  return r.ac.filter(([id]) => !i.p || i.ac.includes(id)).map(([id, tx]) => {
+    let rs;
+    if (!i.p) { const owners = kids(i.k).filter(c => c.ac.includes(id)); rs = (i.integ || []).includes(id) ? `<span class="chip">${T('集成检查', 'Integration check')}</span>` : owners.map(c => `<a class="chip" href="#issue-${c.k}" title="${esc(stMeta(c).label)}">${stMeta(c).icon}${c.k}</a>`).join('') || `<span class="res fail">${T('未映射', 'Unmapped')}</span>`; }
+    else rs = i.st === 'DONE' ? `<span class="res pass">${ic('check', 12)}${T('通过', 'Pass')}</span>` : (i.def || []).some(d => DEFECTS[d].ac === id) ? `<span class="res fail">${ic('x', 12)}${T('上轮失败', 'Failed last round')}</span>` : i.st === 'QA_TEST' ? `<span class="res run">${T('测试中', 'Testing')}</span>` : ['USER_ACCEPTANCE', 'LEAD_REVIEW'].includes(i.st) && i.sg !== 'PRE_QA' ? `<span class="res pass">${ic('check', 12)}${T('QA 通过', 'QA pass')}</span>` : `<span class="res wait">${T('待测试', 'Not tested')}</span>`;
+    return `<div class="ac"><span class="id">${id}</span><span class="tx">${esc(tx)}</span><span class="rs">${rs}</span></div>`;
+  }).join('');
+}
+function tabOverview(i) {
+  const q = parts(i.tt), deps = (i.deps || []).map(k => byKey[k]), blocks = I.filter(x => (x.deps || []).includes(i.k));
+  let h = `<div class="blockh">${T('描述', 'Description')}</div><div class="prose">${esc(i.desc || (q ? T(`在 ${q.area} 范围内完成「${q.act}」，交付后应当做到：${q.out}。`, `Within ${q.area}, ${q.act}. When delivered: ${q.out}.`) : ''))}</div>`;
+  if (i.rej) h += `<div class="blockh">${sic('rework')}${T('驳回原因', 'Rejection')}</div><div class="box"><div class="prose" style="font-size:13px">${esc(L(i.rej))}</div><p class="muted" style="margin-top:6px;font-size:12px">${nm(i.rej.by)} · ${T('初审', 'initial review')} · ${ago(i.rej.at)}</p></div>`;
+  if (i.hold) h += `<div class="blockh">${sic('hold')}${T('挂起原因', 'Hold reason')}</div><div class="box"><div class="prose" style="font-size:13px">${esc(L(i.hold))}</div><p class="muted" style="margin-top:6px;font-size:12px">${nm(i.hold.by)} · ${ago(i.hold.at)} · ${T('恢复后回到「未开始」并重新校验就绪条件', 'Resuming returns it to Not started and rechecks readiness')}</p></div>`;
+  if (i.abandon) h += `<div class="blockh">${sic('gone')}${T('放弃记录', 'Abandonment')}</div><div class="box"><div class="prose" style="font-size:13px">${esc(L(i.abandon))}</div><p class="muted" style="margin-top:6px;font-size:12px">${nm(i.abandon.by)}${i.abandon.grant ? ` · ${T('使用你签发的授权', 'using your grant')} <span class="mono">${i.abandon.grant}</span>` : ''} · ${ago(i.abandon.at)}</p><p style="margin-top:8px;font-size:12.5px">${i.scope === 'EXCLUDED' ? T('你已把它排除出交付范围；放弃的工作不计为交付。', 'You excluded it from delivery; abandoned work never counts as delivered.') : T('放弃不算交付。它仍在父需求的交付范围内，需要你决定排除或用其他任务替换。', 'Abandoned work is not delivered. It stays in the parent scope until you exclude or replace it.')}</p></div>`;
+  h += `<div class="blockh">${T('验收标准', 'Acceptance criteria')}</div>${acRows(i)}`;
+  if (!i.p) {
+    const ks = kids(i.k), p = prog(i);
+    h += `<div class="blockh">${T('子任务', 'Tasks')} <span class="muted" style="font-weight:400">${T(`在范围 ${p.total} · 已完成 ${p.done} · 已放弃 ${p.gone}`, `${p.total} in scope · ${p.done} done · ${p.gone} abandoned`)}</span></div>`;
+    h += ks.length ? `<div class="box" style="padding:0 0">${ks.map(c => row(c, false).replace('class="row', 'class="row" style="padding:0 12px')).join('')}</div>` : `<p class="muted">${T('还没有任务。设计获批后由 PM 拆解。', 'No tasks yet. PM decomposes after the design is approved.')}</p>`;
+  }
+  if (deps.length || blocks.length) h += `<div class="blockh">${T('依赖', 'Dependencies')}</div>` + deps.map(d => `<a class="lrow" href="#issue-${d.k}">${ic('dep', 14)}<span class="t"><span class="one">${T('依赖', 'Blocked by')} <span class="mono">${d.k}</span> ${esc(plainTitle(d))}</span></span>${stMeta(d).icon}<span class="go">${stMeta(d).label}</span></a>`).join('') + blocks.map(d => `<a class="lrow" href="#issue-${d.k}">${ic('dep', 14)}<span class="t"><span class="one">${T('阻塞', 'Blocks')} <span class="mono">${d.k}</span> ${esc(plainTitle(d))}</span></span>${stMeta(d).icon}</a>`).join('');
+  return h;
+}
+function tabDesign(i) {
+  const r = i.p ? byKey[i.p] : i, revs = DESIGNS[r.design] || [];
+  if (!revs.length) return `<div class="note">${T('还没有设计修订。产品负责人写完草稿并提交审批后，你会在「待我决策」里看到它。', 'No design revision yet. Once the product lead submits a draft for review, it shows up in Decisions.')}</div>`;
+  const cur = revs.find(x => x.r === (S.rev || revs[0].r)) || revs[0];
+  const stc = { IN_REVIEW: ['you', '待你审批', 'Awaiting you'], APPROVED: ['done', '已批准', 'Approved'], CHANGES_REQUESTED: ['rework', '要求修改', 'Changes requested'], DRAFT: ['todo', '草稿', 'Draft'], SUPERSEDED: ['gone', '已被取代', 'Superseded'] };
+  let h = i.p ? `<div class="note">${T(`任务执行父需求 ${r.k} 的设计；变更设计会让受影响的执行和评审失效。`, `This task executes the design of ${r.k}; changing it invalidates affected execution and reviews.`)} <a href="#issue-${r.k}" style="color:var(--accent-ink)">${T('打开需求', 'Open requirement')}</a></div>` : '';
+  h += `<div class="blockh">${T('修订', 'Revisions')}</div>` + revs.map(x => `<button class="lrow" style="width:calc(100% + 16px);text-align:left" data-act="rev" data-r="${x.r}" ${x === cur ? 'aria-current="true"' : ''}>${sic(stc[x.st][0], x.st === 'IN_REVIEW' ? 0.5 : 0)}<span class="t"><span class="one"><b>r${x.r}</b> · ${T(stc[x.st][1], stc[x.st][2])} · <span class="mono muted">sha256 ${short(x.hash)}</span></span><span class="s">${nm(x.by)} ${ago(x.at)}${x.dec ? ` · ${nm(x.dec.by)}: ${esc(L(x.dec))}` : ''}</span></span>${x === cur ? `<span class="chip flat">${T('查看中', 'Viewing')}</span>` : ''}</button>`).join('');
+  h += `<div class="blockh">r${cur.r} ${T('内容', 'content')}</div>` + (cur.body ? cur.body.map(s => `<div style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">${esc(s.h)}</div><div class="prose">${esc(s.b)}</div></div>`).join('') : `<p class="muted">${T('早期修订仅保留摘要与哈希。', 'Earlier revisions keep only the summary and hash.')}</p>`);
+  if (cur.st === 'IN_REVIEW') h += `<div class="note you" style="margin-top:10px">${T(`你的决定只绑定 r${cur.r}（sha256 ${short(cur.hash)}）。修订变化后，旧对话框提交会失败并保留你的输入。`, `Your decision binds only r${cur.r} (sha256 ${short(cur.hash)}). If the revision changes, a stale dialog fails and keeps your input.`)} <button class="btn primary" style="margin-left:6px" data-act="decide" data-k="${r.k}">${T('审批设计', 'Review design')}</button></div>`;
+  return h;
+}
+function tabDelivery(i) {
+  if (!i.p) return `<div class="note">${T('父需求的集成交付在所有在范围内的任务完成后开始，由独立的集成开发者组装，再经过初审、集成 QA、终审和你的验收。子任务完成不代表已经合并。', 'Integration starts after every in-scope task is done. A separate integrator assembles it, then it goes through initial review, integration QA, final review and your acceptance. Finished tasks do not imply a merge.')}</div><div class="blockh">${T('子任务交付', 'Task deliveries')}</div>` + kids(i.k).map(c => `<a class="lrow" href="#issue-${c.k}">${stMeta(c).icon}<span class="t"><span class="one"><span class="mono">${c.k}</span> ${esc(plainTitle(c))}</span><span class="s">${stMeta(c).label}${c.git ? ` · Git ${c.git.st === 'VERIFIED' ? T('已校验', 'verified') : T('不可用', 'unavailable')} ${c.git.sha.slice(0, 8)}` : ''}${c.digest ? ` · digest ${short(c.digest)}` : ''}</span></span></a>`).join('');
+  const c = i.cand && CAND[i.cand];
+  let h = '';
+  if (i.git || i.mode === 'artifact') h += `<div class="box"><div class="kv"><dt>${T('交付方式', 'Delivery')}</dt><dd>${i.mode === 'git' ? `Git · ${WS.repo}` : T('工件（文档，无提交）', 'Artifact (document, no commit)')}</dd>${i.git ? `<dt>${T('最终提交', 'Final commit')}</dt><dd class="mono">${i.git.sha}</dd><dt>${T('校验', 'Verification')}</dt><dd>${i.git.st === 'VERIFIED' ? `<span class="res pass">${ic('check', 12)}${T('提交树与快照一致', 'Commit tree matches the snapshot')}</span> · ${ago(i.git.at)}` : `<span class="res fail">${ic('alert', 12)}${T(`第 ${i.git.attempt} 次校验失败：GitHub 不可用`, `Attempt ${i.git.attempt} failed: GitHub unavailable`)}</span> <code class="mono muted">${i.git.err}</code>`}</dd>` : ''}${i.digest ? `<dt>${T('交付摘要', 'Digest')}</dt><dd class="mono">${i.digest}</dd>` : ''}</div></div>`;
+  if (!c) return h + `<p class="muted" style="margin-top:12px">${T('还没有候选交付。开发智能体提交后，这里会显示密封快照与评审链。', 'No candidate yet. After the worker submits, the sealed snapshot and review chain show up here.')}</p>`;
+  const vc = { PASS: 'done', FAIL: 'rework', RUNNING: 'review' }, sn = { PRE_QA: [T('负责人初审', 'Initial lead review')], QA: [T('独立测试', 'Independent QA')], FINAL: [T('负责人终审', 'Final lead review')] };
+  h += `<div class="blockh">${T('候选交付', 'Candidate')} <span class="mono muted" style="font-weight:400">${c.id}</span></div><div class="box"><div class="kv"><dt>${T('提交者', 'Submitted by')}</dt><dd>${who(c.by)} · ${T('第', 'round ')}${c.round}${T(' 轮', '')} · ${ago(c.at)}</dd><dt>${T('密封快照', 'Sealed snapshot')}</dt><dd><span class="mono">sha256 ${short(c.snap)}</span> · ${c.files} ${T('个文件', 'files')}</dd><dt>${T('交接说明', 'Handoff')}</dt><dd>${esc(L(c.sum))}</dd></div>
+    <details class="fold"><summary>${ic('chev', 12)}${T('文件清单', 'File manifest')} (${c.manifest.length})</summary><div class="files">${c.manifest.map(f => `<span>100644 ${esc(f)}</span>`).join('')}</div></details></div>`;
+  h += `<div class="blockh">${T('评审链', 'Review chain')}</div><div class="tl">${c.reviews.map(r => `<div class="ti">${sic(vc[r.v], r.v === 'RUNNING' ? 0.5 : 0)}<div class="tc"><div class="h"><b>${sn[r.s][0]}</b><span class="res ${r.v === 'PASS' ? 'pass' : r.v === 'FAIL' ? 'fail' : 'run'}">${r.v === 'RUNNING' ? T('进行中', 'Running') : r.v}</span>${who(r.by)}<time>${ago(r.at)}</time></div><p>${esc(L(r))}</p></div></div>`).join('')}${i.st === 'USER_ACCEPTANCE' ? `<div class="ti">${sic('you', 0.9)}<div class="tc"><div class="h"><b>${T('你验收', 'Your acceptance')}</b>${i.accepted ? `<span class="res pass">${T('已接受', 'Accepted')}</span><time>${ago(i.accepted)}</time>` : `<span class="chip you">${T('等你', 'Waiting on you')}</span>`}</div><p>${i.accepted ? T('关闭等待 GitHub 校验恢复，无需再次确认。', 'Closure waits for GitHub; no second confirmation is needed.') : T('决定只绑定上面的 digest。', 'Your decision binds the digest above.')}</p></div></div>` : ''}</div>`;
+  h += `<div class="blockh">${T('服务捕获的检查', 'Service-captured checks')}</div><div class="box" style="padding:2px 14px">${c.checks.map(k => `<div class="trow">${sic(k.st === 'PASSED' ? 'done' : k.st === 'FAILED' ? 'rework' : 'review', 0.5)}<span class="mono grow">${esc(k.cmd)}</span><span class="chip flat">${k.ac}</span><span class="mono muted">${k.exit == null ? '…' : 'exit ' + k.exit}</span><span class="muted num">${k.ms ? (k.ms / 1000).toFixed(1) + 's' : T('运行中', 'running')}</span></div>`).join('')}</div>`;
+  if (i.def) h += `<div class="blockh">${ic('bug', 14)}${T('缺陷', 'Defects')}</div>` + i.def.map(d => { const x = DEFECTS[d]; return `<div class="box"><div class="h" style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><b class="mono">${x.k}</b><span class="chip" style="color:var(--st-rework)">${x.sev}</span><span class="chip flat">${x.ac}</span><span class="muted">${T('未解决', 'Open')} · ${nm(x.by)} · ${ago(x.at)}</span></div><div class="kv"><dt>${T('现象', 'Actual')}</dt><dd>${esc(L(x))}</dd><dt>${T('期望', 'Expected')}</dt><dd>${esc(L(x.exp))}</dd><dt>${T('复现', 'Reproduce')}</dt><dd>${esc(L(x.rep))}</dd></div></div>`; }).join('');
+  return h;
+}
+function tabRuns(i) {
+  const rs = [...Object.values(RUNS).filter(r => r.k === i.k || (!i.p && byKey[r.k].p === i.k)), ...HIST.filter(r => r.k === i.k || (!i.p && byKey[r.k].p === i.k))];
+  if (!rs.length) return `<p class="muted">${T('还没有运行记录。派发后会在这里看到真实的提供方会话与执行目录。', 'No runs yet. After dispatch you will see the provider session and execution directory here.')}</p>`;
+  return `<div class="box" style="padding:2px 14px">${rs.map(r => { const s = RUNST[r.st]; return `<div class="trow">${s[0] === 'dev' ? '<span class="dot live"></span>' : sic(s[0], 0)}<span class="mono">${r.id}</span><span>${r.kind === 'qa' ? T('QA', 'QA') : T('开发', 'Dev')}</span>${who(r.who)}<span class="grow muted">${r.k !== i.k ? r.k + ' · ' : ''}${T(s[1], s[2])}${r.st === 'UNCERTAIN' ? ` · ${T('心跳丢失', 'heartbeat lost')} ${ago(r.lastHb)} · <code>${r.err}</code>` : ''}</span><span class="muted num">${r.st === 'RUNNING' ? `<span data-el="${r.start}">${clock(now() - r.start)}</span>` : r.st === 'QUEUED' ? ago(r.queued) : r.end ? clock(r.end - r.start) : ago(r.start)}</span></div>`; }).join('')}</div><p class="muted" style="font-size:12px;margin-top:8px">${T('运行状态和事项状态是两回事：运行成功不等于交付通过。', 'Run state and issue state are separate: a successful run is not an accepted delivery.')}</p>`;
+}
+function tabActivity(i) {
+  const fs = FEED.filter(f => f.k === i.k || (!i.p && byKey[f.k].p === i.k));
+  const base = [{ at: i.up - 6 * D, by: i.p ? 'pm' : 'lead', zh: '创建事项（未开始，未指派）', en: 'created the item (not started, unassigned)', k: i.k }];
+  return `<div class="tl">${[...fs, ...base].map(f => `<div class="ti">${av(f.by)}<div class="tc"><div class="h"><b>${esc(nm(f.by))}</b><span class="muted">${role(f.by)}</span><time>${ago(f.at)}</time></div><p>${esc(T(f.zh, f.en))}${f.k !== i.k ? ` · <a class="mono" href="#issue-${f.k}">${f.k}</a>` : ''}</p></div></div>`).join('')}</div>`;
+}
+function vDetail(k) {
+  const i = byKey[k];
+  if (!i) return `<header class="topbar">${menuBtn()}<h1>${T('找不到事项', 'Item not found')}</h1></header><div class="content"><div class="empty"><h3>${esc(k)}</h3><p><a class="btn" href="#issues">${T('返回需求', 'Back to issues')}</a></p></div></div>`;
+  const order = roots().flatMap(r => [r, ...kids(r.k)]), n = order.indexOf(i), m = stMeta(i), q = parts(i.tt), par = i.p && byKey[i.p];
+  const dz = DESIGNS[(par || i).design], apr = dz.find(x => x.st === 'APPROVED'), runsN = [...Object.values(RUNS), ...HIST].filter(r => r.k === k || (!i.p && byKey[r.k].p === k)).length;
+  const tabs = [['overview', T('概述', 'Overview')], ['design', T('设计', 'Design'), (par || i) === i ? dz.length : ''], ['delivery', T('交付与证据', 'Delivery & evidence')], ['runs', T('运行', 'Runs'), runsN || ''], ['activity', T('动态', 'Activity')]];
+  const body = { overview: tabOverview, design: tabDesign, delivery: tabDelivery, runs: tabRuns, activity: tabActivity }[S.dtab](i);
+  const prop = (label, v, act) => act ? `<button class="prop" data-act="pop" data-pop="${act}" data-k="${k}"><span>${label}</span><span class="v">${v}</span></button>` : `<div class="prop"><span>${label}</span><span class="v">${v}</span></div>`;
+  const url = `/w/${WS.id.slice(0, 8)}…/issues/${k}`;
+  return `<header class="topbar">${menuBtn()}<nav class="crumbs" aria-label="${T('位置', 'Breadcrumb')}"><a href="#issues">${T('需求', 'Issues')}</a>${par ? `${ic('chev', 12)}<a href="#issue-${par.k}">${par.k} ${esc(par.tt)}</a>` : ''}${ic('chev', 12)}<span class="cur">${k}</span></nav>
+    <span class="muted num" style="font-size:12px">${n + 1} / ${order.length}</span>
+    <a class="icon-btn" href="#issue-${order[(n - 1 + order.length) % order.length].k}" title="${T('上一个', 'Previous')} (K)">${ic('chevu')}</a><a class="icon-btn" href="#issue-${order[(n + 1) % order.length].k}" title="${T('下一个', 'Next')} (J)">${ic('chevd')}</a>
+    <button class="icon-btn" data-act="copy" data-k="${k}" title="${T('复制稳定链接', 'Copy stable link')}">${ic('link')}</button><button class="icon-btn" data-act="pop" data-pop="status" data-k="${k}" title="${T('更多操作', 'More actions')}">${ic('more')}</button></header>
+  <div class="content"><div class="detail"><div class="d-main">
+    ${par ? `<a class="d-parent" href="#issue-${par.k}">${stMeta(par).icon}<span class="mono">${par.k}</span>${esc(par.tt)}</a>` : `<span class="d-parent">${ic('layers', 14)}${T('需求', 'Requirement')}</span>`}
+    <h2 class="d-title">${q ? `<span class="chip type">${q.type}</span><span>${esc(q.area)}: ${esc(q.act)} → ${esc(q.out)}</span>` : esc(i.tt)}</h2>
+    <div class="d-sub">${m.icon}<span>${m.label}</span><code class="mono">${m.code}</code><span>· <span class="mono">${k}</span></span><span>· ${T('更新于', 'Updated')} ${ago(i.up)}</span></div>
+    ${flowHtml(i)}${nextBox(i)}
+    <div class="dtabs" role="tablist">${tabs.map(([id, l, c]) => `<button role="tab" data-act="dtab" data-v="${id}" aria-selected="${S.dtab === id}">${l}${c ? `<span class="c">${c}</span>` : ''}</button>`).join('')}</div>
+    <div role="tabpanel">${body}</div>
+  </div>
+  <aside class="d-side ${S.propsOpen ? '' : 'collapsed'}" aria-label="${T('属性', 'Properties')}"><button class="props-toggle" data-act="props" aria-expanded="${S.propsOpen}">${ic(S.propsOpen ? 'chevd' : 'chev', 14)}${T('属性', 'Properties')}</button>
+    <div class="prop-g"><div class="prop-h">${T('属性', 'Properties')}</div>
+      ${prop(T('状态', 'Status'), `${m.icon}<span>${m.label}</span>`, 'status')}
+      ${prop(T('优先级', 'Priority'), `${prio(i.pr)}<span>${T(...PRIO[i.pr])}</span>`, 'prio')}
+      ${i.p ? prop(T('开发', 'Worker'), who(i.as)) + prop(T('独立 QA', 'Independent QA'), who(i.qa)) : prop(T('负责人', 'Lead'), who(i.lead)) + prop('PM', who('pm'))}
+      ${prop(T('迭代', 'Iteration'), i.it ? `<span>${i.it}</span>` : `<span class="muted">${T('未设置', 'Not set')}</span>`)}
+      ${prop(T('截止', 'Due'), i.due ? `<span class="num">${md(i.due)}</span>` : `<span class="muted">${T('未排期', 'Unscheduled')}</span>`)}
+      ${i.est ? prop(T('估算', 'Estimate'), `<span>${i.est[0]} ${T('小时', 'h')} · ${T({ high: '高', mid: '中', low: '低' }[i.est[2]] + '置信度', i.est[2] === 'mid' ? 'medium confidence' : i.est[2] + ' confidence')}</span>`) : ''}
+    </div>
+    <div class="prop-g"><div class="prop-h">${T('交付', 'Delivery')}</div>
+      ${prop(T('交付方式', 'Mode'), i.mode === 'git' ? `${ic('git', 14)}<span>Git · ${WS.repo.split('/').slice(1).join('/')}</span>` : `${ic('file', 14)}<span>${T('工件', 'Artifact')}</span>`)}
+      ${i.p ? prop(T('范围', 'Scope'), i.scope === 'PENDING' ? `<span style="color:var(--st-rework)">${T('待你决定', 'Awaiting you')}</span>` : `<span>${T('在范围内', 'In scope')}</span>`) : prop(T('覆盖', 'Coverage'), `<span>${i.ac.length} ${T('条标准', 'criteria')}${(i.integ || []).length ? T(` · ${i.integ.length} 条集成`, ` · ${i.integ.length} integration`) : ''}</span>`)}
+      ${(i.deps || []).length ? prop(T('依赖', 'Depends on'), i.deps.map(d => `<a class="chip" href="#issue-${d}">${stMeta(byKey[d]).icon}${d}</a>`).join('')) : ''}
+    </div>
+    <div class="prop-g"><div class="prop-h">${T('版本与绑定', 'Versions & bindings')}</div>
+      ${i.p ? `<div class="prop" style="align-items:start;padding-block:6px"><span>${T('规范标题', 'Canonical title')}</span><span class="mono" style="font-size:11px;overflow-wrap:anywhere">${esc(fullTitle(i))}</span></div>` : ''}
+      ${prop(T('事项版本', 'Version'), `<span class="mono">v${i.v}</span>`)}${prop(T('范围修订', 'Scope rev.'), `<span class="mono">r${i.sr}</span>`)}
+      ${prop(T('设计', 'Design'), apr ? `<span class="mono">r${apr.r} · ${apr.hash.slice(0, 8)}</span>` : `<span class="muted">${T('未批准', 'Not approved')}</span>`)}
+      ${i.abandon ? prop(T('授权', 'Grant'), `<span class="mono">${i.abandon.grant}</span><span class="muted">${T('已使用', 'used')}</span>`) : ''}
+    </div>
+    <div class="prop-g"><div class="prop-h">${T('稳定链接', 'Stable link')}</div><button class="prop" data-act="copy" data-k="${k}"><span>${ic('link', 14)}</span><span class="v"><span class="mono">${url}</span></span></button></div>
+  </aside></div></div>`;
+}
+
+RUNST.STOPPING = ['hold', '停止中', 'Stopping'];
+const LATER = {
+  runs: [T('运行', 'Runs'), [T('槽位与排队：开发/QA 运行、QA 检查进程、Git 校验任务分别计量', 'Slots and queue, metered separately for runs, QA checks and Git jobs'), T('每个运行的提供方会话、执行目录、PID、预算与心跳', 'Provider session, directory, PID, budget and heartbeat for each run'), T('请求停止 → 停止中 → 确认停止的完整过程', 'Request stop → stopping → confirmed stop'), T('不确定运行的对账向导：先确认外部进程已经停止', 'A reconcile wizard for uncertain runs that starts by confirming the external process stopped')]],
+  agents: [T('智能体', 'Agents'), [T('按角色登记的智能体与它们的 Harness', 'Enrolled agents by role and harness'), T('只显示一次的凭据，以及各 Harness 的连接配置片段', 'One-time credentials and per-harness connection snippets'), T('最近一次 MCP 连接（不代表当前在线或能推理）', 'Last MCP initialization, which is not proof of liveness'), T('授权委托：签发、使用记录、撤销', 'Grants: issue, usage history and revocation')]],
+  config: [T('设置', 'Settings'), [T('工作区目录与 GitHub 远程绑定', 'Workspace directory and GitHub remote binding'), T('QA 检查配置：固定可执行文件、参数与覆盖的标准', 'QA check profiles: fixed executable, arguments and covered criteria'), T('并发上限（1–4）与单次运行时长预算', 'Concurrency limit (1–4) and per-run time budget'), T('界面语言与主题', 'Language and theme')]]
+};
+const vLater = v => `<header class="topbar">${menuBtn()}<h1>${LATER[v][0]}</h1><span class="chip flat">${T('后续轮次', 'Later round')}</span></header><div class="content"><div class="ph"><h2>${LATER[v][0]} · ${T('后续轮次设计', 'designed in a later round')}</h2><p class="dim">${T('前两轮覆盖了工作台、需求列表/看板、详情和决策页。这一页计划包含：', 'Rounds one and two cover Home, the issue list and board, detail pages and decisions. This page is planned to include:')}</p><ul>${LATER[v][1].map(x => `<li>${x}</li>`).join('')}</ul><p><a class="btn" href="#home">${ic('left', 14)}${T('回到工作台', 'Back to Home')}</a></p></div></div>`;
+
+function parseRoute(h) { h = decodeURIComponent(h || ''); const m = /^issue-([A-Z]+-\d+)$/.exec(h), d = /^(review|accept|scope|reconcile)-([A-Z]+-\d+)$/.exec(h); return m ? { view: 'detail', key: m[1] } : d ? { view: 'decide', kind: d[1], key: d[2] } : { view: ['home', 'inbox', 'issues', 'board', 'runs', 'agents', 'config'].includes(h) ? h : 'home' }; }
+let ROUTE = parseRoute(location.hash.slice(1));
+const route = () => ROUTE;
+const $app = document.getElementById('app'), $layer = document.getElementById('layer'), $pop = document.body.appendChild(document.createElement('div')), $toast = document.body.appendChild(document.createElement('div'));
+function applyTheme() { const r = document.documentElement; if (S.theme === 'system') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', S.theme); r.lang = S.lang === 'en' ? 'en' : 'zh-CN'; }
+function render() {
+  applyTheme();
+  const r = route(), sig = r.view + (r.key || ''), old = document.querySelector('#main .content'), top = old ? old.scrollTop : 0, board = document.querySelector('.board'), left = board ? board.scrollLeft : 0;
+  const v = r.view === 'decide' ? vDecide(r) : r.view === 'detail' ? vDetail(r.key) : r.view === 'issues' ? vIssues() : r.view === 'board' ? vBoard() : r.view === 'inbox' ? vInbox() : r.view === 'home' ? vHome() : vLater(r.view);
+  $app.innerHTML = `<div class="app ${S.menu ? 'menu' : ''}">${sidebar(r)}<div class="scrim" data-act="menu"></div><main class="main" id="main">${v}</main></div>`;
+  if (sig === render.sig) { const c = document.querySelector('#main .content'); if (c) c.scrollTop = top; const b = document.querySelector('.board'); if (b) b.scrollLeft = left; }
+  render.sig = sig;
+  document.title = T('AgileDev 交互原型', 'AgileDev prototype');
+  layer(); pop();
+}
+function toast(msg) { S.toast = msg; $toast.innerHTML = `<div class="toast" role="status">${esc(msg)}</div>`; clearTimeout(toast.t); toast.t = setTimeout(() => { $toast.innerHTML = ''; }, 2800); }
+
+function palItems() {
+  const q = S.pal.q.trim().toLowerCase(), f = x => !q || x.label.toLowerCase().includes(q);
+  const nav = [['home', 'home', T('转到工作台', 'Go to Home'), 'G H'], ['issues', 'issues', T('转到需求', 'Go to Issues'), 'G I'], ['board', 'board', T('转到看板', 'Go to Board'), 'G B'], ['inbox', 'inbox', T('转到待我决策', 'Go to Decisions'), 'G D']].map(([h, n, l, s]) => ({ g: T('跳转', 'Navigate'), icon: ic(n), label: l, s, href: '#' + h }));
+  const cmds = [{ icon: ic('plus'), label: T('新建需求', 'New requirement'), s: 'C', cmd: 'new' }, { icon: ic('globe'), label: S.lang === 'zh' ? 'Switch to English' : '切换到中文', cmd: 'lang' }, { icon: ic('moon'), label: T('切换浅色 / 深色', 'Toggle light / dark'), cmd: 'theme' }, { icon: ic('kbd'), label: T('键盘快捷键', 'Keyboard shortcuts'), s: '?', cmd: 'keys' }].map(x => ({ ...x, g: T('操作', 'Actions') }));
+  const iss = I.filter(i => !q || (i.k + ' ' + fullTitle(i)).toLowerCase().includes(q)).slice(0, q ? 8 : 4).map(i => ({ g: T('事项', 'Items'), icon: stMeta(i).icon, label: `${i.k} · ${i.p ? plainTitle(i) : i.tt}`, s: stMeta(i).label, href: '#issue-' + i.k }));
+  const decs = decisions().map(i => ({ g: T('待我决策', 'Decisions'), icon: ic(DEC[i.nx.act][0]), label: `${T(DEC[i.nx.act][1], DEC[i.nx.act][2])} · ${i.k} ${i.p ? plainTitle(i) : i.tt}`, href: '#' + decideRoute(i) }));
+  return q ? [...decs.filter(f), ...iss, ...nav.filter(f), ...cmds.filter(f)] : [...decs, ...nav, ...iss, ...cmds];
+}
+function modalHtml() {
+  const m = S.modal;
+  const shell = (title, body, foot, cls = '') => `<div class="layer" data-close="1"><div class="dlg ${cls}" role="dialog" aria-modal="true" aria-label="${esc(title)}">${body}${foot || ''}</div></div>`;
+  const head = t => `<div class="dlg-h"><h2>${t}</h2><span class="grow"></span><button class="icon-btn" data-act="close" aria-label="${T('关闭', 'Close')}">${ic('x')}</button></div>`;
+  if (m.kind === 'pal') {
+    const items = palItems(); S.pal.i = Math.min(S.pal.i, Math.max(0, items.length - 1)); let g = '';
+    return shell(T('搜索', 'Search'), `<div class="pal-in">${ic('search')}<input id="palq" value="${esc(S.pal.q)}" placeholder="${T('搜索事项、跳转或执行操作…', 'Search items, jump or run an action…')}" autocomplete="off" aria-label="${T('搜索', 'Search')}"><span class="kbd">Esc</span></div><div class="pal-l" role="listbox">${items.map((x, n) => { const gh = x.g !== g ? `<div class="pal-g">${(g = x.g)}</div>` : ''; return gh + `<button class="pal-i" role="option" aria-selected="${n === S.pal.i}" data-act="palgo" data-n="${n}">${x.icon}<span>${esc(x.label)}</span>${x.s ? `<span class="s">${esc(x.s)}</span>` : ''}</button>`; }).join('') || `<p class="muted" style="padding:14px">${T('没有结果', 'No results')}</p>`}</div>`, '', 'pal');
+  }
+  if (m.kind === 'keys') return shell(T('键盘快捷键', 'Keyboard shortcuts'), head(T('键盘快捷键', 'Keyboard shortcuts')) + `<div class="dlg-b"><div class="keys">${[['Ctrl / ⌘ K', T('搜索、跳转与命令', 'Search, jump and commands')], ['G → H / I / B / D', T('工作台 / 需求 / 看板 / 待我决策', 'Home / Issues / Board / Decisions')], ['J / K', T('下一个 / 上一个', 'Next / previous')], ['Enter', T('打开选中项', 'Open selection')], ['/', T('搜索列表', 'Search the list')], ['C', T('新建需求', 'New requirement')], ['Esc', T('关闭或返回', 'Close or go back')], ['?', T('显示本帮助', 'Show this help')]].map(([k, d]) => `<span><kbd>${k}</kbd></span><span>${d}</span>`).join('')}</div></div>`);
+  if (m.kind === 'new') return shell(T('新建需求', 'New requirement'), head(T('新建需求', 'New requirement')) + `<form id="newf"><div class="dlg-b"><p class="note">${T('新需求从「未开始」开始，负责人、排期都可以之后再定。设计获批前不会派发任何智能体。', 'New requirements start as Not started; owners and dates can come later. No agent is dispatched before the design is approved.')}</p>
+    <div class="field"><label for="nt">${T('标题', 'Title')}</label><input id="nt" name="t" required maxlength="300" placeholder="${T('这个需求要达成什么结果？', 'What should this requirement achieve?')}"></div>
+    <div class="field"><label for="nd">${T('需求描述', 'Description')}</label><textarea id="nd" name="d" rows="4"></textarea></div>
+    <div class="field"><label for="na">${T('验收标准', 'Acceptance criteria')}</label><textarea id="na" name="a" rows="3" placeholder="${T('每行一条，会编号为 AC-1、AC-2…', 'One per line; numbered AC-1, AC-2…')}"></textarea></div>
+    <div class="field"><label for="nm">${T('交付方式', 'Delivery mode')}</label><select id="nm" name="m"><option value="git">${T('Git 提交（需要最终提交校验）', 'Git commit (final commit verified)')}</option><option value="artifact">${T('文档或工件（无提交）', 'Document or artifact (no commit)')}</option></select><small>${T('工作开始后更改交付方式需要你批准范围变更。', 'Changing the mode after work starts needs your scope approval.')}</small></div></div>
+    <div class="dlg-f"><button type="button" class="btn" data-act="close">${T('取消', 'Cancel')}</button><button class="btn primary" type="submit">${T('创建需求', 'Create requirement')}</button></div></form>`);
+  if (m.kind === 'move') {
+    const i = byKey[m.k], c = n => T(...COLS.find(x => x[0] === n).slice(2, 4));
+    return shell(T('看板移动', 'Board move'), head(T('这个移动对应的命令', 'What this move means')) + `<div class="dlg-b"><div class="kv"><dt>${T('事项', 'Item')}</dt><dd><span class="mono">${i.k}</span> ${esc(plainTitle(i))}</dd><dt>${T('移动', 'Move')}</dt><dd>${c(m.from)} → ${c(m.to)}</dd><dt>${T('对应命令', 'Command')}</dt><dd class="mono">${m.mv.cmd}</dd><dt>${T('谁能执行', 'Who can do it')}</dt><dd>${m.mv.ok ? `<span class="chip you">${T('你', 'You')}</span>` : T('对应角色的智能体（你不能代替）', 'The responsible agent role, not you')}</dd></div><p class="note ${m.mv.ok ? 'you' : ''}">${esc(T(m.mv.zh, m.mv.en))}</p><p class="muted" style="font-size:12px">${T('卡片已放回原列：看板只会提出合法命令，从不直接修改状态。', 'The card stayed put: the board proposes legal commands and never edits state directly.')}</p></div>`, `<div class="dlg-f"><button class="btn" data-act="close">${T('知道了', 'Got it')}</button>${m.mv.ok ? `<button class="btn primary" data-act="decide" data-k="${i.k}">${T('去验收', 'Open acceptance')}</button>` : `<a class="btn" href="#issue-${i.k}" data-act="close">${T('打开事项', 'Open item')}</a>`}</div>`);
+  }
+  if (m.kind === 'life') {
+    const i = byKey[m.k], L2 = { hold: [T('挂起', 'Hold'), T('记录一个生命周期决定。正在运行的执行会收到停止请求，确认停止前会显示为「停止中」。', 'Records a lifecycle decision. Running work is asked to stop and shows as Stopping until confirmed.')], resume: [T('恢复', 'Resume'), T('恢复后重新校验设计、依赖与负责人；不会恢复已过期的租约，需要重新派发。', 'Resuming rechecks design, dependencies and ownership; an expired lease is never restored, so it needs a new dispatch.')], abandon: [T('放弃', 'Abandon'), T('放弃不计为交付。在父需求范围内的任务，之后还需要你决定排除或替换。', 'Abandoned work is never delivered. A task in the parent scope then needs your exclude-or-replace decision.')], reopen: [T('重新打开', 'Reopen'), T('重新打开会让父需求已完成的集成验收失效，历史记录全部保留。', 'Reopening invalidates the parent’s integration acceptance; all history is kept.')] }[m.action];
+    return shell(L2[0], head(`${L2[0]} · <span class="mono muted" style="font-weight:400">${i.k}</span>`) + `<form id="lifef"><div class="dlg-b"><p class="note">${L2[1]}</p><div class="kv"><dt>${T('当前状态', 'Current state')}</dt><dd>${stMeta(i).label} <code class="mono muted">${stMeta(i).code}</code></dd><dt>${T('事项版本', 'Version')}</dt><dd class="mono">v${i.v}</dd></div><div class="field"><label for="lr">${T('理由', 'Reason')}</label><textarea id="lr" name="r" rows="3" required></textarea><small>${T('提交时会带上 v' + i.v + '；如果事项已被别人修改，提交会失败并保留你的输入。', 'Submitting sends v' + i.v + '; if someone changed the item meanwhile, it fails and keeps your input.')}</small></div></div><div class="dlg-f"><button type="button" class="btn" data-act="close">${T('取消', 'Cancel')}</button><button class="btn primary" type="submit">${T('确认', 'Confirm')}${L2[0]}</button></div></form>`);
+  }
+  return '';
+}
+function layer() {
+  $layer.innerHTML = S.modal ? modalHtml() : '';
+  if (S.modal && S.modal.kind === 'pal') { const q = document.getElementById('palq'); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+}
+function lifeActions(i) {
+  const t = ['DONE', 'ABANDONED'].includes(i.st), out = [];
+  if (i.st === 'USER_ACCEPTANCE' && !i.accepted) out.push(['decide', T('验收交付…', 'Review delivery…'), T('接受或要求返工，只绑定当前 digest', 'Accept or rework this exact digest')]);
+  if (!t && i.st !== 'ON_HOLD') out.push(['hold', T('挂起…', 'Hold…'), T('需要理由；运行会收到停止请求', 'Needs a reason; running work is asked to stop')]);
+  if (i.st === 'ON_HOLD') out.push(['resume', T('恢复…', 'Resume…'), T('重新校验就绪条件', 'Rechecks readiness')]);
+  if (!t) out.push(['abandon', T('放弃…', 'Abandon…'), T('需要理由；放弃不计为交付', 'Needs a reason; never counts as delivered')]);
+  if (i.st === 'DONE') out.push(['reopen', T('重新打开…', 'Reopen…'), T('父需求的验收会失效', 'Invalidates the parent acceptance')]);
+  if (i.st === 'ABANDONED' && i.scope === 'PENDING') out.push(['decide', T('决定范围…', 'Decide scope…'), T('排除或用其他任务替换', 'Exclude or replace it')]);
+  const nx = { NOT_STARTED: [T('开始开发', 'Start development'), T('由 PM 派发（work_dispatch）', 'PM dispatches it (work_dispatch)')], IN_PROGRESS: [T('提交评审', 'Submit for review'), T('由执行中的开发智能体提交（work_submit）', 'The running worker submits (work_submit)')], LEAD_REVIEW: [T('通过评审', 'Pass review'), T('由产品负责人智能体决定（review_submit）', 'The product lead agent decides (review_submit)')], QA_TEST: [T('通过测试', 'Pass QA'), T('由独立 QA 提交报告（qa_report_submit）', 'Independent QA reports (qa_report_submit)')] }[i.p ? i.st : ''];
+  if (nx) out.push(['', nx[0], nx[1]]);
+  return out;
+}
+function pop() {
+  const p = S.pop;
+  if (!p) { $pop.innerHTML = ''; return; }
+  const i = byKey[p.k], x = Math.max(8, Math.min(p.x, innerWidth - 270)), y = Math.min(p.y, innerHeight - 260);
+  const body = p.kind === 'prio' ? `<div class="pop-h">${T('优先级', 'Priority')}</div>` + PRIO.map((l, n) => `<button class="pop-i" data-act="setprio" data-v="${n}">${prio(n)}<span>${T(...l)}</span>${n === i.pr ? `<span class="ck">${ic('check', 14)}</span>` : ''}</button>`).join('') + `<div class="pop-h" style="padding-top:8px">${T('元数据修改不会让已批准的设计与交付失效', 'Metadata edits keep approved designs and deliveries valid')}</div>`
+    : `<div class="pop-h">${T('你可以执行', 'You can')}</div>` + lifeActions(i).map(([a, l, d]) => `<button class="pop-i" ${a ? `data-act="${a === 'decide' ? 'decide' : 'life'}" data-a="${a}" data-k="${i.k}"` : 'disabled'}><span>${a ? '' : ic('user', 14)}</span><span>${l}<small>${d}</small></span></button>`).join('') + `<div class="pop-h" style="padding-top:8px">${T('状态不能直接修改，只能通过对应角色的命令推进', 'State never changes directly; it moves through role commands')}</div>`;
+  $pop.innerHTML = `<div class="pop" role="menu" style="left:${x}px;top:${y}px">${body}</div>`;
+}
+
+
+P.copy = '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>';
+CODES.PLAN_CRITERIA_UNMAPPED = { w: 'pm', zh: '有已批准的验收标准没有任务覆盖', en: 'An approved criterion has no owning task' };
+CODES.PLAN_STALE = { w: 'pm', zh: '范围变了，拆解计划需要重新激活', en: 'Scope changed; the plan must be re-activated' };
+function decideRoute(i) {
+  if (i.st === 'USER_ACCEPTANCE') return 'accept-' + i.k;
+  if (i.scope === 'PENDING') return 'scope-' + i.k;
+  if (i.run && RUNS[i.run] && RUNS[i.run].st === 'UNCERTAIN') return 'reconcile-' + i.k;
+  if (!i.p && (DESIGNS[i.design] || []).some(x => x.st === 'IN_REVIEW')) return 'review-' + i.k;
+  return null;
+}
+const D6 = DESIGNS.d6;
+D6[0].body[5].b = '清单很长时是否分页？（建议按目录折叠，失败项默认展开）';
+D6[0].scope = byKey['ADC-6'].desc;
+D6[0].ac = byKey['ADC-6'].ac.map(x => [...x]);
+D6[0].resp = { zh: '批量验收移到了非目标（拆成独立需求）；目标 3 改为 GitHub 不可用时保存接受。', en: 'Batch acceptance moved to non-goals (its own requirement); goal 3 now keeps acceptance when GitHub is unavailable.' };
+D6[1].scope = D6[0].scope;
+D6[1].body = [sec('问题与受众', D6[0].body[0].b), sec('目标', '1. 验收页一次展示 digest、快照、初审/QA/终审结论与提交。\n2. 决定只对当前 digest 有效。\n3. 支持一次验收多个交付，减少重复操作。'), sec('非目标', '自动合并或发布。'), sec('方案', '新增交付验收页：左侧为证据，右侧为决定面板；支持勾选多个交付后批量接受。'), sec('风险', '批量接受可能让人忽略单个交付的问题。')];
+D6[1].ac = [['AC-1', '验收页展示交付摘要、快照、评审链和提交'], ['AC-2', '人的决定绑定当前 digest'], ['AC-3', '支持批量接受多个交付'], ['AC-4', '恢复后重试校验可直接关闭，无需再次确认']];
+const DIGEST = {
+  'ADC-10': { design: 'ADC-9 r1 · c2d4e6f8', scope: 'r1', initial: 'rv-301', qa: 'qa-88', final: 'rv-317', policy: 'v2' },
+  'ADC-13': { design: 'ADC-9 r1 · c2d4e6f8', scope: 'r1', initial: 'rv-288', qa: 'qa-81', final: 'rv-296', policy: 'v2' }
+};
+CAND.c13 = { id: 'cand-13-1', by: 'devc', round: 1, files: 5, snap: '7e2d0a91c4b6f8e3d5a7c9b1e3f5a7c9d1b3e5f7a9c1d3e5f7b9a1c3e5d7f9b1', at: BASE - 5 * H,
+  sum: { zh: '检查超时后记录 TIMEOUT，并把结论标为 BLOCKED，不再当作通过；报告列出超时的检查。', en: 'A timed-out check records TIMEOUT and marks the result BLOCKED instead of passing; the report lists timed-out checks.' },
+  reviews: [{ s: 'PRE_QA', by: 'lead', v: 'PASS', at: BASE - 4 * H, zh: '覆盖 AC-4。', en: 'Covers AC-4.' }, { s: 'QA', by: 'qac', v: 'PASS', at: BASE - 3 * H, zh: '9/9 项检查通过，含 3 个超时场景。', en: '9 of 9 checks passed, including 3 timeout cases.', n: [9, 9] }, { s: 'FINAL', by: 'lead', v: 'PASS', at: BASE - 2 * H, zh: '可以交给你验收。', en: 'Ready for your acceptance.' }],
+  checks: [{ id: 'chk-64', cmd: 'node .qa/timeout.test.mjs', ac: 'AC-4', exit: 0, ms: 3120, st: 'PASSED' }, { id: 'chk-65', cmd: 'node .qa/blocked-not-pass.test.mjs', ac: 'AC-4', exit: 0, ms: 1410, st: 'PASSED' }],
+  manifest: ['src/checks.ts', 'src/qa-policy.ts', 'tests/qa.test.ts', 'docs/workflow.md', 'docs/local-development.md'] };
+byKey['ADC-13'].cand = 'c13';
+byKey['ADC-13'].git.attempts = [[BASE - 40 * M, 'UNAVAILABLE', 'HTTP 503'], [BASE - 25 * M, 'UNAVAILABLE', 'HTTP 503']];
+byKey['ADC-10'].git.attempts = [[BASE - 18 * M, 'VERIFIED', '']];
+const fh = (a, b) => { let h = 2166136261; for (const ch of a + b) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; } return h.toString(16).padStart(8, '0') + (Math.imul(h, 2654435761) >>> 0).toString(16).padStart(8, '0').slice(0, 4); };
+Object.assign(RUNS['r-5f3a'], { pid: 18244, dir: '%LOCALAPPDATA%\\AgileDev\\runs\\r-5f3a\\work', revoked: BASE - 14 * M,
+  events: [[BASE - 41 * M, '已排队，等待槽位', 'Queued for a slot'], [BASE - 40 * M, '启动 Claude Code（stream-JSON），准备隔离目录', 'Started Claude Code (stream-JSON) in an isolated directory'], [BASE - 40 * M, '领取任务，租约 fence 7', 'Claimed the task, lease fence 7'], [BASE - 15 * M, '最后一次心跳', 'Last heartbeat'], [BASE - 14 * M, '协调器丢失，运行标记为不确定', 'Coordinator lost; run marked uncertain'], [BASE - 14 * M, '吊销运行凭据，不会自动重派', 'Run credential revoked; no automatic redispatch']] });
+S.pidAlive = true;
+
+function diffLines(a, b) {
+  const A = a ? a.split('\n') : [], B = b ? b.split('\n') : [], n = A.length, m = B.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let x = n - 1; x >= 0; x--) for (let y = m - 1; y >= 0; y--) dp[x][y] = A[x] === B[y] ? dp[x + 1][y + 1] + 1 : Math.max(dp[x + 1][y], dp[x][y + 1]);
+  const out = []; let x = 0, y = 0;
+  while (x < n && y < m) { if (A[x] === B[y]) { out.push(['same', A[x]]); x++; y++; } else if (dp[x + 1][y] >= dp[x][y + 1]) out.push(['del', A[x++]]); else out.push(['add', B[y++]]); }
+  while (x < n) out.push(['del', A[x++]]); while (y < m) out.push(['add', B[y++]]);
+  return out;
+}
+const RSTAT = { IN_REVIEW: ['待你审批', 'Awaiting you'], APPROVED: ['已批准', 'Approved'], CHANGES_REQUESTED: ['要求修改', 'Changes requested'], SUPERSEDED: ['已被取代', 'Superseded'], DRAFT: ['草稿', 'Draft'] };
+const conflictHtml = () => (S.dec.conflict ? `<div class="conflict" role="alert"><b>${T('没有提交', 'Not submitted')} · <code class="mono">${S.dec.conflict.code}</code></b><p style="margin-top:4px">${esc(T(S.dec.conflict.zh, S.dec.conflict.en))}</p><button type="button" class="btn" style="margin-top:8px" data-act="dreload">${ic('refresh', 14)}${T('载入最新内容', 'Load the latest')}</button></div>` : '');
+const errHtml = () => (S.dec.err ? `<p class="conflict" role="alert" style="margin:0">${esc(S.dec.err)}</p>` : '');
+const bindRow = (k, v, copy) => `<div><span class="muted">${k}</span><span class="mono" style="overflow-wrap:anywhere">${v}</span>${copy ? `<button type="button" class="icon-btn" style="width:24px;height:24px" data-act="copytext" data-v="${esc(copy)}" title="${T('复制完整值', 'Copy full value')}">${ic('copy', 13)}</button>` : '<span></span>'}</div>`;
+const optCard = (v, label, desc, off) => `<label class="opt-card ${off ? 'off' : ''}"><input type="radio" name="dchoice" value="${v}" data-act="dchoice" ${S.dec.choice === v ? 'checked' : ''} ${off ? 'disabled' : ''}><span><b>${label}</b><small>${desc}</small></span></label>`;
+const reasonField = ph => `<div class="field"><label for="dreason">${T('理由', 'Reason')}</label><textarea id="dreason" rows="4" required placeholder="${esc(ph)}">${esc(S.dec.reason)}</textarea><small>${T('理由会和决定一起写进审计历史，之后不能修改。', 'The reason is stored with the decision in the audit history and cannot be edited later.')}</small></div>`;
+const demoBox = btns => `<div class="demo"><span>${T('原型演示：模拟其他角色同时在改', 'Prototype demo: simulate a concurrent change')}</span>${btns}</div>`;
+function decDone() {
+  const d = S.dec.done, nx = decisions()[0];
+  return `<div class="done-card" role="status"><div class="dp-h" style="display:flex;gap:8px;align-items:center">${sic('done')}${d.title}</div><ul class="effects" style="margin-top:10px">${d.lines.map(x => `<li>${x}</li>`).join('')}</ul><div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">${nx ? `<a class="btn primary" href="#${decideRoute(nx)}">${T('下一个决定', 'Next decision')}${ic('arrow', 14)}</a>` : `<a class="btn primary" href="#inbox">${T('都处理完了', 'All done')}</a>`}<a class="btn" href="#issue-${d.k}">${T('打开事项', 'Open item')}</a></div></div>`;
+}
+function chainHtml(c, i) {
+  const vc = { PASS: 'done', FAIL: 'rework', RUNNING: 'review' }, sn = { PRE_QA: T('负责人初审', 'Initial lead review'), QA: T('独立测试', 'Independent QA'), FINAL: T('负责人终审', 'Final lead review') };
+  return `<div class="tl">${c.reviews.map(r => `<div class="ti">${sic(vc[r.v], r.v === 'RUNNING' ? 0.5 : 0)}<div class="tc"><div class="h"><b>${sn[r.s]}</b><span class="res ${r.v === 'PASS' ? 'pass' : r.v === 'FAIL' ? 'fail' : 'run'}">${r.v}</span>${who(r.by)}<time>${ago(r.at)}</time></div><p>${esc(L(r))}</p></div></div>`).join('')}<div class="ti">${i.accepted ? sic('done') : sic('you', 0.9)}<div class="tc"><div class="h"><b>${T('你验收', 'Your acceptance')}</b>${i.accepted ? `<span class="res pass">${T('已接受', 'Accepted')}</span><time>${ago(i.accepted)}</time>` : `<span class="chip you">${T('就是现在', 'Now')}</span>`}</div></div></div></div>`;
+}
+
+function vInbox() {
+  const all = decisions(), tab = S.itab || 'all', list = all.filter(i => tab === 'all' || i.nx.act === tab), other = I.filter(i => youOwn(i) && !all.includes(i)), mine = FEED.filter(f => f.by === 'you').slice(0, 6);
+  const req = i => (i.nx.act === 'design' ? DESIGNS[i.design][0].by : i.nx.act === 'delivery' ? 'lead' : i.nx.act === 'scope' ? i.abandon.by : 'sys');
+  const tabs = [['all', '全部', 'All'], ['delivery', '交付验收', 'Deliveries'], ['design', '设计审批', 'Designs'], ['scope', '范围决策', 'Scope'], ['reconcile', '运行对账', 'Runs']];
+  return `<header class="topbar">${menuBtn()}<h1>${T('待我决策', 'Decisions')}</h1><div class="tabs" role="group">${tabs.map(([id, zh, en]) => `<button data-act="itab" data-v="${id}" aria-pressed="${tab === id}">${T(zh, en)}<span class="c">${id === 'all' ? all.length : all.filter(i => i.nx.act === id).length}</span></button>`).join('')}</div></header>
+  <div class="content"><div class="page" style="max-width:1000px">
+    <p class="muted" style="margin-bottom:12px">${T('只有你能做的决定。每个决定都绑定一份具体的修订、交付摘要或运行，智能体不能代替你决定。', 'Decisions only you can make. Each binds an exact revision, delivery digest or run, and no agent can decide for you.')}</p>
+    ${list.length ? list.map(i => `<a class="lrow inbox-row" data-row href="#${decideRoute(i)}"><span class="dec-ic ${i.nx.act === 'reconcile' ? 'crit' : ''}">${ic(DEC[i.nx.act][0])}</span><span class="t"><span class="one"><b>${T(DEC[i.nx.act][1], DEC[i.nx.act][2])}</b> · <span class="mono muted">${i.k}</span> ${esc(i.p ? plainTitle(i) : i.tt)}</span><span class="s">${esc(decSub(i))}</span></span><span class="who muted" title="${T('发起方', 'Requested by')}">${av(req(i))}${esc(nm(req(i)))}</span><span class="go">${T('开始处理', 'Start')}${ic('arrow', 14)}</span></a>`).join('') : `<div class="empty"><div style="display:grid;place-items:center;margin-bottom:10px">${sic('done')}</div><h3>${T('没有等你决定的事', 'Nothing is waiting on you')}</h3><p>${T('新的设计审批、交付验收和运行对账会出现在这里。', 'New design reviews, delivery acceptances and run reconciliations land here.')}</p></div>`}
+    ${other.length ? `<section style="margin-top:28px"><div class="sec-h"><h3>${T('其他等你处理', 'Also on you')}</h3><span class="c">${other.length}</span></div>${other.map(i => `<a class="lrow" data-row href="#issue-${i.k}">${stMeta(i).icon}<span class="t"><span class="one"><span class="mono muted">${i.k}</span> ${esc(i.p ? plainTitle(i) : i.tt)}</span><span class="s">${esc(L(i.nx))}</span></span><span class="go">${ago(i.up)}</span></a>`).join('')}</section>` : ''}
+    <section style="margin-top:28px"><div class="sec-h"><h3>${T('你最近的决定', 'Your recent decisions')}</h3></div><div class="feed">${mine.map(f => `<div class="fitem">${av('you')}<span class="t">${esc(T(f.zh, f.en))} · <a class="mono" href="#issue-${f.k}">${f.k}</a></span><time>${ago(f.at)}</time></div>`).join('')}</div></section>
+  </div></div>`;
+}
+
+function decReview(i) {
+  const revs = DESIGNS[i.design], live = revs.find(x => x.st === 'IN_REVIEW');
+  if (S.dec.rev == null) S.dec.rev = live ? live.r : revs[0].r;
+  const r = revs.find(x => x.r === S.dec.rev), prev = revs.find(x => x.r === r.r - 1), cmp = S.dview !== 'full' && prev && prev.body;
+  const secs = r.body.map(s => { const o = cmp && prev.body.find(p => p.h === s.h); return { h: s.h, kind: !cmp ? 'same' : !o ? 'add' : o.b === s.b ? 'same' : 'chg', lines: !cmp ? s.b.split('\n').map(x => ['same', x]) : o ? diffLines(o.b, s.b) : s.b.split('\n').map(x => ['add', x]) }; });
+  if (cmp) prev.body.filter(p => !r.body.some(s => s.h === p.h)).forEach(p => secs.push({ h: p.h, kind: 'del', lines: p.b.split('\n').map(x => ['del', x]) }));
+  const tag = k => (k === 'add' ? `<span class="tag-chg">${T('新增', 'New')}</span>` : k === 'del' ? `<span class="tag-chg">${T('删除', 'Removed')}</span>` : k === 'chg' ? `<span class="tag-chg">${T('有改动', 'Changed')}</span>` : '');
+  const line = ([t, x]) => `<span class="dl ${t === 'add' ? 'diff-add' : t === 'del' ? 'diff-del' : ''}">${t === 'add' ? '<span class="sr">' + T('新增：', 'Added: ') + '</span>' : t === 'del' ? '<span class="sr">' + T('删除：', 'Removed: ') + '</span>' : ''}${esc(x) || '&nbsp;'}</span>`;
+  const nowAc = r.ac || i.ac, oldAc = (cmp && prev.ac) || [], ids = [...new Set([...nowAc.map(x => x[0]), ...oldAc.map(x => x[0])])].sort();
+  const acs = ids.map(id => { const a = nowAc.find(x => x[0] === id), b = oldAc.find(x => x[0] === id), k = !cmp ? 'same' : !b ? 'add' : !a ? 'del' : a[1] === b[1] ? 'same' : 'chg'; return `<div class="ac"><span class="id">${id}</span><span class="tx">${k === 'chg' ? line(['del', b[1]]) + line(['add', a[1]]) : k === 'del' ? line(['del', b[1]]) : line([k === 'add' ? 'add' : 'same', a[1]])}</span><span class="rs">${tag(k)}</span></div>`; }).join('');
+  const changed = secs.filter(s => s.kind !== 'same').length, ks = kids(i.k).map(k => k.k), sep = T('、', ', ');
+  const main = `<div class="dec-main">
+    <div class="eyebrow">${ic('shield', 14)}${T('设计审批', 'Design review')} · <a href="#issue-${i.k}" class="mono">${i.k}</a></div>
+    <h2 class="d-title">${esc(i.tt)}</h2>
+    <div class="d-sub"><span class="chip ${r.st === 'IN_REVIEW' ? 'you' : ''}">r${r.r} · ${T(...RSTAT[r.st])}</span><span class="mono">sha256 ${short(r.hash)}</span><span>· ${esc(nm(r.by))} ${ago(r.at)}${T('提交', ' submitted')}</span></div>
+    ${prev && prev.dec ? `<div class="note" style="margin-top:16px"><b>${T(`你对 r${prev.r} 的意见`, `Your feedback on r${prev.r}`)}</b>：${esc(L(prev.dec))}${r.resp ? `<div style="margin-top:6px;display:flex;gap:6px;align-items:flex-start;color:var(--fg)">${ic('check', 14)}<span>${T(`r${r.r} 的回应：`, `r${r.r} response: `)}${esc(L(r.resp))}</span></div>` : ''}</div>` : ''}
+    <div style="display:flex;align-items:center;gap:10px;margin:20px 0 6px;flex-wrap:wrap">${prev && prev.body ? `<span class="seg" role="group"><button data-act="dview" data-v="diff" aria-pressed="${S.dview !== 'full'}">${T(`对比 r${prev.r}`, `Compare with r${prev.r}`)}</button><button data-act="dview" data-v="full" aria-pressed="${S.dview === 'full'}">${T('全文', 'Full text')}</button></span>` : ''}${cmp ? `<span class="muted">${T(`${changed} 处改动`, `${changed} sections changed`)} · <span class="diff-key add">${T('新增', 'added')}</span> <span class="diff-key del">${T('删除', 'removed')}</span></span>` : ''}</div>
+    <div class="blockh">${T('需求范围（随设计一起哈希）', 'Requirement scope (hashed with the design)')}</div><div class="box"><div class="prose" style="font-size:13px">${esc(r.scope || i.desc)}</div></div>
+    <div class="blockh">${T('设计内容', 'Design')}</div>${secs.map(s => `<div class="dsec"><h4>${esc(s.h)}${tag(s.kind)}</h4>${s.lines.map(line).join('')}</div>`).join('')}
+    <div class="blockh">${T('验收标准', 'Acceptance criteria')}</div>${acs}
+  </div>`;
+  const panel = S.dec.done ? decDone() : `<form id="decf" class="dp-card">
+    <div class="dp-h">${T('你的决定', 'Your decision')}</div>${conflictHtml()}
+    <div class="bind">${bindRow(T('需求', 'Item'), i.k)}${bindRow(T('修订', 'Revision'), 'r' + r.r)}${bindRow('sha256', short(r.hash), r.hash)}${bindRow(T('范围修订', 'Scope rev.'), 'r' + i.sr)}</div>
+    <p class="muted" style="font-size:12px;margin:0">${T('决定只对这一份修订生效。修订变了，这个页面的提交会失败，不会套用到新内容上。', 'The decision binds this revision only. If it changes, submitting from this page fails instead of applying to new content.')}</p>
+    ${optCard('APPROVED', T(`批准 r${r.r}`, `Approve r${r.r}`), T(`${ks.join(sep)} 解除「设计未批准」阻塞，PM 可以激活拆解计划。不会自动启动任何智能体。`, `Clears the design blocker on ${ks.join(sep)} so PM can activate the plan. No agent starts automatically.`))}
+    ${optCard('CHANGES_REQUESTED', T('要求修改', 'Request changes'), T(`r${r.r} 记为要求修改，退回给 ${nm(r.by)}。`, `Marks r${r.r} as changes requested and returns it to ${nm(r.by)}.`))}
+    ${reasonField(S.dec.choice === 'CHANGES_REQUESTED' ? T('需要改什么？写具体，负责人会照着改。', 'What should change? Be specific.') : T('为什么批准？', 'Why approve?'))}
+    <button class="btn primary" type="submit" ${S.dec.choice ? '' : 'disabled'} style="justify-content:center;height:32px">${S.dec.choice === 'CHANGES_REQUESTED' ? T('提交：要求修改', 'Submit: request changes') : S.dec.choice ? T(`提交：批准 r${r.r}`, `Submit: approve r${r.r}`) : T('先选择一个决定', 'Choose a decision first')}</button>
+  </form>${demoBox(`<button type="button" class="btn" data-act="demo" data-d="r4" ${revs.some(x => x.r > r.r) ? 'disabled' : ''}>${T(`模拟：负责人刚提交了 r${r.r + 1}`, `Simulate: the lead just submitted r${r.r + 1}`)}</button>`)}`;
+  return main + `<aside class="dec-panel" aria-label="${T('决定', 'Decision')}">${panel}</aside>`;
+}
+function submitReview(i) {
+  const revs = DESIGNS[i.design], live = revs.find(x => x.st === 'IN_REVIEW'), reason = S.dec.reason.trim(), ks = kids(i.k).map(k => k.k).join(T('、', ', '));
+  if (!live || live.r !== S.dec.rev) { S.dec.conflict = { code: 'VERSION_CONFLICT', zh: `r${S.dec.rev} 已经不是待审批的修订：${nm('lead')} 刚提交了 r${live ? live.r : '?'}。没有记录任何决定，你的理由还在。`, en: `r${S.dec.rev} is no longer under review: ${nm('lead')} just submitted r${live ? live.r : '?'}. Nothing was recorded and your reason is kept.` }; return render(); }
+  live.dec = { by: 'you', at: now(), zh: reason, en: reason };
+  if (S.dec.choice === 'APPROVED') {
+    live.st = 'APPROVED'; i.phase = 'plan';
+    i.nx = { w: 'pm', zh: `设计 r${live.r} 已批准，等待 PM 激活拆解计划`, en: `Design r${live.r} approved; waiting for PM to activate the plan` };
+    kids(i.k).forEach(k => { k.bl = (k.bl || []).filter(c => c !== 'DESIGN_APPROVAL_REQUIRED'); k.nx = { w: 'pm', zh: '等待 PM 激活计划并指派', en: 'Waiting for PM to activate the plan and assign' }; });
+    stamp(i, `批准设计 r${live.r}`, `approved design r${live.r}`);
+    S.dec.done = { k: i.k, title: T(`已批准 r${live.r}`, `Approved r${live.r}`), lines: [T(`决定绑定 sha256 ${short(live.hash)}`, `Bound to sha256 ${short(live.hash)}`), T(`${ks} 不再被设计阻塞`, `${ks} are no longer blocked by the design`), T('下一步由 PM 激活拆解计划；没有启动任何智能体运行', 'PM activates the plan next; no agent run was started')] };
+  } else {
+    live.st = 'CHANGES_REQUESTED'; i.phase = 'design-draft';
+    i.nx = { w: 'lead', zh: '按你的意见修改设计', en: 'Revising the design per your feedback' };
+    stamp(i, `要求修改设计 r${live.r}`, `requested changes to design r${live.r}`);
+    S.dec.done = { k: i.k, title: T(`已要求修改 r${live.r}`, `Requested changes to r${live.r}`), lines: [T(`意见已交给 ${nm('lead')}`, `Feedback sent to ${nm('lead')}`), T('新修订提交后会再次出现在待我决策里', 'The next revision will appear in Decisions')] };
+  }
+  S.dec.conflict = null; render(); toast(S.dec.done.title);
+}
+function demoR4(i) {
+  const revs = DESIGNS[i.design], cur = revs.find(x => x.st === 'IN_REVIEW');
+  if (!cur) return;
+  cur.st = 'SUPERSEDED';
+  const body = cur.body.map(s => ({ ...s }));
+  body[4] = sec('风险', '证据过多导致决策疲劳：默认只展开失败项与关闭阻塞项；清单超过 200 个文件时按目录折叠。');
+  revs.unshift({ r: cur.r + 1, st: 'IN_REVIEW', hash: 'd93b7c15e2a84f6b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b', by: 'lead', at: now(), body, scope: cur.scope, ac: cur.ac.map(x => [...x]) });
+  i.nx = { w: 'you', zh: `需要你：审批设计 r${cur.r + 1}`, en: `You: review design r${cur.r + 1}`, act: 'design' };
+  FEED.unshift({ at: now(), by: 'lead', k: i.k, zh: `提交设计 r${cur.r + 1}（取代 r${cur.r}）`, en: `submitted design r${cur.r + 1} (supersedes r${cur.r})` });
+  render();
+  toast(T(`lead-claude 提交了 r${cur.r + 1}。页面仍显示 r${cur.r}，这时提交会失败。`, `lead-claude submitted r${cur.r + 1}. This page still shows r${cur.r}, so submitting now fails.`));
+}
+
+function closureChecks(i) {
+  const c = CAND[i.cand], g = i.git, rv = s => c.reviews.find(r => r.s === s), pd = (DESIGNS[byKey[i.p].design] || []).find(x => x.st === 'APPROVED');
+  return [
+    [T('父需求设计已批准', 'Parent design approved'), !!pd, `${i.p} · r${pd ? pd.r : '?'}`],
+    [T('快照已密封，内容没有变化', 'Snapshot sealed and unchanged'), true, `sha256 ${short(c.snap)} · ${c.files} ${T('个文件', 'files')}`],
+    [T('负责人初审通过', 'Initial lead review passed'), rv('PRE_QA').v === 'PASS', nm(rv('PRE_QA').by)],
+    [T('独立 QA 通过（不同会话与凭据）', 'Independent QA passed (separate session)'), rv('QA').v === 'PASS', `${nm(rv('QA').by)} · ${rv('QA').n.join('/')}`],
+    [T('负责人终审通过', 'Final lead review passed'), rv('FINAL').v === 'PASS', nm(rv('FINAL').by)],
+    [T('没有未解决的 BLOCKER / MAJOR 缺陷', 'No open BLOCKER / MAJOR defects'), !(i.def || []).length, T('0 个', 'none')],
+    [T('没有挂起，也没有进行中的运行', 'No hold and no live run'), true, '—'],
+    [T('最终提交与快照一致', 'Final commit matches the snapshot'), g.st === 'VERIFIED', g.st === 'VERIFIED' ? `${g.sha.slice(0, 8)} · ${ago(g.at)}` : T('GitHub 不可用，无法校验', 'GitHub unavailable; cannot verify')],
+    [T('你接受当前 digest', 'You accept the current digest'), !!i.accepted, i.accepted ? ago(i.accepted) : T('等你决定', 'Waiting on you')]
+  ];
+}
+function decAccept(i) {
+  const c = CAND[i.cand], g = i.git, dg = DIGEST[i.k], par = byKey[i.p], q = parts(i.tt), checks = closureChecks(i), okN = checks.filter(x => x[1]).length;
+  if (S.dec.digest == null) S.dec.digest = i.digest;
+  const acRows2 = par.ac.filter(([id]) => i.ac.includes(id)).map(([id, tx]) => { const ck = c.checks.filter(k => k.ac === id), pass = ck.length && ck.every(k => k.st === 'PASSED'); return `<div class="ac"><span class="id">${id}</span><span class="tx">${esc(tx)}<span class="muted" style="display:block;font-size:12px;margin-top:4px">${ck.map(k => `<span class="mono">${k.id}</span> ${esc(k.cmd)} · exit ${k.exit} · ${(k.ms / 1000).toFixed(1)}s`).join('<br>')}</span></span><span class="rs"><span class="res ${pass ? 'pass' : 'fail'}">${ic(pass ? 'check' : 'x', 12)}${pass ? 'PASS' : 'FAIL'}</span></span></div>`; }).join('');
+  const main = `<div class="dec-main">
+    <div class="eyebrow">${ic('pkg', 14)}${T('交付验收', 'Delivery acceptance')} · <a href="#issue-${par.k}">${par.k} ${esc(par.tt)}</a></div>
+    <h2 class="d-title">${q ? `<span class="chip type">${q.type}</span><span>${esc(q.area)}: ${esc(q.act)} → ${esc(q.out)}</span>` : esc(i.tt)}</h2>
+    <div class="d-sub"><span class="mono">${i.k}</span><span>· ${T('候选', 'Candidate')} <span class="mono">${c.id}</span></span><span>· ${esc(nm(c.by))} ${T(`第 ${c.round} 轮提交`, `round ${c.round}`)}</span><span>· ${T('终审', 'Final review')} ${ago(c.reviews[2].at)}</span></div>
+    <div class="blockh">${T('关闭前检查', 'Closure checks')} <span class="muted" style="font-weight:400">${okN}/${checks.length}</span></div>
+    <div class="box" style="padding:2px 14px">${checks.map(([l, ok, d], n) => `<div class="chk">${ok ? sic('done') : n === checks.length - 1 ? sic('you', 0.9) : sic('crit')}<span class="grow">${l}</span><span class="muted mono" style="font-size:11.5px">${esc(d)}</span></div>`).join('')}</div>
+    <div class="blockh">${T('验收标准结果', 'Results by criterion')}</div>${acRows2}
+    <div class="blockh">${T('评审链', 'Review chain')}</div>${chainHtml(c, i)}
+    <div class="blockh">${T('开发者交接说明', 'Worker handoff')}</div><div class="box"><div class="prose" style="font-size:13px">${esc(L(c.sum))}</div><p class="muted" style="font-size:12px;margin-top:6px">${esc(nm(c.by))} · ${ago(c.at)}</p></div>
+    <div class="blockh">${T('缺陷与风险', 'Defects and risk')}</div><p class="dim">${T('没有未解决的缺陷，也没有需要你豁免的 MINOR 风险。', 'No open defects and no MINOR risk waiting for your waiver.')}</p>
+    <div class="blockh">${T('密封清单', 'Sealed manifest')} <span class="muted" style="font-weight:400">${c.manifest.length} ${T('个文件', 'files')}</span></div><details class="fold"><summary>${ic('chev', 12)}${T('展开文件、权限与哈希', 'Show files, modes and hashes')}</summary><div class="files">${c.manifest.map(f => `<span>100644 ${fh(c.snap, f)} ${esc(f)}</span>`).join('')}</div></details>
+    <div class="blockh">${T('Git 提交', 'Git commit')}</div><div class="box"><div class="kv"><dt>${T('仓库', 'Repository')}</dt><dd>${WS.repo}</dd><dt>${T('最终提交', 'Final commit')}</dt><dd class="mono">${g.sha}</dd><dt>${T('校验', 'Verification')}</dt><dd>${g.st === 'VERIFIED' ? `<span class="res pass">${ic('check', 12)}${T('提交树与密封快照逐字节一致', 'Commit tree matches the sealed snapshot byte for byte')}</span>` : `<span class="res fail">${ic('alert', 12)}${T('GitHub 不可用', 'GitHub unavailable')}</span>`}</dd><dt>${T('尝试', 'Attempts')}</dt><dd>${(g.attempts || []).map(([t, s, e], n) => `#${n + 1} · ${ago(t)} · ${s}${e ? ' · ' + e : ''}`).join('<br>') || '—'}</dd></div></div>
+  </div>`;
+  let panel;
+  if (S.dec.done) panel = decDone();
+  else if (i.accepted) panel = `<div class="dp-card"><div class="dp-h">${T('你的决定已保存', 'Your decision is saved')}</div><div class="bind">${bindRow(T('已接受', 'Accepted'), ago(i.accepted))}${bindRow('digest', short(i.digest), i.digest)}</div>
+    <div class="conflict warn"><b>${T('关闭受阻', 'Closure blocked')} · <code class="mono">GIT_VERIFICATION_UNAVAILABLE</code></b><p style="margin-top:4px">${T('GitHub 暂时不可用。接受已经保存，校验成功后会自动关闭，不需要你再确认一次。在那之前不会显示「已完成」。', 'GitHub is unavailable. Your acceptance is saved and the item closes automatically once verification succeeds, without asking you again. It will not show as done before that.')}</p></div>
+    <button type="button" class="btn primary" data-act="retry" data-k="${i.k}" style="justify-content:center;height:32px">${ic('refresh', 14)}${T('重试 Git 校验', 'Retry Git verification')}</button></div>`;
+  else {
+    const rework = S.dec.choice === 'REJECT', crit = S.dec.crit || [];
+    panel = `<form id="decf" class="dp-card"><div class="dp-h">${T('你的决定', 'Your decision')}</div>${conflictHtml()}${errHtml()}
+      <div class="bind">${bindRow(T('事项', 'Item'), i.k)}${bindRow(T('候选', 'Candidate'), c.id)}${bindRow('digest', short(S.dec.digest), S.dec.digest)}</div>
+      <details class="fold"><summary>${ic('chev', 12)}${T('digest 由哪些内容计算', 'What the digest covers')}</summary><div class="bind" style="padding:6px 0 0 18px">${bindRow(T('设计', 'Design'), dg.design)}${bindRow(T('任务范围', 'Task scope'), dg.scope)}${bindRow(T('清单', 'Manifest'), short(c.snap))}${bindRow(T('初审', 'Initial'), dg.initial)}${bindRow('QA', dg.qa)}${bindRow(T('终审', 'Final'), dg.final)}${bindRow(T('提交', 'Commit'), g.sha.slice(0, 8))}${bindRow(T('校验策略', 'Policy'), dg.policy)}</div></details>
+      ${optCard('ACCEPT', T('接受这份交付', 'Accept this delivery'), g.st === 'VERIFIED' ? T(`Git 已校验，接受后立即关闭为「已完成」，${par.k} 完成数加一。`, `Git is verified, so it closes as done right away and ${par.k} gains a finished task.`) : T('GitHub 不可用：接受会保存，状态为「已接受 · 关闭受阻」，恢复后自动关闭。', 'GitHub is unavailable: your acceptance is saved as “accepted, closure blocked” and closes automatically later.'))}
+      ${optCard('REJECT', T('要求返工', 'Request rework'), T('退回开发。新的提交会重新走初审、独立 QA 和终审。', 'Returns it to development. The next submission repeats initial review, independent QA and final review.'))}
+      ${rework ? `<div class="sub-opts"><span class="muted" style="font-size:12px">${T('问题属于', 'This is')}</span><label class="check-line"><input type="radio" name="rk" value="defect" data-act="dkind" ${S.dec.kind === 'defect' ? 'checked' : ''}>${T('缺陷：实现不符合已批准的标准', 'A defect: the work misses approved criteria')}</label><label class="check-line"><input type="radio" name="rk" value="scope" data-act="dkind" ${S.dec.kind === 'scope' ? 'checked' : ''}>${T('范围变化：我想要的和已批准的不一样（会进入设计修订）', 'A scope change: I want something other than what was approved (goes to a design revision)')}</label>
+        <span class="muted" style="font-size:12px;margin-top:6px">${T('没有达到的标准', 'Criteria not met')}</span>${i.ac.map(a => `<label class="check-line"><input type="checkbox" value="${a}" data-act="dsel" data-list="crit" ${crit.includes(a) ? 'checked' : ''}>${a} ${esc((par.ac.find(x => x[0] === a) || [])[1] || '')}</label>`).join('')}</div>` : ''}
+      ${reasonField(rework ? T('哪里不对？怎么复现？', 'What is wrong and how do you reproduce it?') : T('为什么接受？例如你看过哪些证据。', 'Why accept? For example, which evidence you checked.'))}
+      <button class="btn primary" type="submit" ${S.dec.choice ? '' : 'disabled'} style="justify-content:center;height:32px">${rework ? T('提交：要求返工', 'Submit: request rework') : S.dec.choice ? T('提交：接受交付', 'Submit: accept delivery') : T('先选择一个决定', 'Choose a decision first')}</button></form>
+      ${demoBox(`<button type="button" class="btn" data-act="demo" data-d="commit">${T('模拟：PM 换了最终提交（digest 会变）', 'Simulate: PM changed the final commit (new digest)')}</button><button type="button" class="btn" data-act="demo" data-d="github">${g.st === 'VERIFIED' ? T('模拟：GitHub 不可用', 'Simulate: GitHub unavailable') : T('模拟：GitHub 恢复', 'Simulate: GitHub back')}</button>`)}`;
+  }
+  return main + `<aside class="dec-panel" aria-label="${T('决定', 'Decision')}">${panel}</aside>`;
+}
+function submitAccept(i) {
+  const par = byKey[i.p], reason = S.dec.reason.trim();
+  if (S.dec.digest !== i.digest) { S.dec.conflict = { code: 'APPROVAL_STALE', zh: `digest 已从 ${short(S.dec.digest)} 变成 ${short(i.digest)}：最终提交的映射变了。没有记录任何决定，你的理由还在。`, en: `The digest changed from ${short(S.dec.digest)} to ${short(i.digest)} because the final commit mapping changed. Nothing was recorded and your reason is kept.` }; return render(); }
+  if (S.dec.choice === 'REJECT' && !S.dec.kind) { S.dec.err = T('请选择这是缺陷还是范围变化。', 'Choose whether this is a defect or a scope change.'); return render(); }
+  if (S.dec.choice === 'REJECT' && S.dec.kind === 'defect' && !(S.dec.crit || []).length) { S.dec.err = T('缺陷需要至少勾选一条没有达到的标准。', 'A defect needs at least one unmet criterion.'); return render(); }
+  S.dec.err = null;
+  if (S.dec.choice === 'ACCEPT') {
+    i.accepted = now();
+    if (i.git.st === 'VERIFIED') {
+      i.st = 'DONE'; i.nx = null; i.bl = []; stamp(i, '接受交付并关闭', 'accepted the delivery; it closed');
+      const p = prog(par);
+      S.dec.done = { k: i.k, title: T('已接受 · 已关闭', 'Accepted · closed'), lines: [T(`决定绑定 digest ${short(i.digest)}`, `Bound to digest ${short(i.digest)}`), T('所有关闭检查通过，状态变为「已完成」', 'Every closure check passed; it is now done'), T(`${par.k} 已完成 ${p.done}/${p.total} 个任务；父需求还要走集成评审和你的验收`, `${par.k} has ${p.done}/${p.total} tasks done; the parent still needs integration review and your acceptance`)] };
+    } else {
+      i.bl = ['GIT_VERIFICATION_UNAVAILABLE']; i.nx = { w: 'pm', zh: '你已接受，关闭受阻：GitHub 校验不可用', en: 'You accepted; closure blocked: GitHub verification unavailable', act: 'retry' };
+      stamp(i, '接受交付（关闭受阻：GitHub 不可用）', 'accepted the delivery (closure blocked: GitHub unavailable)');
+      S.dec.done = { k: i.k, title: T('已接受 · 关闭受阻', 'Accepted · closure blocked'), lines: [T('你的接受已保存', 'Your acceptance is saved'), T('GitHub 校验成功前不会显示「已完成」', 'It will not show as done before GitHub verification succeeds'), T('恢复后自动关闭，不会再问你一次', 'It closes automatically later without asking again')] };
+    }
+  } else {
+    i.st = 'USER_REJECTED'; i.bl = [];
+    i.nx = S.dec.kind === 'scope' ? { w: 'lead', zh: '范围变化：等待产品负责人修订设计', en: 'Scope change: waiting for the product lead to revise the design' } : { w: 'pm', zh: '验收打回：等待 PM 派发返工', en: 'Returned: waiting for PM to dispatch rework' };
+    stamp(i, `要求返工（${S.dec.kind === 'scope' ? '范围变化' : '缺陷：' + S.dec.crit.join('、')}）`, `requested rework (${S.dec.kind === 'scope' ? 'scope change' : 'defect: ' + S.dec.crit.join(', ')})`);
+    S.dec.done = { k: i.k, title: T('已要求返工', 'Rework requested'), lines: S.dec.kind === 'scope' ? [T('记为范围变化，交给产品负责人修订设计', 'Recorded as a scope change for the product lead'), T('新设计需要你再次审批', 'The new design needs your review again')] : [T(`记为缺陷：${S.dec.crit.join('、')}`, `Recorded as a defect: ${S.dec.crit.join(', ')}`), T('新的提交会重新走初审、独立 QA 和终审', 'The next submission repeats initial review, independent QA and final review')] };
+  }
+  S.dec.conflict = null; render(); toast(S.dec.done.title);
+}
+
+function decScope(i) {
+  const par = byKey[i.p], dz = (DESIGNS[par.design] || []).find(x => x.st === 'APPROVED'), sel = S.dec.sel || [], ch = S.dec.choice;
+  const sibs = kids(par.k).filter(k => k !== i && k.st !== 'ABANDONED' && k.scope !== 'EXCLUDED');
+  const covered = i.ac.every(a => sel.some(s => byKey[s].ac.includes(a)));
+  const owners = (id, after) => { let o = kids(par.k).filter(k => k.scope !== 'EXCLUDED' && k.ac.includes(id) && (!after || k !== i)); if (after && ch === 'REPLACE') o = [...new Set([...o, ...sel.map(s => byKey[s]).filter(s => s.ac.includes(id))])]; return o; };
+  const chips = list => list.length ? list.map(k => `<a class="chip" href="#issue-${k.k}">${stMeta(k).icon}${k.k}</a>`).join(' ') : `<span class="res fail">${T('未覆盖', 'Uncovered')}</span>`;
+  const rows = par.ac.map(([id, tx]) => `<div class="trow"><span class="mono" style="width:40px;flex:none">${id}</span><span class="grow" style="white-space:normal">${esc(tx)}</span><span style="flex:none;display:flex;gap:4px;align-items:center">${chips(owners(id, false))}${ch && ch !== 'RESTORE' && i.ac.includes(id) ? ` ${ic('arrow', 13)} ${chips(owners(id, true))}` : ''}</span></div>`).join('');
+  const main = `<div class="dec-main">
+    <div class="eyebrow">${ic('scope', 14)}${T('范围决策', 'Scope decision')} · <a href="#issue-${par.k}">${par.k} ${esc(par.tt)}</a></div>
+    <h2 class="d-title">${titleHtml(i)}</h2>
+    <div class="d-sub">${stMeta(i).icon}<span>${stMeta(i).label}</span><span>· <span class="mono">${i.k}</span></span><span>· ${T('负责', 'Owns')} ${i.ac.join(T('、', ', '))}</span></div>
+    <div class="blockh">${T('放弃记录', 'Abandonment')}</div><div class="box"><div class="prose" style="font-size:13px">${esc(L(i.abandon))}</div><p class="muted" style="font-size:12px;margin-top:6px">${esc(nm(i.abandon.by))}${i.abandon.grant ? ` · ${T('使用你签发的授权', 'using your grant')} <span class="mono">${i.abandon.grant}</span>` : ''} · ${ago(i.abandon.at)}</p></div>
+    <p class="note" style="margin-top:12px">${T('放弃不等于不用做了。这条任务负责的标准仍在已批准的设计里，需要你决定怎么处理它的范围。', 'Abandoning a task does not drop its work. The criteria it owned are still in the approved design, so you decide what happens to its scope.')}</p>
+    <div class="blockh">${T('父需求已批准的设计', 'Approved parent design')} <span class="muted mono" style="font-weight:400">r${dz.r} · ${short(dz.hash)}</span></div>
+    <div class="box" style="padding:2px 14px">${rows}</div>
+    <p class="muted" style="font-size:12px;margin-top:6px">${ch && ch !== 'RESTORE' ? T('箭头右侧是决定之后的覆盖情况。', 'Right of the arrow: coverage after this decision.') : T('先在右侧选择一个决定，这里会预览覆盖变化。', 'Choose a decision on the right to preview coverage.')}</p>
+    ${ch === 'REPLACE' ? `<div class="blockh">${T('选择替换任务', 'Choose replacement tasks')}</div>${sibs.map(s => `<label class="lrow" style="cursor:pointer"><input type="checkbox" value="${s.k}" data-act="dsel" data-list="sel" ${sel.includes(s.k) ? 'checked' : ''}>${stMeta(s).icon}<span class="t"><span class="one"><span class="mono muted">${s.k}</span> ${esc(plainTitle(s))}</span><span class="s">${T('负责', 'Owns')} ${s.ac.join(T('、', ', '))} · ${stMeta(s).label}</span></span>${s.ac.some(a => i.ac.includes(a)) ? `<span class="res pass">${ic('check', 12)}${T('覆盖', 'covers')} ${i.ac.filter(a => s.ac.includes(a)).join(' ')}</span>` : `<span class="muted" style="font-size:12px">${T('不覆盖', 'does not cover')} ${i.ac.join(' ')}</span>`}</label>`).join('')}<p class="${covered ? 'res pass' : 'res fail'}" style="margin-top:8px">${covered ? T('已覆盖目标的全部标准', 'All target criteria are covered') : T(`替换任务必须覆盖 ${i.ac.join('、')}。没有合适的任务时，先让 PM 新建一个。`, `Replacements must cover ${i.ac.join(', ')}. If none fits, ask PM to create one first.`)}</p>` : ''}
+  </div>`;
+  const panel = S.dec.done ? decDone() : `<form id="decf" class="dp-card"><div class="dp-h">${T('你的决定', 'Your decision')}</div>${conflictHtml()}${errHtml()}
+    <div class="bind">${bindRow(T('父需求', 'Parent'), `${par.k} · v${par.v}`)}${bindRow(T('任务', 'Task'), `${i.k} · v${i.v}`)}${bindRow(T('设计', 'Design'), `r${dz.r} · ${short(dz.hash)}`, dz.hash)}${bindRow(T('范围哈希', 'Scope hash'), fh(i.k, 'scope' + i.v))}</div>
+    ${optCard('EXCLUDE', T('排除出交付范围', 'Exclude from delivery'), T(`${i.k} 保持已放弃。${i.ac.join('、')} 不会被删除：PM 必须让其他任务或集成检查覆盖它，否则计划无法激活。`, `${i.k} stays abandoned. ${i.ac.join(', ')} is not deleted: PM must cover it with another task or an integration check before the plan can activate.`))}
+    ${optCard('REPLACE', T('用同级任务替换', 'Replace with sibling tasks'), T(`选择覆盖 ${i.ac.join('、')} 的同级任务，它们接替这部分范围。`, `Pick sibling tasks that cover ${i.ac.join(', ')}; they take over this scope.`))}
+    ${optCard('RESTORE', T('恢复到交付范围', 'Restore to delivery'), T('没有之前的排除决定，所以不能恢复。', 'There is no earlier exclusion to restore.'), true)}
+    <ul class="effects"><li>${T(`任何选择都会让 ${par.k} 的拆解计划和集成验收失效，PM 要重新激活计划`, `Any choice invalidates ${par.k}'s plan and integration acceptance; PM must re-activate the plan`)}</li><li>${T('其他任务正在进行的工作不受影响', 'Work already running on other tasks continues')}</li><li>${T('不会删除任何已批准的验收标准', 'No approved criterion is deleted')}</li></ul>
+    ${reasonField(T('为什么这样处理这部分范围？', 'Why handle this scope this way?'))}
+    <button class="btn primary" type="submit" ${ch ? '' : 'disabled'} style="justify-content:center;height:32px">${ch === 'EXCLUDE' ? T('提交：排除', 'Submit: exclude') : ch === 'REPLACE' ? T('提交：替换', 'Submit: replace') : T('先选择一个决定', 'Choose a decision first')}</button></form>
+    ${demoBox(`<button type="button" class="btn" data-act="demo" data-d="newtask" ${byKey['ADC-23'] ? 'disabled' : ''}>${T('模拟：PM 新建了覆盖 AC-3 的任务', 'Simulate: PM created a task covering AC-3')}</button>`)}`;
+  return main + `<aside class="dec-panel" aria-label="${T('决定', 'Decision')}">${panel}</aside>`;
+}
+function refresh14() {
+  const p = byKey['ADC-14'], unc = !!(byKey['ADC-15'].run && RUNS[byKey['ADC-15'].run] && RUNS[byKey['ADC-15'].run].st === 'UNCERTAIN'), sc = byKey['ADC-17'].scope === 'PENDING';
+  p.nx = unc && sc ? p.nx : unc ? { w: 'you', zh: '需要你：对账 ADC-15 的不确定运行', en: 'You: reconcile ADC-15’s uncertain run' } : sc ? { w: 'you', zh: '需要你：决定 ADC-17 的范围', en: 'You: decide ADC-17’s scope' } : { w: 'pm', zh: 'PM 需要按新范围覆盖标准并重新激活计划', en: 'PM must re-cover criteria and re-activate the plan' };
+}
+function submitScope(i) {
+  const par = byKey[i.p], sel = S.dec.sel || [], reason = S.dec.reason.trim();
+  if (S.dec.choice === 'REPLACE' && !i.ac.every(a => sel.some(s => byKey[s].ac.includes(a)))) { S.dec.err = T(`替换任务必须覆盖 ${i.k} 负责的全部标准（${i.ac.join('、')}）。`, `Replacements must cover every criterion ${i.k} owned (${i.ac.join(', ')}).`); return render(); }
+  S.dec.err = null; i.scope = 'EXCLUDED'; i.bl = []; i.nx = null; i.repl = S.dec.choice === 'REPLACE' ? sel : [];
+  par.bl = (par.bl || []).filter(c => c !== 'CHILD_DISPOSITION_REQUIRED').concat(S.dec.choice === 'EXCLUDE' ? ['PLAN_CRITERIA_UNMAPPED'] : ['PLAN_STALE']);
+  refresh14();
+  stamp(i, S.dec.choice === 'EXCLUDE' ? `排除出交付范围：${reason}` : `由 ${sel.join('、')} 替换：${reason}`, S.dec.choice === 'EXCLUDE' ? `excluded from delivery: ${reason}` : `replaced by ${sel.join(', ')}: ${reason}`);
+  S.dec.done = { k: i.k, title: S.dec.choice === 'EXCLUDE' ? T(`已排除 ${i.k}`, `Excluded ${i.k}`) : T(`已由 ${sel.join('、')} 替换`, `Replaced by ${sel.join(', ')}`), lines: [T(`${i.k} 保持已放弃，不计为交付`, `${i.k} stays abandoned and never counts as delivered`), S.dec.choice === 'EXCLUDE' ? T(`${i.ac.join('、')} 现在无人覆盖，PM 需要重新分配`, `${i.ac.join(', ')} now has no owner; PM must reassign it`) : T(`${i.ac.join('、')} 改由 ${sel.join('、')} 覆盖`, `${i.ac.join(', ')} is now covered by ${sel.join(', ')}`), T(`${par.k} 的计划需要重新激活`, `${par.k}'s plan must be re-activated`)] };
+  render(); toast(S.dec.done.title);
+}
+function demoNewTask() {
+  if (byKey['ADC-23']) return;
+  const t = { k: 'ADC-23', p: 'ADC-14', tt: '[Docs] Runner: 记录各 Harness 恢复能力 -> 能力矩阵如实上报', st: 'NOT_STARTED', pr: 3, as: null, qa: null, it: 'S4', due: null, mode: 'artifact', v: 1, sr: 1, ac: ['AC-3'], up: now(), bl: ['ASSIGNEE_REQUIRED'], nx: { w: 'pm', zh: '等待 PM 指派开发者', en: 'Waiting for PM to assign a worker' } };
+  I.splice(I.indexOf(byKey['ADC-17']) + 1, 0, t); byKey[t.k] = t;
+  FEED.unshift({ at: now(), by: 'pm', k: t.k, zh: '新建任务，负责 AC-3', en: 'created a task that owns AC-3' });
+  render(); toast(T('pm-codex 新建了 ADC-23（负责 AC-3），现在可以选择替换', 'pm-codex created ADC-23 (owns AC-3); you can now replace'));
+}
+
+function decReconcile(i) {
+  const r = RUNS[i.run] || Object.values(RUNS).find(x => x.k === i.k), q = Object.values(RUNS).find(x => x.st === 'QUEUED');
+  const main = `<div class="dec-main">
+    <div class="eyebrow">${ic('alert', 14)}${T('运行对账', 'Run reconciliation')} · <a href="#issue-${i.k}" class="mono">${i.k}</a></div>
+    <h2 class="d-title"><span class="mono">${r.id}</span><span>${HX[r.h][1]} · ${r.kind === 'qa' ? T('QA 运行', 'QA run') : T('开发运行', 'Implementation run')}</span></h2>
+    <div class="d-sub">${r.st === 'UNCERTAIN' ? `${sic('crit')}<span>${T('不确定', 'Uncertain')}</span><span>· ${T('心跳丢失于', 'heartbeat lost')} ${ago(r.lastHb)}</span><span>· ${T('占用 1 个运行槽位', 'holding a run slot')}</span><code class="mono">${r.err}</code>` : `${sic('gone')}<span>${T(...RUNST[r.st].slice(1))}</span>`}</div>
+    <div class="note" style="margin-top:16px">${T('服务和这次运行失去了联系。外部进程可能还在隔离目录里写文件。在你确认它已经停止之前，系统不会重新派发，也不会把它算成失败或完成。', 'The service lost contact with this run. The external process may still be writing in its isolated directory. Until you confirm it stopped, nothing is redispatched and the run counts as neither failed nor finished.')}</div>
+    <div class="blockh">${T('运行信息', 'Run details')}</div><div class="box"><div class="kv">
+      <dt>${T('事项', 'Item')}</dt><dd><a href="#issue-${i.k}" class="mono">${i.k}</a> ${esc(plainTitle(i))}</dd><dt>${T('执行者', 'Agent')}</dt><dd>${who(r.who)}</dd>
+      <dt>${T('开始', 'Started')}</dt><dd>${ago(r.start)}</dd><dt>${T('最后心跳', 'Last heartbeat')}</dt><dd>${ago(r.lastHb)}</dd>
+      <dt>${T('记录的 PID', 'Recorded PID')}</dt><dd class="mono">${r.pid}</dd><dt>${T('执行目录', 'Directory')}</dt><dd class="mono">${esc(r.dir)}</dd>
+      <dt>${T('提供方会话', 'Provider session')}</dt><dd class="mono">${r.session}</dd><dt>${T('运行凭据', 'Run credential')}</dt><dd>${T('已吊销', 'Revoked')} · ${ago(r.revoked)}</dd>
+      <dt>${T('测试进程', 'Test processes')}</dt><dd>${T('没有记录', 'None recorded')}</dd></div></div>
+    <div class="blockh">${T('事件', 'Events')}</div><div class="tl">${r.events.slice().reverse().map(([t, zh, en]) => `<div class="ti"><span style="width:14px;display:grid;place-items:center">${sic('todo')}</span><div class="tc"><div class="h"><span>${T(zh, en)}</span><time>${ago(t)}</time></div></div></div>`).join('')}</div>
+    <div class="blockh">${T('怎么确认它停了', 'How to confirm it stopped')}</div><ul class="effects" style="font-size:13px"><li>${T('PowerShell 里运行', 'Run in PowerShell:')} <code class="mono">Get-Process -Id ${r.pid}</code>${T('，找不到进程才算停止', '; it has stopped only if no process is found')}</li><li>${T(`Claude Code 会话 ${r.session} 不再有输出`, `Claude Code session ${r.session} shows no more output`)}</li><li>${T('执行目录里没有新的文件写入', 'Nothing new is written in the execution directory')}</li></ul>
+  </div>`;
+  const alive = S.pidAlive, ok = !alive && S.dec.confirm;
+  const panel = S.dec.done ? decDone() : `<form id="decf" class="dp-card"><div class="dp-h">${T('确认已停止并对账', 'Confirm stop and reconcile')}</div>${errHtml()}
+    <div class="step ${alive ? 'bad' : 'ok'}"><span class="n">${alive ? '!' : ic('check', 12)}</span><div><b>${T('服务检查记录的进程', 'Service checks the recorded process')}</b><p class="muted" style="font-size:12.5px;margin-top:2px">${alive ? T(`PID ${r.pid} 仍然存在。进程还在时不能对账。`, `PID ${r.pid} still exists. You cannot reconcile while it runs.`) : T(`PID ${r.pid} 已不存在 · 刚刚检查`, `PID ${r.pid} is gone · checked just now`)}</p>${alive ? `<button type="button" class="btn" style="margin-top:8px" data-act="demo" data-d="recheck">${ic('refresh', 14)}${T('重新检查', 'Check again')}</button>` : ''}</div></div>
+    <div class="step ${S.dec.confirm ? 'ok' : alive ? '' : 'cur'}"><span class="n">${S.dec.confirm ? ic('check', 12) : 2}</span><div><b>${T('你确认外部执行已经停止', 'You confirm the external work stopped')}</b><label class="check-line" style="margin-top:6px"><input type="checkbox" data-act="dconfirm" ${S.dec.confirm ? 'checked' : ''} ${alive ? 'disabled' : ''}>${T('这次执行及其子进程、测试进程都已停止，执行目录不再有写入。', 'This run, its child processes and test processes have stopped, and nothing writes to its directory.')}</label><p class="muted" style="font-size:11.5px;margin-top:4px">${T('这是你的确认，系统不会假装自己检查过整个进程树。', 'This is your attestation; the service does not claim it checked the whole process tree.')}</p></div></div>
+    <ul class="effects"><li>${T('运行记为已取消，日志和目录保留', 'The run is recorded as cancelled; logs and directory are kept')}</li><li>${q ? T(`释放 1 个槽位，排队中的 ${q.k} 随即开始`, `One slot frees up and the queued ${q.k} starts`) : T('释放 1 个运行槽位', 'One run slot frees up')}</li><li>${T(`${i.k} 回到「未开始」，需要 PM 重新派发到新的隔离目录`, `${i.k} returns to Not started; PM redispatches it to a fresh directory`)}</li></ul>
+    ${reasonField(T('你怎么确认它停了？', 'How did you confirm it stopped?'))}
+    <button class="btn primary" type="submit" ${ok ? '' : 'disabled'} style="justify-content:center;height:32px">${T('提交：确认已停止并对账', 'Submit: confirm stop and reconcile')}</button></form>
+    ${demoBox(`<span>${T('在原型里，点「重新检查」就当作你已经在外部停止了进程。', 'In this prototype, “Check again” acts as if you stopped the process outside the app.')}</span>`)}`;
+  return main + `<aside class="dec-panel" aria-label="${T('决定', 'Decision')}">${panel}</aside>`;
+}
+function submitReconcile(i) {
+  const r = RUNS[i.run], reason = S.dec.reason.trim();
+  if (S.pidAlive || !S.dec.confirm) return;
+  r.st = 'CANCELLED'; r.end = now(); i.st = 'NOT_STARTED'; i.run = null; i.bl = [];
+  i.nx = { w: 'pm', zh: '已对账：等待 PM 重新派发到新的隔离目录', en: 'Reconciled: waiting for PM to redispatch to a fresh directory' };
+  stamp(i, `确认运行 ${r.id} 已停止并对账：${reason}`, `confirmed run ${r.id} stopped and reconciled it: ${reason}`);
+  const q = Object.values(RUNS).find(x => x.st === 'QUEUED');
+  if (q) { q.st = 'RUNNING'; q.start = now(); q.hb = 2; q.session = '019a6d07-3c5e-7a91'; const qi = byKey[q.k]; qi.st = 'IN_PROGRESS'; qi.bl = (qi.bl || []).filter(c => c !== 'CAPACITY_REACHED'); qi.nx = { w: q.who, zh: `${nm(q.who)}（${HX[q.h][1]}）返工中`, en: `${nm(q.who)} (${HX[q.h][1]}) is reworking` }; FEED.unshift({ at: now(), by: 'sys', k: q.k, zh: `槽位释放，运行 ${q.id} 开始`, en: `a slot freed up; run ${q.id} started` }); }
+  refresh14();
+  S.dec.done = { k: i.k, title: T(`已对账 ${r.id}`, `Reconciled ${r.id}`), lines: [T('运行记为已取消，日志和目录已保留', 'Run recorded as cancelled; logs and directory kept'), q ? T(`释放的槽位已由 ${q.k} 使用`, `The freed slot went to ${q.k}`) : T('释放了 1 个槽位', 'One slot freed'), T(`${i.k} 回到「未开始」，等待 PM 重新派发`, `${i.k} is back to Not started, waiting for PM`)] };
+  render(); toast(S.dec.done.title);
+}
+
+const DKIND = { review: ['设计审批', 'Design review'], accept: ['交付验收', 'Delivery acceptance'], scope: ['范围决策', 'Scope decision'], reconcile: ['运行对账', 'Run reconciliation'] };
+function vDecide(r) {
+  const i = byKey[r.key];
+  if (!i) return `<header class="topbar">${menuBtn()}<h1>${T('找不到事项', 'Item not found')}</h1></header>`;
+  if (!S.dec || S.dec.id !== r.kind + r.key) { S.dec = { id: r.kind + r.key, reason: '', choice: null, sel: [], crit: [], kind: null, done: null, conflict: null, err: null, confirm: false }; S.dview = 'diff'; }
+  const q = decisions(), n = q.indexOf(i);
+  const nav = n >= 0 ? `<span class="muted num" style="font-size:12px">${T(`第 ${n + 1} / ${q.length} 个`, `${n + 1} of ${q.length}`)}</span><a class="icon-btn" href="#${decideRoute(q[(n - 1 + q.length) % q.length])}" title="${T('上一个决定', 'Previous decision')}">${ic('chevu')}</a><a class="icon-btn" href="#${decideRoute(q[(n + 1) % q.length])}" title="${T('下一个决定', 'Next decision')}">${ic('chevd')}</a>` : `<span class="chip flat">${T('已处理', 'Handled')}</span>`;
+  const valid = { review: () => DESIGNS[i.design], accept: () => i.cand && i.git, scope: () => i.p && i.abandon, reconcile: () => i.run || Object.values(RUNS).some(x => x.k === i.k) }[r.kind]();
+  const body = !valid ? `<div class="dec-main"><div class="empty"><h3>${T('这件事现在不需要这个决定', 'This decision does not apply now')}</h3><p><a class="btn" href="#issue-${i.k}">${T('打开事项', 'Open item')}</a></p></div></div>` : { review: decReview, accept: decAccept, scope: decScope, reconcile: decReconcile }[r.kind](i);
+  return `<header class="topbar">${menuBtn()}<nav class="crumbs" aria-label="${T('位置', 'Breadcrumb')}"><a href="#inbox">${T('待我决策', 'Decisions')}</a>${ic('chev', 12)}<span class="cur">${T(...DKIND[r.kind])} · ${i.k}</span></nav>${nav}<a class="icon-btn" href="#issue-${i.k}" title="${T('打开事项详情', 'Open item details')}">${ic('link')}</a></header><div class="content"><div class="dec">${body}</div></div>`;
+}
+function decSubmit() {
+  const r = route(), i = byKey[r.key];
+  if (!S.dec || !S.dec.choice && r.kind !== 'reconcile') return;
+  ({ review: submitReview, accept: submitAccept, scope: submitScope, reconcile: submitReconcile })[r.kind](i);
+}
+function decDemo(d) {
+  const r = route(), i = byKey[r.key];
+  if (d === 'r4') demoR4(i);
+  if (d === 'newtask') demoNewTask();
+  if (d === 'recheck') { S.pidAlive = false; render(); toast(T(`PID ${RUNS[i.run].pid} 已不存在`, `PID ${RUNS[i.run].pid} is gone`)); }
+  if (d === 'github') { i.git.st = i.git.st === 'VERIFIED' ? 'UNAVAILABLE' : 'VERIFIED'; i.git.attempts.push([now(), i.git.st, i.git.st === 'VERIFIED' ? '' : 'HTTP 503']); render(); }
+  if (d === 'commit') { i.git.sha = 'b4c6e8a0f2d4b6c8e0a2c4e6f8b0d2e4a6c8f0b2'; i.git.at = now(); i.git.attempts.push([now(), 'VERIFIED', '']); i.digest = 'a7f30c58e1d2b4f6a8c0e2d4f6b8a0c2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4'; FEED.unshift({ at: now(), by: 'pm', k: i.k, zh: '更换最终提交为 b4c6e8a0', en: 'changed the final commit to b4c6e8a0' }); render(); toast(T('PM 更换了最终提交，digest 变了。页面仍是旧 digest，这时提交会失败。', 'PM changed the final commit and the digest moved. This page still holds the old digest, so submitting now fails.')); }
+}
+function decReload() {
+  const r = route(), i = byKey[r.key];
+  if (r.kind === 'review') { const live = DESIGNS[i.design].find(x => x.st === 'IN_REVIEW'); if (live) S.dec.rev = live.r; }
+  if (r.kind === 'accept') S.dec.digest = i.digest;
+  S.dec.conflict = null; render();
+}
+function retryGit(i) {
+  toast(T('已重新排队 Git 校验…', 'Git verification requeued…'));
+  setTimeout(() => {
+    i.git.st = 'VERIFIED'; i.git.at = now(); (i.git.attempts = i.git.attempts || []).push([now(), 'VERIFIED', '']);
+    i.st = 'DONE'; i.bl = []; i.nx = null;
+    FEED.unshift({ at: now(), by: 'sys', k: i.k, zh: 'Git 校验通过，沿用你之前的接受自动关闭', en: 'Git verified; closed using your earlier acceptance' });
+    render(); toast(T(`${i.k} 已关闭：沿用你 ${ago(i.accepted)}的接受，没有再问你`, `${i.k} closed using your acceptance from ${ago(i.accepted)}; you were not asked again`));
+  }, 1400);
+}
+
+function go(h) {
+  const next = parseRoute(h), same = JSON.stringify(next) === JSON.stringify(ROUTE);
+  if (next.key !== S.lastKey) { S.dtab = 'overview'; S.rev = null; }
+  ROUTE = next; S.lastKey = next.key;
+  if (!same) { S.sel = -1; S.pop = null; S.menu = false; if (S.modal && S.modal.kind !== 'pal') S.modal = null; }
+  try { if (location.hash.slice(1) !== h) history.pushState(null, '', '#' + h); } catch (e) {}
+  render();
+}
+function openPal() { S.modal = { kind: 'pal' }; S.pal = { q: '', i: 0 }; layer(); }
+function closeModal() { S.modal = null; layer(); }
+function setSel(d) {
+  const rows = [...document.querySelectorAll('#main [data-row]')];
+  if (!rows.length) return;
+  S.sel = Math.max(0, Math.min(rows.length - 1, S.sel + d));
+  rows.forEach(r => r.classList.remove('is-active'));
+  const el = rows[S.sel]; el.classList.add('is-active'); el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'nearest' });
+}
+const effDark = () => S.theme === 'dark' || (S.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+function runPal(n) {
+  const x = palItems()[n]; if (!x) return;
+  S.modal = null; layer();
+  if (x.href) return go(x.href.slice(1));
+  if (x.cmd === 'new') { S.modal = { kind: 'new' }; layer(); setTimeout(() => document.getElementById('nt')?.focus()); }
+  if (x.cmd === 'lang') { S.lang = S.lang === 'zh' ? 'en' : 'zh'; keep.set('lang', S.lang); render(); }
+  if (x.cmd === 'theme') { S.theme = effDark() ? 'light' : 'dark'; keep.set('theme', S.theme); render(); }
+  if (x.cmd === 'keys') { S.modal = { kind: 'keys' }; layer(); }
+}
+function stamp(i, zh, en) { i.v++; i.up = now(); FEED.unshift({ at: now(), by: 'you', k: i.k, zh, en }); }
+function stopRun(i) { const r = i.run && RUNS[i.run]; if (r && ['RUNNING', 'QUEUED', 'STARTING'].includes(r.st)) { r.st = r.st === 'QUEUED' ? 'CANCELLED' : 'STOPPING'; return r; } return null; }
+function applyLife(action, k, reason) {
+  const i = byKey[k]; let extra = '';
+  if (action === 'hold') {
+    i.saved = i.st; i.st = 'ON_HOLD'; i.hold = { by: 'you', at: now(), zh: reason, en: reason };
+    i.bl = [...new Set([...(i.bl || []).filter(c => c !== 'CAPACITY_REACHED'), 'ON_HOLD'])];
+    i.nx = { w: 'you', zh: '已挂起：' + reason, en: 'On hold: ' + reason, act: 'resume' };
+    const r = stopRun(i); if (r) extra = T(` · 运行 ${r.id} ${r.st === 'CANCELLED' ? '已取消排队' : '已请求停止'}`, ` · run ${r.id} ${r.st === 'CANCELLED' ? 'dequeued' : 'asked to stop'}`);
+    stamp(i, '挂起：' + reason, 'put on hold: ' + reason);
+  } else if (action === 'resume') {
+    i.st = !i.saved || i.saved === 'IN_PROGRESS' ? 'NOT_STARTED' : i.saved; delete i.saved; delete i.hold;
+    i.bl = (i.bl || []).filter(c => c !== 'ON_HOLD');
+    i.nx = { w: 'pm', zh: '已恢复：等待 PM 重新校验并派发', en: 'Resumed: waiting for PM to recheck and dispatch' };
+    stamp(i, '恢复：' + reason, 'resumed: ' + reason);
+  } else if (action === 'abandon') {
+    const r = stopRun(i); if (r) extra = T(` · 运行 ${r.id} 已请求停止`, ` · run ${r.id} asked to stop`);
+    i.st = 'ABANDONED'; delete i.saved; i.abandon = { by: 'you', at: now(), zh: reason, en: reason };
+    if (i.p) { i.scope = 'PENDING'; i.bl = ['CHILD_DISPOSITION_REQUIRED']; i.nx = { w: 'you', zh: '需要你：决定范围（排除或替换）', en: 'You: decide scope (exclude or replace)', act: 'scope' }; }
+    else { i.bl = []; i.nx = null; }
+    stamp(i, '放弃：' + reason, 'abandoned: ' + reason);
+  } else if (action === 'reopen') {
+    i.st = 'NOT_STARTED'; i.nx = { w: 'pm', zh: '已重新打开：等待 PM 重新派发', en: 'Reopened: waiting for PM to dispatch' };
+    const par = i.p && byKey[i.p]; if (par && par.st === 'DONE') { par.st = 'IN_PROGRESS'; par.phase = 'children'; par.nx = { w: 'pm', zh: '子任务重新打开，父需求回到交付中，集成验收已失效', en: 'A task reopened; the parent is back in delivery and its integration acceptance is invalid' }; extra = T(` · ${par.k} 已回到交付中`, ` · ${par.k} is back in delivery`); }
+    stamp(i, '重新打开：' + reason, 'reopened: ' + reason);
+  }
+  S.modal = null; layer(); render();
+  toast(T(`已记录：${{ hold: '挂起', resume: '恢复', abandon: '放弃', reopen: '重新打开' }[action]} ${k}`, `Recorded: ${action} ${k}`) + extra);
+}
+function createReq(f) {
+  const e = f.elements, t = e.t.value.trim(); if (!t) return;
+  const n = Math.max(...I.map(i => +i.k.split('-')[1])) + 1, k = 'ADC-' + n;
+  const ac = e.a.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).map((x, j) => ['AC-' + (j + 1), x]);
+  const i = { k, p: null, tt: t, st: 'NOT_STARTED', pr: 4, lead: 'lead', it: null, due: null, mode: e.m.value, v: 1, sr: 1, phase: 'design-draft', design: 'd' + n, up: now(), ac, desc: e.d.value.trim(), adv: ['SCHEDULE_UNSET'], nx: { w: 'lead', zh: '等待产品负责人编写设计', en: 'Waiting for the product lead to write the design' } };
+  DESIGNS[i.design] = []; I.push(i); byKey[k] = i;
+  FEED.unshift({ at: now(), by: 'you', k, zh: '创建需求（未开始，未指派）', en: 'created the requirement (not started, unassigned)' });
+  S.modal = null; layer(); go('issue-' + k);
+  toast(T(`已创建 ${k} · 未开始`, `Created ${k} · Not started`));
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]'), link = e.target.closest('a[href^="#"]');
+  if (S.pop && !e.target.closest('.pop') && !(t && t.dataset.act === 'pop')) { S.pop = null; pop(); }
+  if (link && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
+  if (link) e.preventDefault();
+  if (!t) { if (link) go(link.getAttribute('href').slice(1)); else if (e.target.dataset && e.target.dataset.close) closeModal(); return; }
+  const a = t.dataset.act, k = t.dataset.k;
+  switch (a) {
+    case 'menu': S.menu = !S.menu; render(); break;
+    case 'palette': openPal(); break;
+    case 'new': S.modal = { kind: 'new' }; S.menu = false; render(); setTimeout(() => document.getElementById('nt')?.focus()); break;
+    case 'keys': S.modal = { kind: 'keys' }; layer(); break;
+    case 'close': closeModal(); break;
+    case 'lang': S.lang = t.dataset.v; keep.set('lang', S.lang); render(); break;
+    case 'theme': S.theme = t.dataset.v; keep.set('theme', S.theme); render(); break;
+    case 'toast': toast(t.dataset.msg); break;
+    case 'view': e.preventDefault(); S.tab = t.dataset.tab; S.stage = null; S.menu = false; go('issues'); break;
+    case 'tab': S.tab = t.dataset.tab; S.sel = -1; render(); break;
+    case 'group': S.group = t.dataset.v; render(); break;
+    case 'go': go(t.dataset.to); break;
+    case 'stage': S.stage = t.dataset.s || null; if (S.stage) S.tab = 'all'; go('issues'); break;
+    case 'clearq': S.q = ''; render(); break;
+    case 'reset': S.q = ''; S.stage = null; S.tab = 'all'; render(); break;
+    case 'fold': S.closed.has(k) ? S.closed.delete(k) : S.closed.add(k); render(); break;
+    case 'hold': S.showHold = S.showHold === false; render(); break;
+    case 'dtab': S.dtab = t.dataset.v; render(); break;
+    case 'rev': S.rev = +t.dataset.r; render(); break;
+    case 'props': S.propsOpen = !S.propsOpen; render(); break;
+    case 'pop': { const r = t.getBoundingClientRect(); S.pop = S.pop && S.pop.k === k && S.pop.kind === t.dataset.pop ? null : { kind: t.dataset.pop, k, x: r.left, y: r.bottom + 4 }; pop(); break; }
+    case 'setprio': { const i = byKey[S.pop.k], v = +t.dataset.v; if (i.pr !== v) { i.pr = v; stamp(i, '优先级改为 ' + PRIO[v][0], 'set priority to ' + PRIO[v][1]); } S.pop = null; render(); toast(T('优先级已更新 · 已批准的设计和交付仍然有效', 'Priority updated · approved design and delivery stay valid')); break; }
+    case 'life': S.modal = { kind: 'life', k, action: t.dataset.a }; S.pop = null; pop(); layer(); setTimeout(() => document.getElementById('lr')?.focus()); break;
+    case 'decide': {
+      S.pop = null; pop(); const i = byKey[k], act = i.nx && i.nx.act;
+      if (act === 'resume' && i.st === 'ON_HOLD') { S.modal = { kind: 'life', k, action: 'resume' }; layer(); break; }
+      if (act === 'retry') { S.modal = null; layer(); retryGit(i); break; }
+      const rt = decideRoute(i); S.modal = null; layer(); if (rt) go(rt); break;
+    }
+    case 'copy': { const url = `http://127.0.0.1:43170/w/${WS.id}/issues/${k}`; const ok = () => toast(T('已复制稳定链接', 'Stable link copied')); try { navigator.clipboard.writeText(url).then(ok, () => toast(url)); } catch (x) { toast(url); } break; }
+    case 'palgo': runPal(+t.dataset.n); break;
+    case 'dchoice': S.dec.choice = t.value; S.dec.err = null; render(); break;
+    case 'dkind': S.dec.kind = t.value; S.dec.err = null; render(); break;
+    case 'dsel': { const arr = S.dec[t.dataset.list] || (S.dec[t.dataset.list] = []), v = t.value, n = arr.indexOf(v); if (t.checked && n < 0) arr.push(v); if (!t.checked && n >= 0) arr.splice(n, 1); S.dec.err = null; render(); break; }
+    case 'dconfirm': S.dec.confirm = t.checked; render(); break;
+    case 'demo': decDemo(t.dataset.d); break;
+    case 'dview': S.dview = t.dataset.v; render(); break;
+    case 'dreload': decReload(); break;
+    case 'itab': S.itab = t.dataset.v; S.sel = -1; render(); break;
+    case 'retry': retryGit(byKey[k]); break;
+    case 'copytext': { const v = t.dataset.v, ok = () => toast(T('已复制完整值', 'Full value copied')); try { navigator.clipboard.writeText(v).then(ok, () => toast(v)); } catch (x) { toast(v); } break; }
+  }
+  if (link && a !== 'view') go(link.getAttribute('href').slice(1));
+});
+document.addEventListener('change', e => { if (e.target.dataset && e.target.dataset.act === 'boardReq') { S.boardReq = e.target.value || null; render(); } });
+document.addEventListener('submit', e => { e.preventDefault(); const f = e.target; if (f.id === 'newf') createReq(f); else if (f.id === 'lifef' && S.modal) applyLife(S.modal.action, S.modal.k, f.elements.r.value.trim()); else if (f.id === 'decf') decSubmit(); });
+function onType(el) {
+  if (el.id === 'dreason' && S.dec) { S.dec.reason = el.value; return; }
+  if (el.id === 'q') { S.q = el.value; const pos = el.selectionStart; render(); const q = document.getElementById('q'); if (q) { q.focus(); q.setSelectionRange(pos, pos); } }
+  if (el.id === 'palq') { S.pal.q = el.value; S.pal.i = 0; layer(); }
+}
+document.addEventListener('input', e => { if (!e.isComposing) onType(e.target); });
+document.addEventListener('compositionend', e => onType(e.target));
+document.addEventListener('keydown', e => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(e.target.tagName || '');
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); S.modal && S.modal.kind === 'pal' ? closeModal() : openPal(); return; }
+  if (S.modal && S.modal.kind === 'pal') {
+    const n = palItems().length || 1;
+    if (e.key === 'ArrowDown') { e.preventDefault(); S.pal.i = (S.pal.i + 1) % n; layer(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); S.pal.i = (S.pal.i - 1 + n) % n; layer(); }
+    else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); runPal(S.pal.i); }
+    else if (e.key === 'Escape') closeModal();
+    return;
+  }
+  if (e.key === 'Escape') {
+    if (S.pop) { S.pop = null; pop(); } else if (S.modal) closeModal(); else if (S.menu) { S.menu = false; render(); } else if (typing) e.target.blur(); else if (route().view === 'detail') go('issues'); else if (route().view === 'decide') go('inbox');
+    return;
+  }
+  if (typing || S.modal || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (S.gWait && Date.now() - S.gWait < 1200) { const m = { h: 'home', i: 'issues', b: 'board', d: 'inbox' }[e.key.toLowerCase()]; S.gWait = 0; if (m) { e.preventDefault(); go(m); } return; }
+  const r = route();
+  if (r.view === 'detail' && (e.key === 'j' || e.key === 'k')) { const order = roots().flatMap(x => [x, ...kids(x.k)]), n = order.findIndex(x => x.k === r.key); go('issue-' + order[(n + (e.key === 'j' ? 1 : -1) + order.length) % order.length].k); return; }
+  switch (e.key) {
+    case 'g': case 'G': S.gWait = Date.now(); break;
+    case '/': { e.preventDefault(); const q = document.getElementById('q'); q ? q.focus() : openPal(); break; }
+    case '?': S.modal = { kind: 'keys' }; layer(); break;
+    case 'c': case 'C': e.preventDefault(); S.modal = { kind: 'new' }; layer(); setTimeout(() => document.getElementById('nt')?.focus()); break;
+    case 'j': case 'ArrowDown': if (r.view !== 'detail') { e.preventDefault(); setSel(1); } break;
+    case 'k': case 'ArrowUp': if (r.view !== 'detail') { e.preventDefault(); setSel(-1); } break;
+  }
+});
+let dragKey = null;
+document.addEventListener('dragstart', e => { const c = e.target.closest && e.target.closest('[data-drag]'); if (!c) return; dragKey = c.dataset.drag; c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragKey); });
+document.addEventListener('dragend', () => { document.querySelectorAll('.dragging,.col.drop').forEach(x => x.classList.remove('dragging', 'drop')); });
+document.addEventListener('dragover', e => { const col = e.target.closest && e.target.closest('[data-col]'); if (!col || !dragKey) return; e.preventDefault(); document.querySelectorAll('.col.drop').forEach(x => x !== col && x.classList.remove('drop')); col.classList.add('drop'); });
+document.addEventListener('drop', e => { const col = e.target.closest && e.target.closest('[data-col]'); if (!col || !dragKey) return; e.preventDefault(); const k = dragKey; dragKey = null; col.classList.remove('drop'); explainMove(k, col.dataset.col); });
+const fromUrl = () => { const h = location.hash.slice(1); if (JSON.stringify(parseRoute(h)) !== JSON.stringify(ROUTE)) go(h); };
+addEventListener('hashchange', fromUrl);
+addEventListener('popstate', fromUrl);
+addEventListener('resize', () => { if (S.pop) { S.pop = null; pop(); } });
+setInterval(() => document.querySelectorAll('[data-el]').forEach(el => { el.textContent = clock(now() - +el.dataset.el); }), 1000);
+S.lastKey = route().key;
+render();
+</script>
