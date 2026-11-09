@@ -11,6 +11,7 @@ Workers hold isolated worktrees and do not edit another worker's checkout:
 | Desktop shell, daemon lifecycle, shared MCP entry, packaging | Codex | Main checkout, branch `codex/desktop-shell` (uncommitted desktop work in progress) |
 | Web interaction design prototype | Claude | Merged into `main` via PR #4 from `.claude/worktrees/cross-agent-platform-ui-design-a56ece` (bilingual settings, persistent zoom, adaptive layouts) |
 | Git normalization/filter + multi-repository verification | flash, with lead-defined design | `.agents/worktrees/git-normalization-multirepo`, branch `git-normalization-multirepo` from `1a9c908`, PR #1 |
+| W0-2 historical Git proof guard support | Codex delegated support worker; flash remains primary Git owner | `.agents/worktrees/w0-git-legacy-proof`, branch `codex/w0-git-legacy-proof` from immutable PR #1 head `53e00367571115fd8699bbed215bd199d32d4499`; owns only `src/git.ts` legacy normalization, its Git read/closure call sites in `src/workflow.ts` and `src/web-views.ts`, `tests/git-normalization.test.ts`, and integration/ownership/status documentation. No digest, snapshot, R1, full multi-repository closure, or automatic-close policy changes |
 
 The Git slice claims `src/git.ts`, `src/git-verifier.ts`, `src/snapshots.ts`, `src/qa-policy.ts`, `src/verify-execution.ts`, the `git_submit`/`completeGit` paths in `src/workflow.ts`, Git evidence display in `src/web-views.ts`, and `tests/git.test.ts`. Treat that area as claimed until the branch merges.
 
