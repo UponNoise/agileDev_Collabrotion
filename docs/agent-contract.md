@@ -20,7 +20,7 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | --- | --- | --- |
 | `workspace_resolve` | Resolve/select binding from trusted host context, advertised roots, or explicit validated path | No disk-wide scan; ambiguous results require selection; registration is idempotent |
 | `issue_list` | Filter by workspace, parent, state, role, assignee, readiness; cursor + page size | Workspace-scoped; default 20 compact rows |
-| `issue_get` | `workspace_id`, `issue_id`, `view=brief|full|history|evidence`, optional cursor | Brief includes next actions; history/evidence paginated |
+| `issue_get` | `workspace_id`, `issue_id`, `view=brief\|full\|history\|evidence`, optional cursor | Brief includes next actions; history/evidence paginated |
 | `issue_create` | Workspace, optional parent, type, parent title or task suffix, draft description | Human/lead/PM; always `NOT_STARTED`; no implicit execution |
 | `issue_update` | Allowed metadata fields or new draft content revision, expected version | No status/role/grant patch; material design/scope edits create a revision |
 | `design_submit` | Requirement, exact draft revision, review summary | Lead; freezes review candidate and requests human decision |
@@ -36,7 +36,7 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | `run_interrupt` | Run ID, reason, expected version | Authorized coordinator; stop request is distinct from confirmed termination |
 | `gap_list` | Workspace/parent, severity/category, cursor | Explains deterministic gaps with IDs and remediation |
 | `iteration_list` / `iteration_get` | Workspace, state, cursor; or an iteration with its members and derived progress | Read within scope |
-| `iteration_create` / `iteration_update` / `iteration_start` / `iteration_close` / `iteration_membership_set` | Iteration fields, member issue versions, close dispositions, expected versions | Lead/PM; membership is metadata and never gates work; closing needs a disposition for every unfinished member |
+| `iteration_create` / `iteration_update` / `iteration_start` / `iteration_close` / `iteration_membership_set` | Iteration versions, complete source/destination membership revision/hash, all affected issue versions, adoption match-set hash, unfinished dispositions | Lead/PM; one atomic membership transaction; metadata does not stale artifact approvals or gate work; add/remove/transfer/adoption races reject without partial moves |
 | `defect_list` / `defect_get` | Workspace, issue, state, severity, origin, cursor; or a defect | Read within the caller's existing scope |
 | `defect_propose` | Target issue, severity, reproduction, expected/actual behavior, optional criteria | Any agent on an issue it can read; creates `PROPOSED` only, for human triage |
 
@@ -44,7 +44,7 @@ The common schema envelope contains `contract_version`, `workspace_id`, and for 
 
 Human web endpoints additionally support design decisions, acceptance decisions, grants/revocations, and explicit scope exclusion/reopen decisions. They are not registered as agent-callable tools. A future chat-human adapter must pass the same human attribution tests before forwarding those commands.
 
-Accepted revision R1, 2026-11-09, adds the human-only `inbox_list`, `decision_batch_accept`, direct defect reports, triage, withdrawal, MINOR waivers, and the rejection classification on delivery decisions. None is an agent-callable tool or a grantable action.
+Accepted revision R1 adds human-only `inbox_list`, `decision_batch_accept`, defect reports/triage/withdrawal/waivers, and rejection classification; none is MCP-callable or grantable. Batch previews expose each full manifest/review/Git/defect packet and bind exact issue/candidate/digest/decision-set preconditions. A stale batch saves nothing; a valid batch atomically saves all acceptances even when some closures remain blocked. Accepted items remain visible/actionable until explicit authorized completion. Existing `delivery_complete` uses current saved acceptance/authority and all guards; no duplicate human approval is invented. Git/CI/verifier fact callbacks cannot invoke completion or create human decisions. Explicit service-authorized worker/lead/QA/human command transitions remain valid.
 
 Implemented delegation refinement, 2026-11-07: `grant_list` returns this authenticated lead/PM's paginated issue-specific authority and status. Supply an available `grantId` to `issue_transition` or `delivery_complete`; the service rechecks grantee/action/scope/expiry/uses and all normal transition guards atomically. Human-only `grant_create` binds the displayed `authorizationScopeHash`, current issue version, and, for completion, exact candidate/digest. `grant_revoke` checks both issue and grant versions. Neither command is exposed over MCP. See [the executable local contract](local-development.md#human-action-grants) for current camelCase fields and limits. This refinement does not implement batch decisions or arbitrary human-event attribution.
 
@@ -162,7 +162,7 @@ Every assignment packet includes:
 
 The brief contains references and a compact summary; agents fetch the necessary design/evidence sections on demand. Do not copy the whole project history into every child prompt.
 
-Revision R1 additions: packets carry the iteration name, end date, and a goal excerpt as advisory context. QA packets list each open defect, and each defect whose waiver digest is stale, as compact references that the report must answer individually. Both stay within the NF05 budget.
+Revision R1 additions: iteration name/end/goal are advisory packet context. QA packets freeze a versioned required defect-set reference, count/hash and paginated complete IDs/versions for every OPEN or stale-WAIVED defect. Reports bind that set and answer each member; accepted reports record their input and resulting sets after own authorized findings/fixes. Human/waiver/batch previews bind the complete confirmed decision set as an additional precondition alongside the existing artifact digest. Relevant concurrent mutations stale affected current evidence, not historical digest identities. Own authorized result sets avoid self-staling. Compact packets/expansion retain the NF05 budget.
 
 Handoff must state implemented behavior, criteria covered, evidence references, final artifact snapshot, known limitations, and anything still blocked. A narrative such as `finished, all good` is not sufficient.
 

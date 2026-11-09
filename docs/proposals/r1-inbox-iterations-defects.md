@@ -39,13 +39,13 @@ The service computes the inbox from current records on each read. There is no se
 | Kind | Present while | Human action | Blocking | `pendingSince` |
 | --- | --- | --- | --- | --- |
 | `DESIGN_REVIEW` | A requirement design revision is `IN_REVIEW` | Approve or request changes on that exact revision | Yes | Submission of that revision |
-| `DELIVERY_ACCEPTANCE` | An issue is in `USER_ACCEPTANCE` with no human decision on its current digest | Accept, with any MINOR waivers, or reject that digest | Yes | Entry into the current state |
+| `DELIVERY_ACCEPTANCE` | An issue is `USER_ACCEPTANCE` without a current valid acceptance for its digest and applicable decision defect set | Inspect current evidence and accept, with any MINOR waivers, or reject | Yes | First event making that exact decision target pending |
 | `SCOPE_DECISION` | An in-scope child is `ABANDONED` without a current human scope decision, or an exclusion became stale | Exclude, replace, or restore scope | Yes | The abandonment or staleness event |
 | `RUN_RECONCILE` | A run is `UNCERTAIN`, or legacy unbound work requires `work_reconcile` | Confirm the stop and reconcile | Yes | The event that made the run uncertain or the work unbound |
-| `CLOSURE_BLOCKED` | A current human acceptance exists but a closure guard still fails | Inspect the named blocker; retry Git verification where applicable | No | The later of the acceptance and the latest failed verification |
+| `CLOSURE_BLOCKED` | A current human acceptance exists and the issue remains `USER_ACCEPTANCE`, whether guards are blocked or ready | Inspect/retry named blockers, or explicitly invoke authorized `delivery_complete` when ready | No | First unresolved pending event for that accepted target; retry/recovery never resets it |
 | `DEFECT_TRIAGE` | A defect proposal awaits triage (Part C) | Accept with a disposition, or reject | No | The proposal event |
 
-Each entry carries its workspace, kind, target issue, run, or defect ID and key, the exact version and revision hash or delivery digest, `pendingSince`, age, blocking flag, and a link to the decision view. The inbox covers every workspace the human session may read, grouped by workspace. Blocking entries come first, then the oldest. The round-two interface prototype's decision inbox is the interaction reference.
+Each entry carries its workspace, kind, exact target/version/hash or digest, first unresolved `pendingSince`, age, blocking flag, and decision link. Accepted `CLOSURE_BLOCKED` entries expose guard blockers or `READY_TO_COMPLETE` and remain until explicit completion. A genuinely replaced target or completed/reopened cycle starts a new epoch; retry, read, metadata, and guard recovery do not. The inbox covers readable workspaces, grouped by workspace, with blocking entries first and then oldest. The round-two prototype is the interaction reference.
 
 ### A2. Aging
 
@@ -55,10 +55,10 @@ Each workspace has an aging threshold set by the human: default 24 hours, range 
 
 Workflow §5 already allows batch decisions that enumerate exact versions and digests. R1 limits batches to delivery acceptance. Design approvals and all rejections stay individual, because they need per-item reading and actionable feedback.
 
-- A batch holds 2 to 20 `DELIVERY_ACCEPTANCE` entries from one workspace. The confirmation lists each issue key, title, candidate, and digest.
+- A batch holds 2 to 20 delivery entries from one workspace. Each confirmation expands the full readable requirement/design/scope, complete manifest, PRE_QA/QA/FINAL and criterion/check evidence, versioned defects/waivers, Git mapping/verification facts, and parent integration packet. IDs and digests alone do not constitute review.
 - An item with an open MINOR defect that needs a waiver cannot join a batch.
-- The command carries each issue ID, expected version, candidate ID, and digest. The service applies the batch in one transaction. If any item changed, nothing is accepted, the response names the stale items, and the dialog keeps the selection and reason.
-- Each item receives its own immutable decision record that references the batch ID. Closure guards run per item, as for a single acceptance.
+- The command binds each issue ID/version, candidate, digest, and decision defect-set revision/hash. Revalidate all before saving any decision. A stale target or set rejects the entire batch, names stale items, and retains selection/reason; nothing is accepted.
+- A valid batch atomically saves all per-item immutable acceptances referencing the batch ID, even when some items remain Git-blocked. Its explicit human command may close guard-ready items; remaining accepted issues stay visible with blockers or a ready completion action. Git/CI/verifier recovery changes facts/readiness only. Later explicit authorized `delivery_complete` rechecks the saved unchanged acceptance and all guards, without inventing another approval. Design decisions, QA independence, grants, and existing completion authority are unchanged.
 
 ### A4. Attention signals
 
@@ -94,12 +94,14 @@ An iteration belongs to one workspace. It has an ID and stable URL, a name of 1 
 - Membership is planning metadata under workflow §6 rule 5 and the §9 plan rules. It never stales a design approval, ready plan, criterion coverage, review, QA report, delivery acceptance, or grant, and it never gates claim or dispatch.
 - `plan_apply` and `issue_update` accept `iterationId` with the same validation. A bulk command changes membership for many issues at their expected versions.
 
+Every membership entry point, including `plan_apply` and `issue_update`, increments each affected source/destination iteration's `membershipRevision` and canonical hash of the complete sorted member ID set. These preconditions detect unseen additions/removals; issue versions additionally bind member state/content. The same transaction updates all touched memberships and issue metadata without invalidating artifact approvals or grants.
+
 ### B3. Commands and permissions
 
 Human, lead, and PM may create, edit, start, and close iterations and change membership. Workers and QA read the iteration context in their packets. Lead and PM use MCP tools `iteration_create`, `iteration_update`, `iteration_start`, `iteration_close`, `iteration_membership_set`, `iteration_list`, and `iteration_get`, with the normal envelope, expected versions, and idempotency keys.
 
 - Starting requires a `PLANNED` iteration and no other `ACTIVE` one.
-- Closing applies to a `PLANNED` or `ACTIVE` iteration. Every unfinished member needs an explicit disposition: carry over to a named `PLANNED` iteration, or return to the backlog. The command carries the iteration version and each unfinished member's version. Any change fails the whole close, names the changed items, and retains the dispositions.
+- Closing a `PLANNED` or `ACTIVE` iteration binds its version, complete membership revision/hash and all member issue versions, plus an explicit carry-over/backlog disposition per unfinished member. Each carry-over destination supplies its iteration and complete membership preconditions. Validate and apply source/destination/issue changes in one transaction; any member edit, added/removed member, or transfer race fails everything and retains input.
 - Nothing rolls over on a timer. An `ACTIVE` iteration past its end date produces the advisory gap `ITERATION_OVERDUE` for human, lead, and PM.
 - Iterations are never deleted. A mistaken empty iteration is closed.
 
@@ -115,6 +117,8 @@ Closing writes an immutable summary derived from events:
 
 It holds counts and references only, with no derived productivity score. The summary exports as local Markdown through the FR21 export path.
 
+Closed membership and summaries remain immutable historical records. Closing removes finished items from live iteration membership; unfinished items move only by their explicit dispositions. Reopening a former member of a closed iteration puts it in the current backlog, preserves its historical membership/summary, and never reopens or rewrites that iteration.
+
 ### B5. Planning aids
 
 These views are advisory and never gate work.
@@ -126,7 +130,7 @@ These views are advisory and never gate work.
 
 ### B6. Migration
 
-Existing free-text values are kept read-only as `legacyIterationLabel` and shown as a label. No iteration record is created automatically. A human, lead, or PM may create an iteration that adopts a label: one recorded command adds every non-terminal issue carrying that label. After migration, writes to the old `iteration` field fail with a validation error that names `iterationId`.
+Existing free-text values remain read-only `legacyIterationLabel` values; no iteration is silently created. Explicit adoption supplies the complete eligible issue ID/version set and its hash plus destination iteration/membership preconditions. The transaction re-derives that full match set, including newly eligible issues, and rejects additions/removals/edits or destination races instead of adopting unseen work. Writes to the old `iteration` field fail naming `iterationId`.
 
 ### B7. Agent packets
 
@@ -178,10 +182,10 @@ Each defect has:
 
 This replaces the current rule that any later QA pass resolves every earlier open defect (D15).
 
-- The QA work packet lists, as compact references within the NF05 budget:
+- The QA work packet freezes the complete required defect set: sorted IDs/versions of every `OPEN` defect and every stale `WAIVED` defect, with a set revision/hash detecting additions/removals, within the NF05 packet budget:
   - each `OPEN` defect;
   - each `WAIVED` defect whose waiver digest is no longer current.
-- A QA report gives each listed defect a result: `FIXED`, `PRESENT`, `BLOCKED`, or `NOT_RUN`, with captured check references. A missing entry rejects the report with `EVIDENCE_MISSING`.
+- A QA report binds that exact set and gives every listed defect `FIXED`, `PRESENT`, `BLOCKED`, or `NOT_RUN` plus captured checks. Missing entries or a changed required set reject the report as stale/missing evidence; a newly confirmed MAJOR during QA requires a fresh packet.
 - `PASS` requires every listed BLOCKER or MAJOR defect to be `FIXED`, in addition to the existing criterion rules. New BLOCKER or MAJOR findings require `FAIL`. New MINOR or INFO findings may accompany a `PASS` and create `OPEN` defects. This implements the workflow §7 target policy. It relaxes the stricter current implementation for MINOR findings only, because closure still requires each to be fixed or waived.
 - Only a completed `PASS` report changes defect states:
   - `FIXED` defects become `RESOLVED` with the report reference;
@@ -190,12 +194,16 @@ This replaces the current rule that any later QA pass resolves every earlier ope
   A `FAIL` report records its results without changing defect states.
 - A person may act as QA only through the labeled human-QA path (workflow §4). Lead and PM cannot resolve, waive, reject, or change the severity of a QA-origin defect.
 
+Confirmed-defect additions/removals and relevant version, severity, state, verification-content, or waiver-validity changes stale affected current packets/reports and human previews. Validate a QA report against the pre-transaction required set, then atomically create its own findings and resolve verified fixes, recording both input and resulting sets. Those authorized own effects do not stale that report; later changes must match its resulting evidence or require refresh. Human decisions similarly validate the pre-decision set and record the resulting set after authorized own waivers. Staleness changes guard/readiness facts, never implicitly advances issue lifecycle. Historical reports and artifact digest identities remain intact.
+
 ### C4. MINOR waivers
 
-- Only a human may waive an `OPEN` MINOR defect, only on an issue in `USER_ACCEPTANCE`, and only with a reason. The waiver binds the defect version and the current delivery digest.
-- Waivers are normally submitted with the acceptance decision in one transaction. A standalone `defect_waive` is also available. Neither is an MCP tool or a grantable action.
-- Closure treats a `WAIVED` defect as resolved only while its waiver digest equals the current digest. Otherwise the blocker is `WAIVER_STALE`, and the next QA round must verify the defect again.
+- Only a human may waive an `OPEN` MINOR during `USER_ACCEPTANCE`, with a reason, current artifact digest, expected defect version, and complete decision defect-set revision/hash. Decision/waiver/batch previews bind all confirmed `OPEN` and `WAIVED` IDs/versions, including current waivers; untriaged proposals have no blocking authority.
+- Waivers are normally submitted with acceptance in one transaction; standalone `defect_waive` remains human-only and non-grantable. Validate the pre-decision set/version, then atomically record the authorized waiver, both expected and resulting defect versions, and the resulting set. This own state/version change does not make its waiver/acceptance stale.
+- Closure permits a `WAIVED` MINOR only while its artifact digest and covered resulting defect version remain current. The complete input decision-set precondition prevents stale waiver confirmation; the resulting set records audit/decision provenance rather than making every other defect's later authorized waiver invalidate this waiver. Relevant concurrent changes stale affected current QA/decision previews and closure evidence. A changed target digest produces `WAIVER_STALE`; later QA verifies that defect again. Historical digest/approval identities are not rewritten.
 - A waiver cannot cover a BLOCKER or MAJOR defect, an untested mandatory criterion, or a missing design approval (workflow §7). Items that need waivers cannot be batch-accepted (A3).
+
+Waiving a known MINOR already explicitly covered by current QA is a human disposition overlay, not a QA FIXED result; that authorized state/version change alone does not stale the unchanged QA report. Multiple same-decision waivers, or a later authorized waiver of another known MINOR, preserve one another when their own defect/digest identities remain current. Record the pre/post-set derivation. This narrow exception covers no new defect, severity/reproduction/check change, or mandatory criterion, and grants no authority to alter historical reports.
 
 ### C5. Register, interfaces, and gaps
 
@@ -209,9 +217,9 @@ New scenarios:
 
 | ID | Given / action | Expected observable result |
 | --- | --- | --- |
-| AC39 | Seed a design review, delivery acceptance, closure-blocked acceptance, abandoned in-scope child, uncertain run, and defect proposal across two workspaces. An agent tries to create, dismiss, or resolve an inbox entry. Batch-accept three deliveries while one digest changes. Leave the desktop unfocused, close and reopen it, and click a signal | Exactly the derived entries appear with exact targets and ages, and agent attempts fail. The batch accepts nothing, names the stale item, and keeps its input. Taskbar flash and overlay appear while unfocused and clear at zero. Operating-system notifications appear only where verified and omit titles by default. A click opens the revalidating decision view without deciding. Entries persist across close and reopen, and an entry past the aging threshold yields the gap |
-| AC40 | Create invalid dates, a second active iteration, and cross-workspace or terminal membership. Change membership of approved, planned, reviewed, and granted items. Close with unfinished members, with and without dispositions, while a member changes concurrently. Migrate legacy labels, and write the old field through MCP | Invalid requests are rejected. Membership changes stale nothing and gate nothing. Close requires a disposition for each unfinished member and fails atomically on a concurrent change with input retained. Summary counts match events. The flow chart reconstructs daily membership. Labels are preserved and adopted only by explicit command. Old-field writes fail and name `iterationId` |
-| AC41 | QA reports a MINOR and a MAJOR defect. The user rejects deliveries as defect, scope change, and clarification. An agent proposes an escaped defect on a done item, and the human triages it with each disposition. QA omits a listed defect, then verifies all. The human waives a MINOR defect, then a new candidate appears. A lead tries to waive, triage, or downgrade | Each origin creates the correct record. A scope change blocks rework until a newer approved design exists. An omission rejects the report, and only a `PASS` report resolves `FIXED` defects. A MINOR waiver permits closure only at its digest and becomes `WAIVER_STALE` after the new candidate. Reopen preserves closed history and reopens affected parents. Lead attempts are denied |
+| AC39 | Seed every inbox kind across two workspaces, including accepted-but-ready delivery; attempt agent inbox writes; batch-confirm full evidence while one target/digest or defect set changes, then accept a valid batch during a Git outage; recover verification for accepted leaves and parents; retry failures past the aging threshold; exercise unfocused/closed/reopened desktop and signal clicks | Derived entries bind exact targets; agents cannot mutate them. Readable full manifest/review/Git/defect packets are available per item. Stale batches save nothing; valid batches save all acceptances while per-item guards may block closure. Git/CI/verifier facts advance neither lifecycle nor human decisions; accepted ready items remain actionable until explicit authorized completion with the same saved approval. Retry/recovery does not reset first unresolved age. Signals only open revalidating views, omit titles by default, and report OS capability honestly; taskbar/count/overlay/lifetime and cross-workspace/privacy checks pass |
+| AC40 | Try invalid dates, another active iteration, cross-workspace/terminal membership, and old-field writes; change metadata of approved/planned/reviewed/granted issues; race close against member edits/add/remove, cross-iteration carry-over, and legacy-label adoption with a newly eligible match; reopen a former closed-iteration member | Invalid requests fail. Membership never stales artifact approvals/plans/grants or gates work/capacity. Complete source/destination membership revision/hash, all member issue versions, adoption match sets, and unfinished dispositions are checked atomically; races reject every partial move with input retained. Closed summaries and historical membership remain unchanged; reopened former members return to current backlog. Event-derived counts/daily flow and explicit legacy adoption remain correct; old writes name `iterationId` |
+| AC41 | Exercise QA/user/escaped defect origins, every rejection class and human triage disposition; omit required results; add a confirmed MAJOR during QA and a MINOR during batch preview; change a defect after waiver preview; submit report-owned new findings/fixes and an atomic human MINOR waiver; change candidate/digest; replay unchanged historical evidence; attempt lead waiver/triage/downgrade | Complete versioned required/decision defect sets detect additions/removals and relevant changes. Stale packets/reports/previews reject without partial effects; fresh QA verifies every required defect. Only completed PASS resolves FIXED defects. Authorized own findings/resolutions/waivers record input/result sets without self-staling. Waivers bind digest and expected/resulting versions; later changed evidence becomes stale. Scope-change rework waits for a newer approved design. Reopen preserves history/parent rules; unchanged old digest/approval/closed evidence is not rewritten; unauthorized lead actions fail |
 
 Amended scenarios:
 
@@ -237,7 +245,7 @@ Implementation will make some recorded evidence stale:
 
 These must be rerun. Existing results remain historical evidence of the old behavior.
 
-R1 itself invalidates no design approval, delivery acceptance, or grant. Issues with open defects need explicit verification in their next QA round. Product specification 0.1 is still unapproved, so R1 invalidates no specification approval.
+R1 does not rewrite artifact digest identities or historical design, delivery, QA, or grant records, and does not blanket-invalidate unmodified pre-R1 closed decisions. New rounds/current previews capture the new set contract; relevant later changes require fresh affected evidence. Existing unchanged pending legacy acceptance retains its policy until such changes. Product specification 0.1 otherwise remains proposed; accepting R1 records a project specification decision only, never a product-managed human/QA approval.
 
 ## 7. Decisions
 
@@ -257,7 +265,7 @@ The user accepted every proposed default on 2026-11-09.
 On 2026-11-09 the accepted text was copied into:
 
 - [product specification](../product-spec.md) §4 and §9;
-- [workflow](../workflow.md) §3 for rejection classification, §5 for batch acceptance, and §7 for defect states, verification, and waivers;
+- [workflow](../workflow.md) §3 for scoped explicit transitions, §5 for inbox/batch completion, §7 for versioned defect evidence, §9/10 for explicit parent/Git completion, and §11 for complete membership preconditions;
 - [agent contract](../agent-contract.md) §2, adding tools and withdrawing `approval_request`, and §5 for packet fields;
 - [acceptance catalogue](../acceptance.md) §1;
 - [delivery plan](../delivery-plan.md) §4.
@@ -271,12 +279,12 @@ Proposed seed tasks:
 | B21 | Defect tracking——[Feature] Register: require explicit verification -> no implicit defect resolution | R1 acceptance | AC41 |
 | B22 | Human attention——[Feature] Desktop: signal new blocking decisions -> owner notices without polling | B19 | AC39, AC36 |
 
-Build service records, projections, and commands first, then web views, then desktop signals. Web work must be coordinated with the in-flight Chinese/English localization of `web/` and the paused interface prototype, so that two workers never edit the same files. Desktop work follows the desktop-shell ownership. Each slice records its specification revision, tests, and limitations in [implementation status](../implementation-status.md).
+After W1 merges, isolated helpers/feature tests may proceed under the accepted ownership plan, with one integrator at a time for shared `workflow.ts`/`contracts.ts` command/schema/gap routing in order W2c -> W2a -> W2b. The Git owner's W0-2 compatibility slice remains claimed until PR #1 integration. The explicit Git callback correction follows W1 plus PR #1 and precedes inbox consumption of verification facts. Chinese/English localization is already merged; one assigned web owner integrates the inbox, iteration, defect, and batch surfaces, while prototype round 3 remains paused. Rebase and independently review each assembled package; no implementation or phase completion is implied by W1.
 
 ## 9. Not adopted from TAPD
 
 - Administrator-configurable states or transitions. The product's value is that gates cannot be bypassed. Display names and extra metadata fields can be considered separately.
-- Lifecycle changes driven by Git or CI events or by agent self-reports. Git events may later record facts such as merged, tagged, or deployed, or trigger verification. They never advance a gate.
+- Lifecycle changes driven by Git/CI/verifier event-fact callbacks or mere agent success claims. Facts may record merged/tagged/deployed or verification/readiness/reminders, never advance issue gates or create human decisions. Explicit scoped worker/lead/QA/human commands remain authorized by normal service rules. Saved acceptance can be completed only through an explicit authorized completion command; readiness is not closure.
 - Timer-driven status changes or rollover of unfinished work.
 - Chat or email bots. The MVP excludes chat and email integrations, and remote channels remain FR26.
 - Gantt charts and work-hour entry. Dependencies and run durations cover the agent case.

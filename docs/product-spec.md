@@ -58,7 +58,7 @@ Priority `M` means mandatory for the P5 MVP; `L` means later. Acceptance IDs ref
 | FR12 | M | Bind implementation, test, lead, QA, and human acceptance evidence to the reviewed requirement/artifact revision | AC05, AC20 |
 | FR13 | M | Require a final immutable, repository-verified commit link before Git-backed work reaches `DONE`; preserve non-Git evidence without fabricated commits | AC21–AC23 |
 | FR14 | M | Give each item a stable direct URL, searchable key, parent links, documents, and complete transition/decision history | AC09, AC24 |
-| FR15 | M | Support backlog, dependency-aware planning, optional estimates and dates, optional iteration records with explicit membership and close disposition, and a bounded concurrent-work policy | AC08, AC25, AC40 |
+| FR15 | M | Support backlog/dependencies, optional estimates/dates, optional iteration records with versioned complete membership and atomic close/carry-over/adoption dispositions, and bounded concurrency | AC08, AC25, AC40 |
 | FR16 | M | Visual web UI supports workspace switching, parent/task views, board/list, item details, design review, acceptance, and a gap panel | AC26, AC27 |
 | FR17 | M | Compact agent tools return scoped work packets, legal next actions, and concrete blocker reasons without requiring UI automation | AC28 |
 | FR18 | M | Codex, DSH, and Claude Code can all operate the same workspace data through documented installation/configuration paths | AC29, AC38 |
@@ -70,8 +70,8 @@ Priority `M` means mandatory for the P5 MVP; `L` means later. Acceptance IDs ref
 | FR24 | M | Keep issue data/evidence local and workspace-scoped by default; protect human approval channels and exclude private records from public repository sync | AC14, AC36 |
 | FR25 | L | Optional GitHub/Jira/Linear issue projection with explicit field ownership and synchronization policy | Separate P6 spec |
 | FR26 | L | Shared server, multiple human accounts, workspace membership, remote runners, and remote notification channels such as chat, email, or webhooks; local desktop signals belong to FR27 | Separate P6 spec |
-| FR27 | M | Derive one human decision inbox from authoritative records with exact targets and ages, support exact-digest batch delivery acceptance, and signal new blocking decisions locally; no signal or batch decides unseen or changed items | AC14, AC39 |
-| FR28 | M | Track defects from QA, user acceptance, and post-closure reports in one register; require human triage of agent proposals, explicit independent QA verification for resolution, and digest-bound human waivers for MINOR residual risk | AC19, AC41 |
+| FR27 | M | Derive the human inbox from exact authoritative targets with first-unresolved ages and accepted-ready completion actions; provide complete readable evidence and exact target/defect-set-bound batch acceptance; local signals never decide unseen/changed items | AC14, AC22, AC39 |
+| FR28 | M | Track QA/user/escaped defects with human triage of agent proposals, complete versioned QA/decision defect sets, explicit independent verification, and human MINOR waivers bound to the artifact digest and resulting defect evidence | AC19, AC20, AC41 |
 
 ## 5. User journeys
 
@@ -173,12 +173,14 @@ Revision R1 decisions, accepted by the user on 2026-11-09 with every proposed de
 | D15 | QA verifies every listed defect explicitly | Replaces implicit resolution by a later QA pass |
 | D16 | Any agent may propose a defect on an issue it can already read; a human triages | A proposal never becomes a confirmed defect without a human decision |
 
+R1 safety clarifications preserve D11–D16: Git/CI/verifier observations change facts/readiness only, while existing explicit scoped commands retain their authorization. Accepted pending work needs explicit completion without a fabricated second approval. Complete membership/defect-set snapshots are concurrency preconditions, not new approval roles or rewritten artifact digests. Closed history and unchanged pre-R1 evidence keep their original identities; affected fresh rounds/current decisions use the clarified contract.
+
 ## 10. Definition of ready and done
 
 **Ready to implement:** user-approved applicable design revision; concrete task scope and acceptance mapping; assigned accountable worker; cleared blocking dependencies; valid execution binding; available concurrency/cost policy; no effective hold; no unresolved readiness blockers. Dates and estimates remain optional.
 
-**Task done:** current implementation evidence; initial lead pass; independent QA pass; final lead pass; human acceptance of that snapshot or an exact authorized close delegation; every non-INFO defect resolved, or MINOR and waived for the current digest; Git/non-Git evidence complete; closure transaction and audit event committed.
+**Task done:** current artifact/review/QA and applicable defect-set evidence; human acceptance of that snapshot or exact authorized delegation; non-INFO defects resolved or current MINOR waivers; required Git/non-Git proof; an explicit authorized acceptance/completion transaction with its audit event. Fact callbacks cannot supply that transition.
 
-**Parent done:** applicable design approved; nonempty in-scope delivery; every in-scope child done; any exclusions explicitly approved; all parent criteria covered and passed; integration evidence and lead/human acceptance current. The service derives completion after these conditions pass; neither an empty child set nor `ABANDONED` alone satisfies them.
+**Parent done:** applicable design approved; nonempty in-scope delivery; every in-scope child done; exclusions approved; all parent criteria passed; current integration, lead/QA, defect-set and human evidence. The service derives readiness from these facts; an explicit authorized parent acceptance/completion command records DONE. Neither an empty child set nor ABANDONED nor a callback alone completes it.
 
 **Phase done:** required scenarios pass with captured evidence, outstanding defects are disclosed, and the human accepts the phase under the delivery plan. This document itself is not an approval receipt.

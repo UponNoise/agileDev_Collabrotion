@@ -18,13 +18,16 @@ const fail = (error: unknown) => {
   dialog.showErrorBox('AgileDev Collaboration', error instanceof Error ? error.message : 'The local application could not start.');
   app.quit();
 };
-async function openWorkspace() {
+function startService() {
   const serviceRoot = app.isPackaged ? join(process.resourcesPath, 'service') : resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const node = app.isPackaged ? join(serviceRoot, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node') : process.env.AGILEDEV_NODE_PATH ?? 'node';
   const env: NodeJS.ProcessEnv = { ...process.env, AGILEDEV_DATA_DIR: directory };
   for (const key of ['AGILEDEV_TOKEN', 'AGILEDEV_ENDPOINT', 'ELECTRON_RUN_AS_NODE']) delete env[key];
-  // A bounded Node bootstrap keeps the long-lived service independent of Electron's child lifecycle.
-  await promisify(execFile)(node, [join(serviceRoot, 'dist', 'cli.js'), 'service-start'], { env, windowsHide: true, timeout: 25000, maxBuffer: 65536 });
+  // Spawn the bounded bootstrap before Chromium launches helpers: Windows children inherit their IPC endpoints, and a service holding one keeps this process alive after its window closes.
+  return promisify(execFile)(node, [join(serviceRoot, 'dist', 'cli.js'), 'service-start'], { env, windowsHide: true, timeout: 25000, maxBuffer: 65536 });
+}
+async function openWorkspace(serviceStart: Promise<unknown>) {
+  await serviceStart;
   const config = readDescriptor(directory);
   if (!config || !await serviceAvailable(config, directory)) throw new Error('The local service did not establish a verified endpoint.');
   const pairing = await fetch(`${config.endpoint}/api/ui/pairing`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { authorization: `Bearer ${config.ownerToken}`, 'content-type': 'application/json' }, body: '{}' });
@@ -80,7 +83,9 @@ async function openWorkspace() {
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
+  const serviceStart = startService();
+  serviceStart.catch(() => {});
   app.on('second-instance', () => { if (window?.isMinimized()) window.restore(); window?.show(); window?.focus(); });
   app.on('window-all-closed', () => app.quit());
-  app.whenReady().then(async () => { Menu.setApplicationMenu(null); await openWorkspace(); }).catch(fail);
+  app.whenReady().then(async () => { Menu.setApplicationMenu(null); await openWorkspace(serviceStart); }).catch(fail);
 }
