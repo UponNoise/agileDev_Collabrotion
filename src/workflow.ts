@@ -7,7 +7,7 @@ export { inside } from './paths.js';
 import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, integrationManifest, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
-import { githubCommitUrl, inspectGitBinding, submissionEntries } from './git.js';
+import { githubCommitUrl, inspectGitBinding, normalizeLegacyAttempt, submissionEntries } from './git.js';
 import { workspaceView,issueView,runsView } from './web-views.js';
 import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
@@ -117,7 +117,11 @@ export class Workflow {
       let deliveryDigest: string | null = null;
       if (issue.state === 'USER_ACCEPTANCE') { try { deliveryDigest = acceptanceDigest(s,issue); } catch {} }
       const submission = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
-      const git = submission ? { ...submission,entries: submissionEntries(submission).map((entry,entryIndex) => ({ ...entry,attempt: s.list<GitAttempt>('git_attempt',issue.workspaceId).find(a => a.submissionId === submission.id && a.attempt === submission.attempt && a.entryIndex === entryIndex) ?? null })) } : null;
+      const git = submission ? (() => {
+        const entries = submissionEntries(submission);
+        const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === submission.id && a.attempt === submission.attempt).map(a => normalizeLegacyAttempt(a,entries));
+        return { ...submission,entries: entries.map((entry,entryIndex) => ({ ...entry,attempt: round.find(a => a.entryIndex === entryIndex) ?? null })) };
+      })() : null;
       const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
       const coverage = isAggregate(s,root) ? planCoverage(s,root) : null;
       return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue),executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
@@ -422,7 +426,7 @@ export class Workflow {
           if (entries.length > 1) blockers.push('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED');
           if (git.state !== 'VERIFIED') blockers.push(git.errorCode ?? (['QUEUED','VERIFYING'].includes(git.state) ? 'GIT_VERIFICATION_PENDING' : 'GIT_VERIFICATION_REQUIRED'));
           else {
-            const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt);
+            const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt).map(a => normalizeLegacyAttempt(a,entries));
             const primary = round.find(a => a.entryIndex === 0);
             if (!git.verifiedAt || !git.treeSha || git.treeSha !== git.expectedTreeSha || round.length !== entries.length || round.some(a => a.state !== 'VERIFIED') || !primary || primary.state !== 'VERIFIED' || primary.submissionId !== git.id || primary.treeSha !== git.treeSha || primary.expectedTreeSha !== git.expectedTreeSha) blockers.push('GIT_EVIDENCE_STALE');
           }
@@ -442,14 +446,16 @@ export class Workflow {
       if (attempt.state === 'VERIFIED' && (!entry || attempt.sha !== entry.sha || attempt.repository !== entry.repository || (attempt.treeComparison && (!attempt.treeSha || attempt.treeSha !== attempt.expectedTreeSha)))) { attempt.state = 'FAILED'; attempt.errorCode = 'COMMIT_SNAPSHOT_MISMATCH'; }
       attempt.finishedAt ??= new Date(this.now()).toISOString();
       s.put('git_attempt',attempt,git.workspaceId);
-      const round = s.list<GitAttempt>('git_attempt',git.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt);
-      if (round.length < submissionEntries(git).length || round.some(a => a.state === 'VERIFYING')) return;
+      const entries = submissionEntries(git);
+      const round = s.list<GitAttempt>('git_attempt',git.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt).map(a => normalizeLegacyAttempt(a,entries));
+      if (round.length < entries.length || round.some(a => a.state === 'VERIFYING')) return;
       const primary = round.find(a => a.entryIndex === 0);
       const failing = round.find(a => a.state === 'FAILED' || a.state === 'STALE');
+      const unavailable = round.find(a => a.state !== 'VERIFIED');
       git.rootTreeSha = primary?.rootTreeSha; git.treeSha = primary?.treeSha; git.expectedTreeSha = primary?.expectedTreeSha;
       if (round.every(a => a.state === 'VERIFIED')) { git.state = 'VERIFIED'; git.errorCode = undefined; git.verifiedAt = new Date(this.now()).toISOString(); }
       else if (failing) { git.state = 'FAILED'; git.errorCode = failing.errorCode; }
-      else { git.state = 'UNAVAILABLE'; git.errorCode = round[0]?.errorCode; }
+      else { git.state = 'UNAVAILABLE'; git.errorCode = unavailable?.errorCode; }
       s.put('git_submission',git,git.workspaceId);
       const actor = s.get<Actor>('actor',git.actorId);
       s.event(git.workspaceId,actor,'git_verification_finished',git.id,{ attemptId: attempt.id,state: git.state,errorCode: git.errorCode,entries: round.map(a => ({ entryIndex: a.entryIndex,repository: a.repository,sha: a.sha,state: a.state,errorCode: a.errorCode,treeSha: a.treeSha })),performedBy: 'git-verifier' });

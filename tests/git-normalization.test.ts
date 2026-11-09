@@ -265,7 +265,8 @@ async function buildAcceptedLeaf(f: Awaited<ReturnType<typeof multiRepoFixture>>
     ? { id: randomUUID(), workspaceId: w.id, issueId, candidateId: candidate.id, snapshotId: sealed.snapshot.id, bindingId, repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}`, actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }
     : { id: randomUUID(), workspaceId: w.id, issueId, candidateId: candidate.id, snapshotId: sealed.snapshot.id, bindingId, entries: [{ repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}` }], actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
   s.put('git_submission', git, w.id);
-  s.put('git_attempt', { id: randomUUID(), submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, entryIndex: 0, treeComparison: true, evidenceRole: 'snapshot', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }, w.id);
+  if (options.legacySubmission) s.put('git_attempt', { id: randomUUID(), submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }, w.id);
+  else s.put('git_attempt', { id: randomUUID(), submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, entryIndex: 0, treeComparison: true, evidenceRole: 'snapshot', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }, w.id);
   const issue = s.get<Issue>('issue', issueId);
   issue.candidate = candidate; issue.initialReview = initialReview; issue.qaReview = qaReview; issue.finalReview = finalReview; issue.gitSubmissionId = git.id; issue.lease = null; issue.designId = issue.parentId ? issue.designId : designId;
   s.put('issue', issue, w.id);
@@ -284,14 +285,71 @@ async function acceptedLeaf(f: Awaited<ReturnType<typeof multiRepoFixture>>, des
   return { ...f, built, acceptAndClose };
 }
 
-test('pre-upgrade candidates keep their stored digest policy and close normally', async () => {
+test('pre-upgrade raw-shape records close under the stored digest policy without retry', async () => {
   const f = await acceptedLeaf(await multiRepoFixture(), randomUUID(), { legacySubmission: true });
   try {
     const s = f.store; const issue = s.get<Issue>('issue', f.issue.id); const bindingId = s.get<any>('workspace', f.workspace.id).gitBindingId;
+    const storedAttempt = s.list<any>('git_attempt', f.workspace.id).find((a: any) => a.submissionId === f.built.git.id)!;
+    assert.equal(storedAttempt.entryIndex, undefined);
+    assert.equal(storedAttempt.treeComparison, undefined);
+    assert.equal(storedAttempt.evidenceRole, undefined);
+    assert.deepEqual(f.closureBlocked().filter((code: string) => code.startsWith('GIT')), []);
     const expected = hash(canonical({ policyVersion: 2, designId: f.built.designId, scopeRevision: issue.scopeRevision, candidateId: f.built.candidate.id, snapshotHash: f.built.snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: bindingId, git: { id: f.built.git.id, bindingId: f.built.git.bindingId, sha: f.built.git.sha, repository: f.built.git.repository, subdirectory: f.built.git.subdirectory } }));
     assert.equal(acceptanceDigest(s, issue), expected);
     assert.equal(f.acceptAndClose(expected).issue.state, 'DONE');
+    assert.equal(s.get<any>('git_attempt', storedAttempt.id).entryIndex, undefined);
+    const after = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
+    assert.equal(after.issue.state, 'DONE');
+    assert.equal(after.git.id, f.built.git.id);
+    assert.equal(after.git.entries[0].attempt.state, 'VERIFIED');
+    assert.equal(after.git.entries[0].attempt.evidenceRole, 'snapshot');
   } finally { await f.close(); }
+});
+
+test('legacy raw-shape attempts normalize in the issue view without persisting new metadata', async () => {
+  const f = await acceptedLeaf(await multiRepoFixture(), randomUUID(), { legacySubmission: true });
+  try {
+    const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
+    assert.equal(view.git.entries.length, 1);
+    const entry = view.git.entries[0];
+    assert.equal(entry.repository, 'fixture/delivery');
+    assert.ok(entry.attempt);
+    assert.equal(entry.attempt.state, 'VERIFIED');
+    assert.equal(entry.attempt.entryIndex, 0);
+    assert.equal(entry.attempt.treeComparison, true);
+    assert.equal(entry.attempt.evidenceRole, 'snapshot');
+    assert.equal(entry.attempt.treeSha, entry.attempt.expectedTreeSha);
+    const stored = f.store.get<any>('git_attempt', entry.attempt.id);
+    assert.equal(stored.entryIndex, undefined);
+    assert.equal(stored.treeComparison, undefined);
+    assert.equal(stored.evidenceRole, undefined);
+    assert.ok(stored.finishedAt);
+    assert.deepEqual(f.closureBlocked().filter((code: string) => code.startsWith('GIT')), []);
+  } finally { await f.close(); }
+});
+
+test('secondary-entry provider outage keeps the packet unavailable with its entry error code', async () => {
+  const f = await multiRepoFixture();
+  const provider = new GitHubProvider(async (url) => {
+    const target = String(url);
+    if (target.includes(`/repos/fixture/delivery/git/commits/${f.primarySha}`)) return Response.json({ sha: f.primarySha, tree: { sha: snapshotGitTree(f.snapshot) } });
+    if (target.includes(`/repos/fixture/other/git/commits/${f.secondarySha}`)) return new Response('secondary outage', { status: 503 });
+    throw new Error(`Unexpected provider request ${target}`);
+  }, () => undefined);
+  const verifier = new GitVerifier(f.store, provider);
+  try {
+    const git = f.attach([{ repository: 'fixture/other', commitUrl: `https://github.com/fixture/other/commit/${f.secondarySha}` }]);
+    verifier.tick();
+    await until(() => f.store.get<GitSubmission>('git_submission', git.id).state === 'UNAVAILABLE');
+    const unavailable = f.store.get<GitSubmission>('git_submission', git.id);
+    assert.equal(unavailable.errorCode, 'PROVIDER_UNAVAILABLE');
+    assert.ok(f.closureBlocked().includes('PROVIDER_UNAVAILABLE'));
+    const round = f.store.list<any>('git_attempt', f.workspace.id).filter((a: any) => a.submissionId === git.id && a.attempt === 1);
+    assert.equal(round.find((a: any) => a.entryIndex === 0)!.state, 'VERIFIED');
+    assert.equal(round.find((a: any) => a.entryIndex === 1)!.state, 'UNAVAILABLE');
+    assert.equal(round.find((a: any) => a.entryIndex === 1)!.errorCode, 'PROVIDER_UNAVAILABLE');
+    assert.equal(f.store.get<Issue>('issue', f.issue.id).state, 'USER_ACCEPTANCE');
+  } finally { await verifier.close(); await f.close(); }
 });
 
 test('new candidates accept and close under digest policy 4', async () => {
@@ -337,4 +395,153 @@ test('pre-upgrade accepted children keep parent integration valid', async () => 
     assert.equal(manifest.children[0]!.issueId, child.id);
     assert.equal(manifest.children[0]!.commitUrl, `https://github.com/fixture/delivery/commit/${f.primarySha}`);
   } finally { await f.close(); }
+});
+
+async function legacyClosureFixture(mutate?: (git: any, attempt: any) => void) {
+  const f = await multiRepoFixture();
+  const bindingId = f.store.get<any>('workspace', f.workspace.id).gitBindingId;
+  const expectedTreeSha = snapshotGitTree(f.snapshot);
+  const git: any = { id: randomUUID(), workspaceId: f.workspace.id, issueId: f.issue.id, candidateId: f.candidate.id, snapshotId: f.snapshot.id, bindingId, repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}`, actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
+  const attempt: any = { id: randomUUID(), submissionId: git.id, workspaceId: f.workspace.id, issueId: f.issue.id, attempt: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
+  mutate?.(git, attempt);
+  f.store.put('git_submission', git, f.workspace.id);
+  f.store.put('git_attempt', attempt, f.workspace.id);
+  const issue = f.store.get<Issue>('issue', f.issue.id); issue.gitSubmissionId = git.id; f.store.put('issue', issue, f.workspace.id);
+  const closeAttempt = () => f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }) as any;
+  return { ...f, git, attempt, closeAttempt };
+}
+
+test('legacy fallback never grants closure authority to a mismatched attempt identity', async () => {
+  for (const mutate of [(git: any, attempt: any) => { attempt.repository = 'other/repository'; }, (git: any, attempt: any) => { attempt.sha = '9'.repeat(40); }]) {
+    const f = await legacyClosureFixture(mutate);
+    try {
+      assert.ok(f.closureBlocked().includes('GIT_EVIDENCE_STALE'));
+      const result = f.closeAttempt();
+      assert.ok(result.closureBlocked.includes('GIT_EVIDENCE_STALE'));
+      assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+    } finally { await f.close(); }
+  }
+});
+
+test('stale candidate, snapshot, or binding mapping stays blocked', async () => {
+  for (const mutate of [(git: any) => { git.candidateId = randomUUID(); }, (git: any) => { git.snapshotId = randomUUID(); }, (git: any) => { git.bindingId = randomUUID(); }]) {
+    const f = await legacyClosureFixture(mutate);
+    try {
+      assert.ok(f.closureBlocked().includes('GIT_EVIDENCE_STALE'));
+      const result = f.closeAttempt();
+      assert.ok(result.closureBlocked.includes('GIT_EVIDENCE_STALE'));
+      assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+    } finally { await f.close(); }
+  }
+});
+
+test('malformed legacy records fail closed without crashing', async () => {
+  const cases: ((git: any, attempt: any) => void)[] = [
+    (git) => { delete git.sha; },
+    (git) => { delete git.url; },
+    (git, attempt) => { delete attempt.treeSha; },
+    (git, attempt) => { delete attempt.repository; }
+  ];
+  for (const mutate of cases) {
+    const f = await legacyClosureFixture(mutate);
+    try {
+      const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
+      assert.equal(view.git.id, f.git.id);
+      assert.ok(f.closureBlocked().includes('GIT_EVIDENCE_STALE'));
+      const result = f.closeAttempt();
+      assert.ok(result.closureBlocked.includes('GIT_EVIDENCE_STALE'));
+      assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+    } finally { await f.close(); }
+  }
+});
+
+test('multi-entry packets keep the closure blocker even with unshaped attempts', async () => {
+  const f = await multiRepoFixture();
+  const bindingId = f.store.get<any>('workspace', f.workspace.id).gitBindingId;
+  const expectedTreeSha = snapshotGitTree(f.snapshot);
+  const git: any = { id: randomUUID(), workspaceId: f.workspace.id, issueId: f.issue.id, candidateId: f.candidate.id, snapshotId: f.snapshot.id, bindingId, entries: [{ repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}` }, { repository: 'fixture/other', subdirectory: '', sha: f.secondarySha, url: `https://github.com/fixture/other/commit/${f.secondarySha}` }], actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
+  const attempt: any = { id: randomUUID(), submissionId: git.id, workspaceId: f.workspace.id, issueId: f.issue.id, attempt: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
+  f.store.put('git_submission', git, f.workspace.id);
+  f.store.put('git_attempt', attempt, f.workspace.id);
+  const issue = f.store.get<Issue>('issue', f.issue.id); issue.gitSubmissionId = git.id; f.store.put('issue', issue, f.workspace.id);
+  try {
+    const blocked = f.closureBlocked();
+    assert.ok(blocked.includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
+    assert.ok(blocked.includes('GIT_EVIDENCE_STALE'));
+    const result = f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }) as any;
+    assert.ok(result.closureBlocked.includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
+    assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+  } finally { await f.close(); }
+});
+
+test('same-commit git_submit replays the legacy row exactly', async () => {
+  const f = await legacyClosureFixture();
+  try {
+    const issue = f.store.get<Issue>('issue', f.issue.id);
+    const result = f.flow.execute(f.owner, 'git_submit', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: issue.version, candidateId: f.candidate.id, commitUrl: `https://github.com/fixture/delivery/commit/${f.primarySha}`, idempotencyKey: randomUUID() }) as any;
+    assert.equal(result.git.id, f.git.id);
+    assert.equal(f.store.list('git_submission', f.workspace.id).length, 1);
+    const stored = f.store.get<any>('git_submission', f.git.id);
+    assert.equal(stored.entries, undefined);
+    assert.equal(stored.repository, 'fixture/delivery');
+  } finally { await f.close(); }
+});
+
+test('primary-entry outage reports its code in views and a successful retry clears it', async () => {
+  const f = await multiRepoFixture();
+  let primaryDown = true;
+  const provider = new GitHubProvider(async (url) => {
+    const target = String(url);
+    if (target.includes(`/repos/fixture/delivery/git/commits/${f.primarySha}`)) {
+      if (primaryDown) return new Response('primary outage', { status: 503 });
+      return Response.json({ sha: f.primarySha, tree: { sha: snapshotGitTree(f.snapshot) } });
+    }
+    if (target.includes(`/repos/fixture/other/git/commits/${f.secondarySha}`)) return Response.json({ sha: f.secondarySha, tree: { sha: f.secondaryTree } });
+    throw new Error(`Unexpected provider request ${target}`);
+  }, () => undefined);
+  const verifier = new GitVerifier(f.store, provider);
+  try {
+    const git = f.attach([{ repository: 'fixture/other', commitUrl: `https://github.com/fixture/other/commit/${f.secondarySha}` }]);
+    verifier.tick();
+    await until(() => f.store.get<GitSubmission>('git_submission', git.id).state === 'UNAVAILABLE');
+    const unavailable = f.store.get<GitSubmission>('git_submission', git.id);
+    assert.equal(unavailable.errorCode, 'PROVIDER_UNAVAILABLE');
+    const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
+    assert.equal(view.git.state, 'UNAVAILABLE');
+    assert.equal(view.git.errorCode, 'PROVIDER_UNAVAILABLE');
+    assert.equal(view.git.entries[0].attempt.state, 'UNAVAILABLE');
+    assert.equal(view.git.entries[1].attempt.state, 'VERIFIED');
+    assert.ok(view.closureBlocked.includes('PROVIDER_UNAVAILABLE'));
+    primaryDown = false;
+    f.flow.execute(f.owner, 'git_retry', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, submissionId: git.id, idempotencyKey: randomUUID() });
+    verifier.tick();
+    await until(() => f.store.get<GitSubmission>('git_submission', git.id).state === 'VERIFIED');
+    const verified = f.store.get<GitSubmission>('git_submission', git.id);
+    assert.equal(verified.errorCode, undefined);
+    assert.ok(verified.verifiedAt);
+    assert.equal(verified.attempt, 2);
+  } finally { await verifier.close(); await f.close(); }
+});
+
+test('a failed entry keeps its error code when another entry is merely unavailable', async () => {
+  const f = await multiRepoFixture();
+  const provider = new GitHubProvider(async (url) => {
+    const target = String(url);
+    if (target.includes(`/repos/fixture/delivery/git/commits/${f.primarySha}`)) return Response.json({ sha: f.primarySha, tree: { sha: '9'.repeat(40) } });
+    if (target.includes(`/repos/fixture/other/git/commits/${f.secondarySha}`)) return new Response('secondary outage', { status: 503 });
+    throw new Error(`Unexpected provider request ${target}`);
+  }, () => undefined);
+  const verifier = new GitVerifier(f.store, provider);
+  try {
+    const git = f.attach([{ repository: 'fixture/other', commitUrl: `https://github.com/fixture/other/commit/${f.secondarySha}` }]);
+    verifier.tick();
+    await until(() => f.store.get<GitSubmission>('git_submission', git.id).state === 'FAILED');
+    const failed = f.store.get<GitSubmission>('git_submission', git.id);
+    assert.equal(failed.errorCode, 'COMMIT_SNAPSHOT_MISMATCH');
+    const round = f.store.list<any>('git_attempt', f.workspace.id).filter((a: any) => a.submissionId === git.id && a.attempt === 1);
+    assert.equal(round.find((a: any) => a.entryIndex === 0)!.state, 'FAILED');
+    assert.equal(round.find((a: any) => a.entryIndex === 0)!.errorCode, 'COMMIT_SNAPSHOT_MISMATCH');
+    assert.equal(round.find((a: any) => a.entryIndex === 1)!.state, 'UNAVAILABLE');
+    assert.equal(round.find((a: any) => a.entryIndex === 1)!.errorCode, 'PROVIDER_UNAVAILABLE');
+  } finally { await verifier.close(); await f.close(); }
 });

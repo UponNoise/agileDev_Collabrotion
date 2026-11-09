@@ -34,8 +34,12 @@ export function githubCommitUrl(value: string) {
 }
 export function submissionEntries(submission: { entries?: { repository: string; subdirectory?: string; sha: string; url?: string }[]; repository?: string; subdirectory?: string; sha?: string; url?: string }): { repository: string; subdirectory: string; sha: string; url: string }[] {
   if (submission.entries?.length) return submission.entries.map(entry => ({ repository: entry.repository,subdirectory: entry.subdirectory ?? '',sha: entry.sha,url: entry.url ?? `https://github.com/${entry.repository}/commit/${entry.sha}` }));
-  if (submission.repository && submission.sha) return [{ repository: submission.repository,subdirectory: submission.subdirectory ?? '',sha: submission.sha,url: submission.url ?? `https://github.com/${submission.repository}/commit/${submission.sha}` }];
+  if (submission.repository && submission.sha && submission.url) return [{ repository: submission.repository,subdirectory: submission.subdirectory ?? '',sha: submission.sha,url: submission.url }];
   return [];
+}
+export function normalizeLegacyAttempt<T extends { entryIndex?: number; treeComparison?: boolean; evidenceRole?: string; repository?: string; sha?: string }>(attempt: T, entries: { repository: string; sha: string }[]): T {
+  if (attempt.entryIndex === undefined && entries.length === 1 && entries[0]!.repository === attempt.repository && entries[0]!.sha === attempt.sha) return { ...attempt,entryIndex: 0,treeComparison: true,evidenceRole: 'snapshot' };
+  return attempt;
 }
 export function inspectGitBinding(workspace: Workspace, remote: string, actorId: string): GitBinding {
   if (!workspace.commonDir) throw new DomainError('GIT_WORKSPACE_REQUIRED','Register a Git workspace before binding its remote');
