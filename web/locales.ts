@@ -473,7 +473,17 @@ const pairs: [string, string][] = [
   ['files)', '个文件）'],
   ['Final commit', '最终提交'],
   ['Attach final commit', '填写最终提交'],
+  ['Attach final commits', '填写最终提交'],
   ['GitHub commit URL', 'GitHub 提交链接'],
+  ['Primary GitHub commit URL', '主仓库 GitHub 提交链接'],
+  ['Additional changed repositories', '其他变更仓库'],
+  [
+    'Optional. One entry per line: owner/repository followed by its canonical commit URL. Recorded as reference-only evidence; multi-repository closure stays blocked.',
+    '可选。每行一个条目：owner/repository 后跟其规范提交链接。仅记录为参考性证据；多仓库交付关闭保持阻塞。'
+  ],
+  ['Final commits', '最终提交'],
+  ['Reference-only evidence; not snapshot closure proof.', '仅为参考性证据，不构成快照关闭证明。'],
+  [' (reference-only)', '（仅参考）'],
   ['Attach commit', '关联提交'],
   [
     'The full commit must belong to the owner-bound repository and match the complete reviewed snapshot. Changing the mapping invalidates delivery acceptance.',

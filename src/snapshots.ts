@@ -7,6 +7,16 @@ import { canonical, hash } from './store.js';
 import { inside } from './paths.js';
 
 const excluded = new Set(['.git', 'node_modules', '.agiledev']);
+export function cleanGitEnv() {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$/i.test(key)));
+}
+export function gitBlobHash(root: string, path: string) {
+  try {
+    return execFileSync('git', ['hash-object', '--stdin', `--path=${path}`], { cwd: root, env: cleanGitEnv(), input: readFileSync(inside(root, path)), encoding: 'utf8', maxBuffer: 1048576, timeout: 30000, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+  } catch {
+    throw new DomainError('SNAPSHOT_NORMALIZATION_UNAVAILABLE', 'Git delivery normalization failed; repair the workspace before re-running');
+  }
+}
 function walk(root: string, allowQa = false, prefix = ''): string[] {
   const names: string[] = [];
   for (const entry of readdirSync(join(root, prefix), { withFileTypes: true })) {
@@ -27,7 +37,10 @@ function safeArtifact(root: string, path: string) {
 export function snapshotManifest(root: string, selected: string[], git: boolean): Snapshot['files'] {
   let names: string[]; const modes = new Map<string,string>();
   if (git) {
-    const execute = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+    const execute = (args: string[]) => {
+      try { return execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }); }
+      catch { throw new DomainError('SNAPSHOT_NORMALIZATION_UNAVAILABLE', 'Git delivery normalization failed; repair the workspace before re-running'); }
+    };
     for (const entry of execute(['ls-files', '-z', '--stage', '--cached', '--', '.']).split('\0').filter(Boolean)) {
       const match = entry.match(/^(\d{6}) [a-f0-9]+ (\d)\t([\s\S]+)$/);
       if (!match || match[2] !== '0') throw new DomainError('UNMERGED_ARTIFACT', 'Resolve unmerged Git entries before delivery');
@@ -62,12 +75,13 @@ export function sealSnapshot(candidate: Candidate, workspaceId: string, issueId:
   const source = candidate.executionRoot; const id = randomUUID(); const root = resolve(destination, id, 'files');
   const rel = relative(source, root); if (!isAbsolute(rel) && !rel.startsWith('..')) throw new DomainError('SNAPSHOT_ROOT_INVALID', 'Snapshot storage must be outside producer storage');
   for (const file of candidate.files) if (hash(readFileSync(inside(source,file.path))) !== file.hash) throw new DomainError('EVIDENCE_STALE', 'Producer changed a submitted file');
-  const files = snapshotManifest(source, candidate.files.map(f => f.path), git);
+  let files = snapshotManifest(source, candidate.files.map(f => f.path), git);
+  if (git) files = files.map(file => ({ path: file.path, hash: file.hash, bytes: file.bytes, mode: file.mode, blob: gitBlobHash(source, file.path) }));
   mkdirSync(root,{ recursive: true,mode: 0o700 });
   for (const file of files) { const dest = join(root,file.path); mkdirSync(resolve(dest,'..'), { recursive: true, mode: 0o700 }); copyFileSync(inside(source,file.path),dest); if (process.platform !== 'win32') chmodSync(dest,file.mode === '100755' ? 0o755 : 0o644); }
   const snapshot: Snapshot = { id, workspaceId, issueId, candidateId: candidate.id, root, files, hash: hash(canonical(files)), createdAt: new Date().toISOString() };
   verifySnapshot(snapshot);
-  if (canonical(snapshotManifest(source, candidate.files.map(f => f.path), git)) !== canonical(files)) throw new DomainError('EVIDENCE_STALE', 'Producer changed during snapshot capture');
+  if (canonical(snapshotManifest(source, candidate.files.map(f => f.path), git)) !== canonical(files.map(file => ({ path: file.path, hash: file.hash, bytes: file.bytes, mode: file.mode })))) throw new DomainError('EVIDENCE_STALE', 'Producer changed during snapshot capture');
   return snapshot;
 }
 export function copySnapshot(snapshot: Snapshot, root: string) {
