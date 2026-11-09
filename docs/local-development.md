@@ -1,6 +1,16 @@
 # Local development and MCP bridge
 
-Requires Node 24.9+ and Git. The current implementation is a development slice of the full specification. The approved desktop application package remains pending; this guide starts its existing browser/service entry.
+Source development requires Node 24.9+ and Git. The current implementation is a development slice of the full specification. The desktop shell and Windows portable packaging path reuse the same service and browser workspace; full release acceptance remains pending.
+
+## Desktop application
+
+Run `npm run desktop` to build and open the desktop workspace. It starts or attaches to the user-scoped loopback service, then obtains a distinct human session through the existing one-use pairing flow. The renderer has no Node integration, privileged preload, or owner API credential. Opening the application does not approve any design or delivery. Closing the window exits the shell and leaves the service available to MCP clients.
+
+`npm run package:desktop` builds a Windows x64 portable application under a unique `release/build-*` directory and records the successful package path and app archive hash in ignored `release/latest.json`. It installs production service dependencies in a private temporary staging directory and rebuilds SQLite for the service runtime. The Node archive is fetched from nodejs.org at the exact build Node version, checked against its official SHA-256, and bundled with its license. Electron is pinned separately. The application directory contains `AgileDev.exe` and `resources/service/`; keep that directory intact. No project data or harness credentials belong in the package. Release publication, signing, licensing of this project's own source, fresh-machine installation, and update/removal acceptance remain separate gates.
+
+The packaged MCP/CLI entry uses `resources/service/runtime/node.exe` with `resources/service/dist/cli.js`. Enroll the scoped agent using the owner workflow, set `AGILEDEV_TOKEN` to that agent credential, and run the existing `connection codex`, `connection claude-code`, or `connection dsh` command through the bundled Node/CLI paths. It prints configuration without embedding the credential. Local configurations bind `AGILEDEV_DATA_DIR` so the bridge can discover or start the current service; they do not pin a stale port. If the command is invoked with an explicit `AGILEDEV_ENDPOINT`, the emitted configuration preserves that direct-connection intent instead. No global harness configuration is rewritten automatically.
+
+When `AGILEDEV_ENDPOINT` is omitted, `mcp`, `ui`, and owner commands start or reuse the same daemon. MCP still requires an explicit agent token and never inherits owner authority. Auto-start writes nothing to MCP stdout except protocol messages. `service-start` is a bounded launcher that prints only endpoint/PID/instance metadata. The desktop uses it through the bundled Node runtime so Electron does not directly own the long-lived service child. The original direct-child implementation was observed keeping the desktop process alive after the window closed; the revised native exit path remains pending revalidation following a user-stopped Computer Use session. A live/unverifiable lock, foreign descriptor, identity mismatch, or version mismatch prevents unsafe replacement. A transaction in `daemon-control.sqlite` serializes competing launchers; crash recovery preserves workflow records and lets the coordinator reconcile uncertain runs. Use `node dist/cli.js stop` (or its packaged equivalent) for owner-authorized graceful shutdown. Browser sessions and agents cannot invoke service shutdown; closing an app window is intended to leave agent work available, independently of desktop process exit.
 
 ## Start
 
@@ -31,7 +41,7 @@ Final user acceptance shows the delivery digest, complete sealed manifest, initi
 
 Committed updates are polled every second. Disconnection leaves the last snapshot visible and pauses changes; reconnect reloads current state. Search/state filters and issue/run pages are bounded. Direct links use `/w/<workspace-id>/issues/<issue-id>` and still require a human session. User Markdown/HTML source is shown as text; no raw HTML is executed. Browser storage does not hold project records or credentials. Rich Markdown rendering, workspace gap management, batch decisions, native embedded surfaces, large-data performance, and release acceptance remain pending.
 
-The frontend uses React 19.3.1, Vite 8.3.6, and the same loopback service. `npm run build` builds both service and browser assets; `npm run check` checks both TypeScript projects. `npm test` builds the web assets before service/API tests. Earlier browser validation used Playwright 1.65.0 with isolated headless Chrome 156.0.8078.80. The 2026-11-09 recovery and display-setting checks use the enabled in-app Browser Use through CUA, including actual input, reloads, cross-tab updates, and responsive viewport checks. This does not install or change a user's harness configuration.
+The frontend uses React 19.3.1, Vite 8.3.6, and the same loopback service. `npm run build` builds both service and browser assets; `npm run check` checks both TypeScript projects. `npm test` builds the service and web assets before service/API/process tests, including actual CLI/MCP startup. Earlier browser validation used Playwright 1.65.0 with isolated headless Chrome 156.0.8078.80. The 2026-11-09 recovery and display-setting checks use the enabled in-app Browser Use through CUA, including actual input, reloads, cross-tab updates, and responsive viewport checks. This does not install or change a user's harness configuration.
 
 Edit scope changes the requirement description, creates a new scope-bound draft design for a parent, and invalidates affected child evidence. Submit and review that new revision explicitly. Older revisions without captured scope cannot authorize new work or current acceptance; write and approve a current revision. Historical completed records remain readable. Scope editing or adding a child while a requirement is on hold does not resume it.
 
@@ -74,7 +84,7 @@ The supported roles are human owner, product lead, PM, worker, and QA. Workers c
 
 ## Connect the same store from different harnesses
 
-Build first and use absolute paths to `node` and `dist/cli.js`. Supply a separate enrolled credential per agent/role. Keep the daemon endpoint common across entries. The generated `connection` output is an MCP JSON example, not a universal host manifest; hosts differ in their packaging and variable expansion.
+Build first and use absolute paths to `node` and `dist/cli.js`, or use the bundled runtime/CLI paths. Supply a separate enrolled credential per agent/role and the same installation data directory across entries. The `connection` command emits the selected host's TOML, MCP JSON, or DSH patch format. Prefer its actual output over copying these illustrative paths; host packaging and variable expansion differ.
 
 Codex uses its TOML MCP configuration. Example, with paths adjusted for the installation:
 
@@ -82,10 +92,13 @@ Codex uses its TOML MCP configuration. Example, with paths adjusted for the inst
 [mcp_servers.agiledev]
 command = "C:/Program Files/nodejs/node.exe"
 args = ["D:/Git/agileDev_Collabrotion/dist/cli.js", "mcp"]
-env_vars = ["AGILEDEV_TOKEN", "AGILEDEV_ENDPOINT"]
+env_vars = ["AGILEDEV_TOKEN"]
+
+[mcp_servers.agiledev.env]
+AGILEDEV_DATA_DIR = "C:/Users/you/AppData/Local/AgileDev"
 ```
 
-Set `AGILEDEV_ENDPOINT=http://127.0.0.1:43170` and the agent token in the launching host's environment. This project does not edit the user's global Codex settings automatically.
+Set the agent token in the launching host's environment and adjust the installation paths above. Local auto-start discovers the current endpoint from the data directory. Explicit `AGILEDEV_ENDPOINT` configurations are supported for an already managed service, but deliberately do not auto-start a different endpoint. This project does not edit the user's global Codex settings automatically.
 
 Claude Code MCP JSON example:
 
@@ -97,7 +110,7 @@ Claude Code MCP JSON example:
       "command": "C:/Program Files/nodejs/node.exe",
       "args": ["D:/Git/agileDev_Collabrotion/dist/cli.js", "mcp"],
       "env": {
-        "AGILEDEV_ENDPOINT": "${AGILEDEV_ENDPOINT}",
+        "AGILEDEV_DATA_DIR": "C:/Users/you/AppData/Local/AgileDev",
         "AGILEDEV_TOKEN": "${AGILEDEV_TOKEN}"
       }
     }
@@ -105,7 +118,7 @@ Claude Code MCP JSON example:
 }
 ```
 
-DSH uses a patch/profile configuration rather than this JSON format. `connection dsh` prints a patch containing the MCP client, absolute runtime paths, endpoint, and an environment reference for the token. Save it to a private local file and launch a chosen profile with `--patch <file>`. This format was loaded by the installed DSH SDK profile in the no-inference probe. The generator does not mutate an existing profile or bundle; a packaged native installer is still pending.
+DSH uses a patch/profile configuration rather than this JSON format. `connection dsh` prints a patch containing the MCP client, absolute runtime paths, local data-directory binding (or an explicitly requested endpoint), and an environment reference for the token. Save it to a private local file and launch a chosen profile with `--patch <file>`. The earlier direct-endpoint format was loaded by the installed DSH SDK profile in the no-inference probe; native-host loading of the new data-directory variant remains pending. The generator does not mutate an existing profile or bundle; native plugin installation is optional under desktop-first delivery.
 
 ## No-inference host verification
 

@@ -10,7 +10,7 @@ import { dirname,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 declare module 'fastify' { interface FastifyRequest { actor: Actor; browserSession?: string } }
-export function createServer(store: Store) {
+export function createServer(store: Store, lifecycle?: { instance: string; stop(): Promise<void> }) {
   const app = Fastify({ logger: false, bodyLimit: 262144, requestTimeout: 15000 });
   const workflow = new Workflow(store);
   const sessions = new WebSessions(store);
@@ -42,7 +42,14 @@ export function createServer(store: Store) {
     const status = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
     return reply.code(status >= 400 && status < 500 ? status : 500).send({ ok: false, error: { code: status === 400 ? 'INVALID_INPUT' : 'INTERNAL_ERROR', message: 'Request could not be completed' } });
   });
-  app.get('/health', () => ({ name: 'agiledev-collaboration', version: '0.1.0' }));
+  app.get('/health', () => ({ name: 'agiledev-collaboration', version: '0.1.0', ...(lifecycle ? { instance: lifecycle.instance, pid: process.pid } : {}) }));
+  app.post('/api/service/stop', (request, reply) => {
+    if (!lifecycle || request.actor.role !== 'human' || request.browserSession) throw new DomainError('ROLE_DENIED', 'Service shutdown requires the local owner process', 403);
+    const input = z.object({ instance: z.string().uuid() }).strict().parse(request.body);
+    if (input.instance !== lifecycle.instance) throw new DomainError('SERVICE_IDENTITY_MISMATCH', 'Service instance changed', 409);
+    reply.raw.once('finish', () => { void lifecycle.stop(); });
+    return { ok: true };
+  });
   app.get('/api/session', request => ({ actor: request.actor,...(request.browserSession ? { csrf: sessions.csrf(request.browserSession) } : {}) }));
   app.get('/api/ui/status',request => {
     const cookie = sessions.cookie(request.headers.cookie);

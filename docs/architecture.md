@@ -2,6 +2,10 @@
 
 Status: proposed; implementation choices depend on P1 results. Domain behavior is specified in [workflow.md](workflow.md).
 
+Desktop implementation decision, 2026-11-09: use a pinned Electron shell to host the existing loopback web UI, with a separately bundled Node service/runtime. This preserves the service's native SQLite ABI and existing harness adapters rather than moving workflow code into Electron. No renderer Node integration, privileged preload, or general-purpose IPC is needed. The main process obtains a distinct human browser session through the existing pairing authority; the owner credential stays outside the renderer. Explicit human UI actions remain necessary for every approval.
+
+The desktop and stdio MCP entries share one validated daemon descriptor/lock. They may start the service silently when absent, but must verify its installation instance and process identity before attaching. A live or uncertain lock blocks a competing writer. Closing the desktop window leaves the service available to harnesses; an explicit owner stop command performs graceful coordinator shutdown. Version mismatch, malformed metadata, and unavailable startup are errors rather than permission to replace a running service. Portable Windows packaging includes the service's Node runtime and production dependencies; fresh-machine installation, removal/data preservation, and three-host execution remain separate acceptance gates. Native window checks extend AC26/27/30/38; service auto-start/reuse/recovery extends AC01/18/29/35/38.
+
 ## 1. Decisions and alternatives
 
 | Decision | Proposed choice | Reason and consequence |
