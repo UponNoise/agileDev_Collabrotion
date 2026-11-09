@@ -648,7 +648,7 @@ export function IssueForm({
     );
   if (dialog.kind === 'git')
     return (
-      <Modal title={t('Attach final commit')} subtitle={issue.key} onClose={onClose}>
+      <Modal title={t('Attach final commits')} subtitle={issue.key} onClose={onClose}>
         <AsyncForm
           onDone={done}
           onSave={(data) =>
@@ -656,7 +656,16 @@ export function IssueForm({
               ...base,
               ...formKey(data),
               candidateId: issue.candidate!.id,
-              commitUrl: String(data.get('url'))
+              commitUrl: String(data.get('url')),
+              additionalCommits: String(data.get('additional') ?? '')
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => {
+                  const separator = line.search(/\s+/);
+                  return { repository: line.slice(0, separator), commitUrl: line.slice(separator + 1) };
+                })
+                .filter((entry) => entry.repository && entry.commitUrl)
             })
           }
         >
@@ -666,13 +675,25 @@ export function IssueForm({
                 'The full commit must belong to the owner-bound repository and match the complete reviewed snapshot. Changing the mapping invalidates delivery acceptance.'
               )}
             </p>
-            <Field label={t('GitHub commit URL')}>
+            <Field label={t('Primary GitHub commit URL')}>
               <input
                 name="url"
                 type="url"
                 required
-                defaultValue={packet.git?.url}
+                defaultValue={packet.git?.entries[0]?.url}
                 placeholder="https://github.com/owner/repository/commit/FULL_SHA"
+              />
+            </Field>
+            <Field
+              label={t('Additional changed repositories')}
+              hint={t(
+                'Optional. One entry per line: owner/repository followed by its canonical commit URL. Recorded as reference-only evidence; multi-repository closure stays blocked.'
+              )}
+            >
+              <textarea
+                name="additional"
+                rows={3}
+                placeholder={'owner/repo https://github.com/owner/repo/commit/FULL_SHA'}
               />
             </Field>
           </div>
@@ -704,9 +725,12 @@ function DeliveryEvidence({ packet }: { packet: IssueData }) {
           {issue.artifactMode === 'artifact' ? (
             (issue.artifactReason ?? t('Reviewed artifact delivery'))
           ) : packet.git ? (
-            <a href={packet.git.url} target="_blank" rel="noreferrer">
-              {packet.git.sha}
-            </a>
+            packet.git.entries.map((entry, index) => (
+              <a key={`${entry.repository}-${entry.sha}`} className="mono" href={entry.url} target="_blank" rel="noreferrer">
+                {entry.repository} @ {entry.sha.slice(0, 8)}
+                {index > 0 || entry.attempt?.evidenceRole === 'reference' ? t(' (reference-only)') : ''}
+              </a>
+            ))
           ) : (
             'No verified commit attached'
           )}

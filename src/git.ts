@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import { DomainError, GitBinding, GitSubmission, Snapshot, Workspace } from './contracts.js';
 import { inside } from './paths.js';
-import { verifySnapshot } from './snapshots.js';
+import { cleanGitEnv, verifySnapshot } from './snapshots.js';
 
 export const githubApiVersion = '2026-03-10';
 const sha = z.string().regex(/^[a-f0-9]{40}$/);
@@ -34,7 +34,7 @@ export function githubCommitUrl(value: string) {
 }
 export function inspectGitBinding(workspace: Workspace, remote: string, actorId: string): GitBinding {
   if (!workspace.commonDir) throw new DomainError('GIT_WORKSPACE_REQUIRED','Register a Git workspace before binding its remote');
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$/i.test(key)));
+  const env = cleanGitEnv();
   const git = (args: string[]) => execFileSync('git',args,{ cwd: workspace.root,env,windowsHide: true,timeout: 5000,maxBuffer: 1048576,encoding: 'utf8',stdio: ['ignore','pipe','ignore'] }).replace(/\r?\n$/,'');
   try {
     const common = realpathSync(resolve(workspace.root,git(['rev-parse','--git-common-dir'])));
@@ -61,7 +61,7 @@ export function snapshotGitTree(snapshot: Snapshot) {
     }
     const name = parts.at(-1)!;
     if (tree.files.has(name) || tree.directories.has(name)) throw new DomainError('ARTIFACT_POLICY','Duplicate snapshot path');
-    tree.files.set(name,{ mode: file.mode,sha: objectId('blob',readFileSync(inside(snapshot.root,file.path))) });
+    tree.files.set(name,{ mode: file.mode,sha: file.blob ?? objectId('blob',readFileSync(inside(snapshot.root,file.path))) });
   }
   const encode = (tree: Tree): string => {
     const entries = [...tree.files].map(([name,file]) => ({ name,...file,sort: Buffer.from(name) }));
@@ -72,7 +72,10 @@ export function snapshotGitTree(snapshot: Snapshot) {
   const result = encode(root); verifySnapshot(snapshot); return result;
 }
 export interface GitResolution { rootTreeSha: string; treeSha: string }
-export interface GitProvider { resolve(submission: GitSubmission, signal: AbortSignal): Promise<GitResolution> }
+export interface GitProvider {
+  resolve(submission: GitSubmission, signal: AbortSignal): Promise<GitResolution>;
+  resolveEntry(repository: string, sha: string, subdirectory: string, signal: AbortSignal): Promise<GitResolution>;
+}
 export class GitHubProvider implements GitProvider {
   constructor(private request: typeof fetch = fetch,private token = () => process.env.AGILEDEV_GITHUB_TOKEN) {}
   private async json(path: string,signal: AbortSignal): Promise<unknown> {
@@ -92,12 +95,17 @@ export class GitHubProvider implements GitProvider {
     } catch (error) { if (error instanceof DomainError) throw error; throw new DomainError(signal.aborted ? 'VERIFICATION_INTERRUPTED' : 'PROVIDER_UNAVAILABLE','GitHub verification is unavailable; retain acceptance and retry later'); }
   }
   async resolve(submission: GitSubmission,signal: AbortSignal) {
-    if (!validRepository(submission.repository) || !sha.safeParse(submission.sha).success) throw new DomainError('REPOSITORY_INVALID','Verification requires a bound GitHub repository and immutable SHA');
-    const prefix = `/repos/${submission.repository}/git`;
-    const commit = z.object({ sha,tree: z.object({ sha }) }).safeParse(await this.json(`${prefix}/commits/${submission.sha}`,signal));
-    if (!commit.success || commit.data.sha !== submission.sha) throw new DomainError('PROVIDER_INVALID_RESPONSE','GitHub commit does not match the requested SHA');
+    const primary = submission.entries[0];
+    if (!primary) throw new DomainError('REPOSITORY_INVALID','Verification requires at least one commit entry');
+    return this.resolveEntry(primary.repository,primary.sha,primary.subdirectory,signal);
+  }
+  async resolveEntry(repository: string,commitSha: string,subdirectory: string,signal: AbortSignal) {
+    if (!validRepository(repository) || !sha.safeParse(commitSha).success) throw new DomainError('REPOSITORY_INVALID','Verification requires a bound GitHub repository and immutable SHA');
+    const prefix = `/repos/${repository}/git`;
+    const commit = z.object({ sha,tree: z.object({ sha }) }).safeParse(await this.json(`${prefix}/commits/${commitSha}`,signal));
+    if (!commit.success || commit.data.sha !== commitSha) throw new DomainError('PROVIDER_INVALID_RESPONSE','GitHub commit does not match the requested SHA');
     const rootTreeSha = commit.data.tree.sha; let treeSha = rootTreeSha;
-    for (const directory of submission.subdirectory.split('/').filter(Boolean)) {
+    for (const directory of subdirectory.split('/').filter(Boolean)) {
       if (directory === '.' || directory === '..') throw new DomainError('REPOSITORY_INVALID','Invalid workspace directory');
       const tree = z.object({ sha,truncated: z.literal(false),tree: z.array(z.object({ path: z.string(),type: z.string(),mode: z.string(),sha })) }).safeParse(await this.json(`${prefix}/trees/${treeSha}`,signal));
       if (!tree.success || tree.data.sha !== treeSha) throw new DomainError('PROVIDER_INVALID_RESPONSE','GitHub returned incomplete tree evidence');

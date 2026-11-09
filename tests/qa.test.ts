@@ -260,7 +260,8 @@ test('changing the final commit mapping invalidates acceptance and stale provide
     verifier.tick(); await until(() => !!resolveResponse);
     const replacement = f.attach('d'.repeat(40)); assert.notEqual(replacement.id,original.id); assert.equal(f.current(f.issue.id).acceptedDigest,undefined);
     resolveResponse(Response.json({ sha: f.sha,tree: { sha: f.tree } }));
-    await until(() => f.store.get<GitSubmission>('git_submission',original.id).state === 'STALE');
+    await until(() => f.store.get<GitSubmission>('git_submission',original.id).state === 'FAILED');
+    assert.equal(f.store.get<GitSubmission>('git_submission',original.id).errorCode,'GIT_EVIDENCE_STALE');
     assert.equal(f.current(f.issue.id).state,'USER_ACCEPTANCE'); assert.throws(() => f.delivery('ACCEPT',digest),(e: any) => e.code === 'APPROVAL_STALE');
     const incomplete = f.change('delivery_complete',f.issue.id,{},f.lead); assert.ok(incomplete.closureBlocked.includes('HUMAN_ACCEPTANCE_REQUIRED'));
   } finally { await verifier.close(); await f.close(); }

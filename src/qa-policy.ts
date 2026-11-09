@@ -29,7 +29,7 @@ export function integrationManifest(store: Store, issue: Issue): IntegrationMani
     const snapshot = store.get<Snapshot>('snapshot',child.candidate!.snapshotId!);
     const git = child.gitSubmissionId ? store.get<GitSubmission>('git_submission',child.gitSubmissionId) : null;
     if (child.artifactMode === 'git' && (!git || git.state !== 'VERIFIED' || git.candidateId !== child.candidate!.id || git.snapshotId !== snapshot.id)) throw new DomainError('GIT_EVIDENCE_STALE','Integration requires historical verified child commits');
-    return { issueId: child.id,candidateId: child.candidate!.id,snapshotId: snapshot.id,snapshotHash: snapshot.hash,digest,...(git ? { commitUrl: git.url } : {}) };
+    return { issueId: child.id,candidateId: child.candidate!.id,snapshotId: snapshot.id,snapshotHash: snapshot.hash,digest,...(git ? { commitUrl: git.entries[0]?.url } : {}) };
   }).sort((a,b) => a.issueId.localeCompare(b.issueId));
   const excluded = planChildren(store,issue).map(child => ({ child,scope: scopeState(store,child) })).filter(v => v.scope.status === 'EXCLUDED').map(({ child,scope }) => ({ issueId: child.id,decisionId: scope.decision!.id,decisionHash: scope.decision!.hash,replacementIds: scope.decision!.replacements.map(r => r.issueId).sort() })).sort((a,b) => a.issueId.localeCompare(b.issueId));
   const body = { planScopeHash: plan.scopeHash,children: manifest,...(excluded.length ? { excluded } : {}) };
@@ -89,5 +89,5 @@ export function acceptanceDigest(store: Store, issue: Issue) {
   if (issue.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) throw new DomainError('DESIGN_BINDING_STALE','Approve the reopened scope against its current repository binding');
   const git = issue.gitSubmissionId ? store.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
   const integration = validateIntegration(store,issue);
-  return hash(canonical({ policyVersion: integration ? 3 : 2, designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, candidateId: issue.candidate!.id, snapshotHash: snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: issue.artifactMode === 'artifact' ? null : workspace.gitBindingId ?? null, git: git ? { id: git.id,bindingId: git.bindingId,sha: git.sha,repository: git.repository,subdirectory: git.subdirectory } : null,...(integration ? { integrationHash: integration.hash } : {}) }));
+  return hash(canonical({ policyVersion: 4, designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, candidateId: issue.candidate!.id, snapshotHash: snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: issue.artifactMode === 'artifact' ? null : workspace.gitBindingId ?? null, git: git ? { id: git.id,bindingId: git.bindingId,entries: git.entries } : null,...(integration ? { integrationHash: integration.hash } : {}) }));
 }
