@@ -7,7 +7,7 @@ export { inside } from './paths.js';
 import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, integrationManifest, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
-import { githubCommitUrl, inspectGitBinding } from './git.js';
+import { githubCommitUrl, inspectGitBinding, submissionEntries } from './git.js';
 import { workspaceView,issueView,runsView } from './web-views.js';
 import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
@@ -117,7 +117,7 @@ export class Workflow {
       let deliveryDigest: string | null = null;
       if (issue.state === 'USER_ACCEPTANCE') { try { deliveryDigest = acceptanceDigest(s,issue); } catch {} }
       const submission = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission',issue.gitSubmissionId) : null;
-      const git = submission ? { ...submission,entries: submission.entries.map((entry,entryIndex) => ({ ...entry,attempt: s.list<GitAttempt>('git_attempt',issue.workspaceId).find(a => a.submissionId === submission.id && a.attempt === submission.attempt && a.entryIndex === entryIndex) ?? null })) } : null;
+      const git = submission ? { ...submission,entries: submissionEntries(submission).map((entry,entryIndex) => ({ ...entry,attempt: s.list<GitAttempt>('git_attempt',issue.workspaceId).find(a => a.submissionId === submission.id && a.attempt === submission.attempt && a.entryIndex === entryIndex) ?? null })) } : null;
       const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
       const coverage = isAggregate(s,root) ? planCoverage(s,root) : null;
       return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue),executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
@@ -416,12 +416,16 @@ export class Workflow {
       if (!issue.gitSubmissionId) blockers.push('GIT_VERIFICATION_REQUIRED');
       else {
         const git = s.get<GitSubmission>('git_submission',issue.gitSubmissionId);
+        const entries = submissionEntries(git);
         if (git.workspaceId !== issue.workspaceId || git.issueId !== issue.id || git.candidateId !== issue.candidate?.id || git.snapshotId !== issue.candidate?.snapshotId || git.bindingId !== workspace.gitBindingId) blockers.push('GIT_EVIDENCE_STALE');
-        else if (git.state !== 'VERIFIED') blockers.push(git.errorCode ?? (['QUEUED','VERIFYING'].includes(git.state) ? 'GIT_VERIFICATION_PENDING' : 'GIT_VERIFICATION_REQUIRED'));
         else {
-          const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt);
-          const primary = round.find(a => a.entryIndex === 0);
-          if (!git.verifiedAt || !git.treeSha || git.treeSha !== git.expectedTreeSha || round.length !== git.entries.length || round.some(a => a.state !== 'VERIFIED') || !primary || primary.state !== 'VERIFIED' || primary.submissionId !== git.id || primary.treeSha !== git.treeSha || primary.expectedTreeSha !== git.expectedTreeSha) blockers.push('GIT_EVIDENCE_STALE');
+          if (entries.length > 1) blockers.push('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED');
+          if (git.state !== 'VERIFIED') blockers.push(git.errorCode ?? (['QUEUED','VERIFYING'].includes(git.state) ? 'GIT_VERIFICATION_PENDING' : 'GIT_VERIFICATION_REQUIRED'));
+          else {
+            const round = s.list<GitAttempt>('git_attempt',issue.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt);
+            const primary = round.find(a => a.entryIndex === 0);
+            if (!git.verifiedAt || !git.treeSha || git.treeSha !== git.expectedTreeSha || round.length !== entries.length || round.some(a => a.state !== 'VERIFIED') || !primary || primary.state !== 'VERIFIED' || primary.submissionId !== git.id || primary.treeSha !== git.treeSha || primary.expectedTreeSha !== git.expectedTreeSha) blockers.push('GIT_EVIDENCE_STALE');
+          }
         }
       }
     }
@@ -434,12 +438,12 @@ export class Workflow {
       const issue = s.get<Issue>('issue',git.issueId); const workspace = s.get<Workspace>('workspace',git.workspaceId);
       const current = issue.gitSubmissionId === git.id && issue.candidate?.id === git.candidateId && issue.candidate?.snapshotId === git.snapshotId && workspace.gitBindingId === git.bindingId;
       if (!current) { attempt.state = 'STALE'; attempt.errorCode = 'GIT_EVIDENCE_STALE'; }
-      const entry = git.entries[attempt.entryIndex];
+      const entry = submissionEntries(git)[attempt.entryIndex];
       if (attempt.state === 'VERIFIED' && (!entry || attempt.sha !== entry.sha || attempt.repository !== entry.repository || (attempt.treeComparison && (!attempt.treeSha || attempt.treeSha !== attempt.expectedTreeSha)))) { attempt.state = 'FAILED'; attempt.errorCode = 'COMMIT_SNAPSHOT_MISMATCH'; }
       attempt.finishedAt ??= new Date(this.now()).toISOString();
       s.put('git_attempt',attempt,git.workspaceId);
       const round = s.list<GitAttempt>('git_attempt',git.workspaceId).filter(a => a.submissionId === git.id && a.attempt === git.attempt);
-      if (round.length < git.entries.length || round.some(a => a.state === 'VERIFYING')) return;
+      if (round.length < submissionEntries(git).length || round.some(a => a.state === 'VERIFYING')) return;
       const primary = round.find(a => a.entryIndex === 0);
       const failing = round.find(a => a.state === 'FAILED' || a.state === 'STALE');
       git.rootTreeSha = primary?.rootTreeSha; git.treeSha = primary?.treeSha; git.expectedTreeSha = primary?.expectedTreeSha;
@@ -622,7 +626,7 @@ export class Workflow {
         seen.add(repository);
         entries.push({ repository,subdirectory: '',sha: parsed.sha,url: parsed.url });
       }
-      if (i.gitSubmissionId) { const previous = s.get<GitSubmission>('git_submission',i.gitSubmissionId); if (canonical(previous.entries) === canonical(entries) && previous.snapshotId === snapshot.id && previous.bindingId === binding.id) return { issue: this.display(i),git: previous }; }
+      if (i.gitSubmissionId) { const previous = s.get<GitSubmission>('git_submission',i.gitSubmissionId); if (canonical(submissionEntries(previous)) === canonical(entries) && previous.snapshotId === snapshot.id && previous.bindingId === binding.id) return { issue: this.display(i),git: previous }; }
       const git: GitSubmission = { id: randomUUID(),workspaceId: w.id,issueId: i.id,candidateId: i.candidate!.id,snapshotId: snapshot.id,bindingId: binding.id,entries,actorId: actor.id,createdAt: new Date(this.now()).toISOString(),state: 'QUEUED',attempt: 0 };
       s.put('git_submission',git,w.id); i.gitSubmissionId = git.id; i.acceptedDigest = undefined;
       return { ...this.save(actor,op,i,{ submissionId: git.id,acceptanceInvalidated: true }),git };
@@ -772,7 +776,7 @@ export class Workflow {
         return { path: relative(root, file), hash: hash(readFileSync(file)) };
       });
       const integration = integrationManifest(s,i);
-      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary,executionRoot: root,runId: run.id,baseSha: run.baseSha,...(integration ? { integration } : {}) };
+      i.candidate = { id: randomUUID(), workerId: actor.id, sessionId: actor.sessionId, designId: this.design(i)!.id, files, hash: hash(canonical(files)), summary: a.summary,executionRoot: root,runId: run.id,baseSha: run.baseSha,digestPolicy: 4,...(integration ? { integration } : {}) };
       s.put('candidate',i.candidate,w.id);
       i.initialReview = null; i.qaReview = null; i.finalReview = null; i.lease = null; i.state = 'LEAD_REVIEW'; i.stage = 'PRE_QA';
       i.gitSubmissionId = undefined; i.acceptedDigest = undefined;

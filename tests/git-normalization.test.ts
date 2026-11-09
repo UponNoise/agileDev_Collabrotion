@@ -6,11 +6,13 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Actor, Candidate, GitSubmission, Issue, Run, Snapshot } from '../src/contracts.js';
-import { GitHubProvider, snapshotGitTree } from '../src/git.js';
+import { GitHubProvider, githubApiVersion, snapshotGitTree } from '../src/git.js';
 import { GitVerifier } from '../src/git-verifier.js';
 import { sealSnapshot, snapshotManifest } from '../src/snapshots.js';
 import { Store, canonical, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
+import { acceptanceDigest, integrationManifest } from '../src/qa-policy.js';
+import { applyFixturePlan } from './fixtures.js';
 
 const gitAt = (root: string) => (...args: string[]) => execFileSync('git', args, { cwd: root, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const blobSha = (bytes: Buffer) => createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
@@ -160,6 +162,8 @@ test('multi-repository verification requires every entry to verify and reports p
     assert.equal(firstRound.length, 2);
     assert.equal(firstRound.find((a: any) => a.entryIndex === 0)!.treeComparison, true);
     assert.equal(firstRound.find((a: any) => a.entryIndex === 1)!.treeComparison, false);
+    assert.equal(firstRound.find((a: any) => a.entryIndex === 0)!.evidenceRole, 'snapshot');
+    assert.equal(firstRound.find((a: any) => a.entryIndex === 1)!.evidenceRole, 'reference');
     assert.ok(f.closureBlocked().includes('COMMIT_NOT_FOUND'));
     secondaryFails = false;
     f.flow.execute(f.owner, 'git_retry', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, submissionId: git.id, idempotencyKey: randomUUID() });
@@ -174,7 +178,12 @@ test('multi-repository verification requires every entry to verify and reports p
     const secondary = round.find((a: any) => a.entryIndex === 1)!;
     assert.equal(secondary.treeSha, f.secondaryTree);
     assert.equal(secondary.expectedTreeSha, undefined);
+    assert.equal(secondary.evidenceRole, 'reference');
     assert.deepEqual(f.closureBlocked().filter((code: string) => code.startsWith('GIT')), []);
+    assert.ok(f.closureBlocked().includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
+    const complete = f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }) as any;
+    assert.ok(complete.closureBlocked.includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
+    assert.equal(complete.issue.state, 'USER_ACCEPTANCE');
   } finally { await verifier.close(); await f.close(); }
 });
 
@@ -196,5 +205,136 @@ test('git_submit validates additional commit entries and replays idempotently', 
     const replayed = submit([{ repository: 'fixture/other', commitUrl: secondaryUrl }]).git as GitSubmission;
     assert.equal(replayed.id, first.id);
     assert.equal(f.store.list('git_submission', f.workspace.id).length, 1);
+  } finally { await f.close(); }
+});
+
+test('legacy submission records without entries queue, verify and read normally without migration', async () => {
+  const f = await multiRepoFixture();
+  const bindingId = f.store.get<any>('workspace', f.workspace.id).gitBindingId;
+  const legacy: any = { id: randomUUID(), workspaceId: f.workspace.id, issueId: f.issue.id, candidateId: f.candidate.id, snapshotId: f.snapshot.id, bindingId, repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}`, actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'QUEUED', attempt: 0 };
+  f.store.put('git_submission', legacy, f.workspace.id);
+  const linked = f.store.get<Issue>('issue', f.issue.id); linked.gitSubmissionId = legacy.id; f.store.put('issue', linked, f.workspace.id);
+  const provider = new GitHubProvider(async (url) => {
+    const target = String(url);
+    if (target.includes(`/repos/fixture/delivery/git/commits/${f.primarySha}`)) return Response.json({ sha: f.primarySha, tree: { sha: snapshotGitTree(f.snapshot) } });
+    throw new Error(`Unexpected provider request ${target}`);
+  }, () => undefined);
+  const verifier = new GitVerifier(f.store, provider);
+  try {
+    verifier.tick();
+    await until(() => f.store.get<any>('git_submission', legacy.id).state === 'VERIFIED');
+    const stored = f.store.get<any>('git_submission', legacy.id);
+    assert.equal(stored.entries, undefined);
+    assert.equal(stored.repository, 'fixture/delivery'); assert.equal(stored.sha, f.primarySha); assert.equal(stored.url, `https://github.com/fixture/delivery/commit/${f.primarySha}`);
+    assert.equal(stored.state, 'VERIFIED'); assert.ok(stored.verifiedAt); assert.equal(stored.attempt, 1);
+    const attempts = f.store.list<any>('git_attempt', f.workspace.id).filter((a: any) => a.submissionId === legacy.id);
+    assert.equal(attempts.length, 1); assert.equal(attempts[0]!.repository, 'fixture/delivery'); assert.equal(attempts[0]!.sha, f.primarySha); assert.equal(attempts[0]!.evidenceRole, 'snapshot');
+    const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
+    assert.equal(view.git.id, legacy.id);
+    assert.equal(view.git.entries.length, 1);
+    assert.equal(view.git.entries[0].repository, 'fixture/delivery');
+    assert.equal(view.git.entries[0].sha, f.primarySha);
+    assert.equal(view.git.entries[0].url, `https://github.com/fixture/delivery/commit/${f.primarySha}`);
+    assert.equal(view.git.entries[0].attempt.state, 'VERIFIED');
+    assert.deepEqual(f.closureBlocked().filter((code: string) => code.startsWith('GIT')), []);
+  } finally { await verifier.close(); await f.close(); }
+});
+
+async function buildAcceptedLeaf(f: Awaited<ReturnType<typeof multiRepoFixture>>, issueId: string, designId: string, rootDescription: string, options: { digestPolicy?: 2 | 3 | 4; legacySubmission?: boolean } = {}) {
+  const s = f.store; const w = f.workspace; const bindingId = s.get<any>('workspace', w.id).gitBindingId;
+  const existing = s.get<Issue>('issue', issueId);
+  if (!existing.parentId) s.put('design', { id: designId, issueId, content: 'Fixture design', criteria: ['SCOPE'], status: 'APPROVED', hash: 'fixture-design-hash', requirementDescription: rootDescription }, w.id);
+  const runId = randomUUID();
+  const actor: Actor = { id: randomUUID(), role: 'worker', name: 'Accepted leaf worker', principalId: `principal-${runId}`, runId, workspaceIds: [w.id], sessionId: randomUUID() };
+  s.token(actor);
+  s.put('run', { id: runId, issueId, workspaceId: w.id, actorId: actor.principalId, harness: 'codex', kind: 'implementation', state: 'SUCCEEDED', version: 1, createdAt: new Date().toISOString(), designId, scopeRevision: 1, providerSessionId: `session-${runId}`, executionActorId: actor.id, executionRoot: f.source }, w.id);
+  const sealed = seal(f.source, ['data.txt'], join(f.root, 'snapshots'), true, w.id, issueId, actor.id, actor.sessionId, runId);
+  sealed.candidate.snapshotId = sealed.snapshot.id;
+  s.put('snapshot', sealed.snapshot, w.id);
+  const candidate = sealed.candidate; candidate.designId = designId;
+  if (options.digestPolicy) candidate.digestPolicy = options.digestPolicy;
+  s.put('candidate', candidate, w.id);
+  const qaRunId = randomUUID();
+  s.put('run', { id: qaRunId, issueId, workspaceId: w.id, actorId: actor.principalId, harness: 'dsh', kind: 'qa', state: 'SUCCEEDED', version: 1, createdAt: new Date().toISOString(), designId, scopeRevision: 1, candidateId: candidate.id, snapshotId: sealed.snapshot.id }, w.id);
+  const reportId = randomUUID();
+  s.put('qa_report', { id: reportId, workspaceId: w.id, issueId, runId: qaRunId, actorId: 'fixture-qa', sessionId: randomUUID(), candidateId: candidate.id, snapshotId: sealed.snapshot.id, verdict: 'PASS', results: [], findings: [], summary: 'Fixture independent QA' }, w.id);
+  const review = (stage: string, extra: object = {}) => { const id = randomUUID(); s.put('review', { id, issueId, workspaceId: w.id, actorId: 'fixture-lead', sessionId: randomUUID(), candidateId: candidate.id, snapshotId: sealed.snapshot.id, stage, verdict: 'PASS', reason: 'Fixture review', at: new Date().toISOString(), ...extra }, w.id); return id; };
+  const initialReview = review('PRE_QA'); const qaReview = review('QA', { reportId }); const finalReview = review('FINAL');
+  const expectedTreeSha = snapshotGitTree(sealed.snapshot);
+  const git: any = options.legacySubmission
+    ? { id: randomUUID(), workspaceId: w.id, issueId, candidateId: candidate.id, snapshotId: sealed.snapshot.id, bindingId, repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}`, actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }
+    : { id: randomUUID(), workspaceId: w.id, issueId, candidateId: candidate.id, snapshotId: sealed.snapshot.id, bindingId, entries: [{ repository: 'fixture/delivery', subdirectory: '', sha: f.primarySha, url: `https://github.com/fixture/delivery/commit/${f.primarySha}` }], actorId: f.owner.id, createdAt: new Date().toISOString(), state: 'VERIFIED', attempt: 1, verifiedAt: new Date().toISOString(), treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) };
+  s.put('git_submission', git, w.id);
+  s.put('git_attempt', { id: randomUUID(), submissionId: git.id, workspaceId: w.id, issueId, attempt: 1, entryIndex: 0, treeComparison: true, evidenceRole: 'snapshot', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), state: 'VERIFIED', apiVersion: githubApiVersion, repository: 'fixture/delivery', sha: f.primarySha, treeSha: expectedTreeSha, expectedTreeSha, rootTreeSha: 'r'.repeat(40) }, w.id);
+  const issue = s.get<Issue>('issue', issueId);
+  issue.candidate = candidate; issue.initialReview = initialReview; issue.qaReview = qaReview; issue.finalReview = finalReview; issue.gitSubmissionId = git.id; issue.lease = null; issue.designId = issue.parentId ? issue.designId : designId;
+  s.put('issue', issue, w.id);
+  return { candidate, snapshot: sealed.snapshot, git, initialReview, qaReview, finalReview, expectedTreeSha, designId };
+}
+
+async function acceptedLeaf(f: Awaited<ReturnType<typeof multiRepoFixture>>, designId: string, options: { digestPolicy?: 2 | 3 | 4; legacySubmission?: boolean } = {}) {
+  const issue = f.store.get<Issue>('issue', f.issue.id);
+  const built = await buildAcceptedLeaf(f, f.issue.id, designId, issue.description, options);
+  const acceptAndClose = (digest: string) => {
+    const s = f.store;
+    const current = s.get<Issue>('issue', f.issue.id); current.acceptedDigest = digest; s.put('issue', current, f.workspace.id);
+    s.put('delivery_approval', { id: randomUUID(), issueId: f.issue.id, actorId: f.owner.id, candidateId: current.candidate!.id, digest, decision: 'ACCEPT', reason: 'Fixture human acceptance', at: new Date().toISOString() }, f.workspace.id);
+    return f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: s.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }) as any;
+  };
+  return { ...f, built, acceptAndClose };
+}
+
+test('pre-upgrade candidates keep their stored digest policy and close normally', async () => {
+  const f = await acceptedLeaf(await multiRepoFixture(), randomUUID(), { legacySubmission: true });
+  try {
+    const s = f.store; const issue = s.get<Issue>('issue', f.issue.id); const bindingId = s.get<any>('workspace', f.workspace.id).gitBindingId;
+    const expected = hash(canonical({ policyVersion: 2, designId: f.built.designId, scopeRevision: issue.scopeRevision, candidateId: f.built.candidate.id, snapshotHash: f.built.snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: bindingId, git: { id: f.built.git.id, bindingId: f.built.git.bindingId, sha: f.built.git.sha, repository: f.built.git.repository, subdirectory: f.built.git.subdirectory } }));
+    assert.equal(acceptanceDigest(s, issue), expected);
+    assert.equal(f.acceptAndClose(expected).issue.state, 'DONE');
+  } finally { await f.close(); }
+});
+
+test('new candidates accept and close under digest policy 4', async () => {
+  const f = await acceptedLeaf(await multiRepoFixture(), randomUUID(), { digestPolicy: 4 });
+  try {
+    const s = f.store; const issue = s.get<Issue>('issue', f.issue.id); const bindingId = s.get<any>('workspace', f.workspace.id).gitBindingId;
+    const expected = hash(canonical({ policyVersion: 4, designId: f.built.designId, scopeRevision: issue.scopeRevision, candidateId: f.built.candidate.id, snapshotHash: f.built.snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: bindingId, git: { id: f.built.git.id, bindingId: f.built.git.bindingId, entries: f.built.git.entries } }));
+    assert.equal(acceptanceDigest(s, issue), expected);
+    assert.equal(f.acceptAndClose(expected).issue.state, 'DONE');
+  } finally { await f.close(); }
+});
+
+test('mixed upgrade records digest stably under the stored legacy policy', async () => {
+  const f = await acceptedLeaf(await multiRepoFixture(), randomUUID());
+  try {
+    const s = f.store; const issue = s.get<Issue>('issue', f.issue.id); const bindingId = s.get<any>('workspace', f.workspace.id).gitBindingId;
+    const primary = f.built.git.entries[0];
+    const expected = hash(canonical({ policyVersion: 2, designId: f.built.designId, scopeRevision: issue.scopeRevision, candidateId: f.built.candidate.id, snapshotHash: f.built.snapshot.hash, initialReview: issue.initialReview, qaReview: issue.qaReview, finalReview: issue.finalReview, artifactMode: issue.artifactMode, gitBindingId: bindingId, git: { id: f.built.git.id, bindingId: f.built.git.bindingId, sha: primary.sha, repository: primary.repository, subdirectory: primary.subdirectory } }));
+    assert.equal(acceptanceDigest(s, issue), expected);
+    assert.equal(acceptanceDigest(s, s.get<Issue>('issue', f.issue.id)), expected);
+    assert.equal(f.acceptAndClose(expected).issue.state, 'DONE');
+  } finally { await f.close(); }
+});
+
+test('pre-upgrade accepted children keep parent integration valid', async () => {
+  const f = await multiRepoFixture();
+  try {
+    const s = f.store; const flow = f.flow; const owner = f.owner; const w = f.workspace;
+    const call = (op: string, input: object) => flow.execute(owner, op, { idempotencyKey: randomUUID(), ...input }) as any;
+    const parent = call('issue_create', { workspaceId: w.id, title: 'Legacy integration parent', description: 'Parent scope over legacy children', criteria: ['SCOPE'] }).issue as Issue;
+    const change = (op: string, id: string, input: object = {}) => call(op, { workspaceId: w.id, issueId: id, expectedVersion: s.get<Issue>('issue', id).version, ...input });
+    change('design_set', parent.id, { content: 'Assemble the accepted legacy child', criteria: ['SCOPE'] });
+    change('design_submit', parent.id);
+    change('design_decide', parent.id, { designId: s.get<Issue>('issue', parent.id).designId, decision: 'APPROVED', reason: 'Automated fixture approval' });
+    const child = call('issue_create', { workspaceId: w.id, parentId: parent.id, expectedParentVersion: s.get<Issue>('issue', parent.id).version, title: '[Test] Legacy: deliver content -> accepted child', description: 'Legacy child delivered before the digest policy upgrade', criteria: ['SCOPE'] }).issue as Issue;
+    const built = await buildAcceptedLeaf(f, child.id, s.get<Issue>('issue', parent.id).designId, s.get<Issue>('issue', parent.id).description, { legacySubmission: true });
+    const digest = acceptanceDigest(s, s.get<Issue>('issue', child.id));
+    const done = s.get<Issue>('issue', child.id); done.acceptedDigest = digest; done.state = 'DONE'; s.put('issue', done, w.id);
+    s.put('delivery_approval', { id: randomUUID(), issueId: child.id, actorId: owner.id, candidateId: built.candidate.id, digest, decision: 'ACCEPT', reason: 'Fixture human acceptance of the legacy child', at: new Date().toISOString() }, w.id);
+    applyFixturePlan(flow, owner, parent.id);
+    const manifest = integrationManifest(s, s.get<Issue>('issue', parent.id))!;
+    assert.equal(manifest.children.length, 1);
+    assert.equal(manifest.children[0]!.issueId, child.id);
+    assert.equal(manifest.children[0]!.commitUrl, `https://github.com/fixture/delivery/commit/${f.primarySha}`);
   } finally { await f.close(); }
 });

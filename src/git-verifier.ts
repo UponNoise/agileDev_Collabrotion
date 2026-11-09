@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Actor, DomainError, GitAttempt, GitSubmission, Issue, Snapshot, Workspace } from './contracts.js';
-import { GitHubProvider, GitProvider, githubApiVersion, snapshotGitTree } from './git.js';
+import { GitHubProvider, GitProvider, githubApiVersion, snapshotGitTree, submissionEntries } from './git.js';
 import { Store } from './store.js';
 import { Workflow } from './workflow.js';
 
@@ -29,14 +29,14 @@ export class GitVerifier {
       const round = this.store.db.transaction(() => {
         const git = this.store.get<GitSubmission>('git_submission',queued.id);
         if (git.state !== 'QUEUED') return [];
-        const attempts: GitAttempt[] = git.entries.map((entry,entryIndex) => {
-          const attempt: GitAttempt = { id: randomUUID(),submissionId: git.id,workspaceId: git.workspaceId,issueId: git.issueId,attempt: git.attempt + 1,entryIndex,treeComparison: entryIndex === 0,startedAt: new Date().toISOString(),state: 'VERIFYING',apiVersion: githubApiVersion,repository: entry.repository,sha: entry.sha };
+        const attempts: GitAttempt[] = submissionEntries(git).map((entry,entryIndex) => {
+          const attempt: GitAttempt = { id: randomUUID(),submissionId: git.id,workspaceId: git.workspaceId,issueId: git.issueId,attempt: git.attempt + 1,entryIndex,treeComparison: entryIndex === 0,evidenceRole: entryIndex === 0 ? 'snapshot' : 'reference',startedAt: new Date().toISOString(),state: 'VERIFYING',apiVersion: githubApiVersion,repository: entry.repository,sha: entry.sha };
           this.store.put('git_attempt',attempt,git.workspaceId);
           return attempt;
         });
         git.state = 'VERIFYING'; git.attempt++; git.currentAttemptId = attempts[0]?.id; git.errorCode = undefined;
         this.store.put('git_submission',git,git.workspaceId);
-        this.store.event(git.workspaceId,this.store.get<Actor>('actor',git.actorId),'git_verification_started',git.id,{ attemptIds: attempts.map(a => a.id),entries: git.entries.map(e => ({ repository: e.repository,sha: e.sha })),performedBy: 'git-verifier' });
+        this.store.event(git.workspaceId,this.store.get<Actor>('actor',git.actorId),'git_verification_started',git.id,{ attemptIds: attempts.map(a => a.id),entries: submissionEntries(git).map(e => ({ repository: e.repository,sha: e.sha })),performedBy: 'git-verifier' });
         return attempts;
       }).immediate();
       if (round.length) {
@@ -50,7 +50,7 @@ export class GitVerifier {
     try {
       const git = this.store.get<GitSubmission>('git_submission',id); const issue = this.store.get<Issue>('issue',git.issueId); const workspace = this.store.get<Workspace>('workspace',git.workspaceId);
       if (issue.gitSubmissionId !== id || issue.candidate?.id !== git.candidateId || issue.candidate?.snapshotId !== git.snapshotId || workspace.gitBindingId !== git.bindingId) throw new DomainError('GIT_EVIDENCE_STALE','Git mapping no longer belongs to the current delivery');
-      const entry = git.entries[attempt.entryIndex];
+      const entry = submissionEntries(git)[attempt.entryIndex];
       if (!entry || entry.repository !== attempt.repository || entry.sha !== attempt.sha) throw new DomainError('GIT_EVIDENCE_STALE','Git attempt does not match the submitted commit entry');
       const snapshot = this.store.get<Snapshot>('snapshot',git.snapshotId);
       if (attempt.treeComparison) {

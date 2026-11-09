@@ -32,6 +32,11 @@ export function githubCommitUrl(value: string) {
   const repository = match[1]!.toLowerCase(); const commitSha = match[2]!.toLowerCase();
   return { repository,sha: commitSha,url: `https://github.com/${repository}/commit/${commitSha}` };
 }
+export function submissionEntries(submission: { entries?: { repository: string; subdirectory?: string; sha: string; url?: string }[]; repository?: string; subdirectory?: string; sha?: string; url?: string }): { repository: string; subdirectory: string; sha: string; url: string }[] {
+  if (submission.entries?.length) return submission.entries.map(entry => ({ repository: entry.repository,subdirectory: entry.subdirectory ?? '',sha: entry.sha,url: entry.url ?? `https://github.com/${entry.repository}/commit/${entry.sha}` }));
+  if (submission.repository && submission.sha) return [{ repository: submission.repository,subdirectory: submission.subdirectory ?? '',sha: submission.sha,url: submission.url ?? `https://github.com/${submission.repository}/commit/${submission.sha}` }];
+  return [];
+}
 export function inspectGitBinding(workspace: Workspace, remote: string, actorId: string): GitBinding {
   if (!workspace.commonDir) throw new DomainError('GIT_WORKSPACE_REQUIRED','Register a Git workspace before binding its remote');
   const env = cleanGitEnv();
@@ -95,7 +100,7 @@ export class GitHubProvider implements GitProvider {
     } catch (error) { if (error instanceof DomainError) throw error; throw new DomainError(signal.aborted ? 'VERIFICATION_INTERRUPTED' : 'PROVIDER_UNAVAILABLE','GitHub verification is unavailable; retain acceptance and retry later'); }
   }
   async resolve(submission: GitSubmission,signal: AbortSignal) {
-    const primary = submission.entries[0];
+    const primary = submissionEntries(submission)[0];
     if (!primary) throw new DomainError('REPOSITORY_INVALID','Verification requires at least one commit entry');
     return this.resolveEntry(primary.repository,primary.sha,primary.subdirectory,signal);
   }
