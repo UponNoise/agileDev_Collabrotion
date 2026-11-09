@@ -12,6 +12,8 @@ P1–P5 constitute the local MVP. P6 is a future scope proposal, not hidden work
 
 Approved scope amendment, 2026-11-09: deliver the desktop application as the primary human entry and MCP as the required common harness entry. Three native plugin packages are optional enhancements. P1/P5 must verify the actual desktop package, three MCP entry configurations, lifecycle/removal/data preservation, and browser fallback; no marketplace or unverified embedded harness view is required. This replaces the earlier mandatory native-plugin/embedded-view packaging gates while preserving all workflow and execution acceptance. The requested Chinese/English Settings, modifier-wheel zoom, persistence, and effective-viewport layout checks extend AC26/27/38.
 
+Service ownership correction: persistent startup is a desktop/explicit-owner responsibility. P1/P5 verify attach-only MCP/commands/configuration, named offline failure without spawn, host-disconnect survival, and explicit owner crash recovery under AC29/35/38. A host-born daemon is not evidence of independent service lifetime. The complete local multi-harness product and all other phase gates remain required.
+
 ## 2. Phase definitions
 
 | Phase | Result | Mandatory exit evidence | Relative size |
