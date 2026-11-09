@@ -6,12 +6,22 @@ import { connectMcp } from './mcp.js';
 import { discoverHarnesses, probeHarness } from './harness.js';
 import { probeHosts } from './probe.js';
 import { serve } from './daemon.js';
-import { dataDirectory, ensureService, stopService } from './service-launcher.js';
+import { dataDirectory, ensureService, requireService, ServiceError, stopService } from './service-launcher.js';
 import { verifyExecution,verifyGit } from './verify-execution.js';
 import { harnesses, Harness } from './contracts.js';
 
 const dataDir = dataDirectory();
 const service = () => ensureService({ dataDir, node: process.execPath, script: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js') });
+async function commandClient() {
+  const endpoint = process.env.AGILEDEV_ENDPOINT;
+  const token = process.env.AGILEDEV_TOKEN;
+  if (endpoint !== undefined) {
+    if (!token) throw new ServiceError('AGENT_CREDENTIAL_REQUIRED', 'An explicit AGILEDEV_ENDPOINT requires an explicit AGILEDEV_TOKEN agent credential. The local owner credential is not forwarded.');
+    return new LocalClient(endpoint, token);
+  }
+  const config = await requireService(dataDir);
+  return new LocalClient(config.endpoint, token ?? config.ownerToken);
+}
 async function main() {
   const [command = 'help', ...args] = process.argv.slice(2);
   if (command === 'ui') {
@@ -37,22 +47,21 @@ async function main() {
   if (command === 'mcp') {
     const token = process.env.AGILEDEV_TOKEN;
     if (!token) throw new Error('Set AGILEDEV_TOKEN to an enrolled agent credential. The owner credential is never used automatically for MCP.');
-    const endpoint = process.env.AGILEDEV_ENDPOINT ?? (await service()).endpoint;
+    const endpoint = process.env.AGILEDEV_ENDPOINT ?? (await requireService(dataDir)).endpoint;
     await connectMcp(new LocalClient(endpoint, token));
     return;
   }
   if (command === 'command') {
     if (!args[0]) throw new Error('Usage: command <operation> [JSON file|-]; input defaults to stdin');
-    const config = process.env.AGILEDEV_ENDPOINT && process.env.AGILEDEV_TOKEN ? null : await service();
+    const client = await commandClient();
     const input = JSON.parse(readFileSync(!args[1] || args[1] === '-' ? 0 : args[1], 'utf8'));
-    const client = new LocalClient(process.env.AGILEDEV_ENDPOINT ?? config!.endpoint, process.env.AGILEDEV_TOKEN ?? config!.ownerToken);
     console.log(JSON.stringify(await client.command(args[0], input), null, 2));
     return;
   }
   if (command === 'connection') {
     const token = process.env.AGILEDEV_TOKEN;
     if (!token) throw new Error('Enroll an agent and set AGILEDEV_TOKEN first.');
-    const endpoint = process.env.AGILEDEV_ENDPOINT ?? (await service()).endpoint;
+    const endpoint = process.env.AGILEDEV_ENDPOINT ?? (await requireService(dataDir)).endpoint;
     const client = new LocalClient(endpoint, token);
     if ((await client.request('/api/session')).actor.role === 'human') throw new Error('Connection configuration requires an agent credential.');
     const script = resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js');
@@ -71,4 +80,4 @@ async function main() {
   }
   console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
-main().catch(error => { console.error(error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
+main().catch(error => { console.error(error instanceof ServiceError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });

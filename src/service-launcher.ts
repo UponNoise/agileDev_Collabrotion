@@ -50,6 +50,13 @@ export async function serviceAvailable(descriptor: ServiceDescriptor, directory:
   if (health.version !== '0.1.0') throw new ServiceError('SERVICE_VERSION_MISMATCH', 'Stop the existing service before switching application versions.');
   return true;
 }
+export async function requireService(directory: string): Promise<ServiceDescriptor> {
+  const descriptor = readDescriptor(directory);
+  if (descriptor && await serviceAvailable(descriptor, directory)) return descriptor;
+  const lock = readLock(directory);
+  if ((lock && processExists(lock.pid)) || (descriptor && processExists(descriptor.pid))) throw new ServiceError('SERVICE_UNAVAILABLE', 'The recorded service process is unavailable. Inspect its lock, port, and runtime before an explicit owner restart.');
+  throw new ServiceError('SERVICE_OWNER_START_REQUIRED', 'Open the AgileDev desktop app or run "agiledev service-start" with the same AGILEDEV_DATA_DIR, then reconnect. Agent connections do not start or restart the shared service.');
+}
 export async function ensureService(options: LaunchOptions): Promise<ServiceDescriptor> {
   const deadline = Date.now() + (options.timeoutMs ?? 20000);
   let launched = false;
