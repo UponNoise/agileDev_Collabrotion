@@ -226,7 +226,7 @@ async function reviewedGitFixture() {
   } catch (error) { await f.close(); throw error; }
 }
 
-test('Git outage preserves exact human acceptance and successful retry closes without a second approval', { timeout: 20000 },async () => {
+test('Git recovery records readiness only; explicit completion closes the saved acceptance without a second approval', { timeout: 20000 },async () => {
   const f = await reviewedGitFixture(); let calls = 0;
   const verifier = new GitVerifier(f.store,new GitHubProvider(async () => ++calls === 1 ? new Response('unavailable',{ status: 503 }) : Response.json({ sha: f.sha,tree: { sha: f.tree } }),() => undefined));
   try {
@@ -234,8 +234,14 @@ test('Git outage preserves exact human acceptance and successful retry closes wi
     const accepted = f.delivery(); assert.equal(accepted.issue.state,'USER_ACCEPTANCE'); assert.deepEqual(accepted.closureBlocked,['PROVIDER_UNAVAILABLE']);
     const digest = f.current(f.issue.id).acceptedDigest; assert.ok(digest); const count = f.store.list('delivery_approval',f.workspace.id).length;
     f.change('git_retry',f.issue.id,{ submissionId: git.id },f.lead); assert.equal(f.current(f.issue.id).acceptedDigest,digest);
-    verifier.tick(); await until(() => f.current(f.issue.id).state === 'DONE');
-    const verified = f.store.get<GitSubmission>('git_submission',git.id); assert.equal(verified.state,'VERIFIED'); assert.equal(verified.treeSha,f.tree); assert.ok(verified.verifiedAt); assert.equal(verified.attempt,2);
+    verifier.tick(); await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'VERIFIED');
+    const verified = f.store.get<GitSubmission>('git_submission',git.id); assert.equal(verified.treeSha,f.tree); assert.ok(verified.verifiedAt); assert.equal(verified.attempt,2);
+    const ready = f.current(f.issue.id); assert.equal(ready.state,'USER_ACCEPTANCE'); assert.equal(ready.acceptedDigest,digest);
+    const events = f.store.db.prepare('SELECT operation,data FROM events WHERE workspace_id=? ORDER BY sequence').all(f.workspace.id) as { operation: string; data: string }[];
+    assert.equal(events.some(e => e.operation === 'delivery_closed'),false);
+    assert.equal(JSON.parse(events.filter(e => e.operation === 'git_verification_finished').at(-1)!.data).readyToComplete,true);
+    const closed = f.change('delivery_complete',f.issue.id,{},f.lead); assert.equal(closed.issue.state,'DONE'); assert.deepEqual(closed.closureBlocked,[]);
+    assert.equal(f.current(f.issue.id).acceptedDigest,digest);
     assert.equal(f.store.list('delivery_approval',f.workspace.id).length,count); assert.equal(f.store.list('git_attempt',f.workspace.id).length,2); assert.equal(calls,2);
     assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
   } finally { await verifier.close(); await f.close(); }
