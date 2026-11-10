@@ -20,7 +20,7 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | --- | --- | --- |
 | `workspace_resolve` | Resolve/select binding from trusted host context, advertised roots, or explicit validated path | No disk-wide scan; ambiguous results require selection; registration is idempotent |
 | `issue_list` | Filter by workspace, parent, state, role, assignee, readiness; cursor + page size | Workspace-scoped; default 20 compact rows |
-| `issue_get` | `workspace_id`, `issue_id`, `view=brief|full|history|evidence`, optional cursor | Brief includes next actions; history/evidence paginated |
+| `issue_get` | `workspace_id`, `issue_id`, `view=brief\|full\|history\|evidence`, optional cursor | Brief includes next actions; history/evidence paginated |
 | `issue_create` | Workspace, optional parent, type, parent title or task suffix, draft description | Human/lead/PM; always `NOT_STARTED`; no implicit execution |
 | `issue_update` | Allowed metadata fields or new draft content revision, expected version | No status/role/grant patch; material design/scope edits create a revision |
 | `design_submit` | Requirement, exact draft revision, review summary | Lead; freezes review candidate and requests human decision |
@@ -31,14 +31,20 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | `work_submit` | Issue, round, scope/design revision, artifact manifest, criterion/self-check evidence, lease fence | Owning worker; transitions to initial lead review only |
 | `review_submit` | Issue, stage, verdict, criterion results, report/evidence, current digest | Assigned lead or independent QA; stage-specific rules; no human impersonation |
 | `issue_transition` | Action enum, reason/evidence references, expected version | Only legal lifecycle commands; hold/abandon/reopen/complete need human authority as specified |
-| `approval_request` | Design/delivery/scope/action digest, explanation, requested decision | Creates a human inbox entry and link; cannot decide or create a grant |
+| `approval_request` | Withdrawn by revision R1, 2026-11-09 | Pending human decisions derive from authoritative state; agents cannot create, dismiss, or resolve inbox entries |
 | `run_get` | Run/dispatch ID, compact status/event cursor | Reports queued/running/uncertain and provider references truthfully |
 | `run_interrupt` | Run ID, reason, expected version | Authorized coordinator; stop request is distinct from confirmed termination |
 | `gap_list` | Workspace/parent, severity/category, cursor | Explains deterministic gaps with IDs and remediation |
+| `iteration_list` / `iteration_get` | Workspace, state, cursor; or an iteration with its members and derived progress | Read within scope |
+| `iteration_create` / `iteration_update` / `iteration_start` / `iteration_close` / `iteration_membership_set` | Iteration versions, complete source/destination membership revision/hash, all affected issue versions, adoption match-set hash, unfinished dispositions | Lead/PM; one atomic membership transaction; metadata does not stale artifact approvals or gate work; add/remove/transfer/adoption races reject without partial moves |
+| `defect_list` / `defect_get` | Workspace, issue, state, severity, origin, cursor; or a defect | Read within the caller's existing scope |
+| `defect_propose` | Target issue, severity, reproduction, expected/actual behavior, optional criteria | Any agent on an issue it can read; creates `PROPOSED` only, for human triage |
 
 The common schema envelope contains `contract_version`, `workspace_id`, and for mutations `expected_version` plus `idempotency_key`. Multi-record commands list all relevant aggregate preconditions. Lease renewals use the lease version; other commands use the issue/plan version. Read-only queries do not require mutation keys.
 
 Human web endpoints additionally support design decisions, acceptance decisions, grants/revocations, and explicit scope exclusion/reopen decisions. They are not registered as agent-callable tools. A future chat-human adapter must pass the same human attribution tests before forwarding those commands.
+
+Accepted revision R1 adds human-only `inbox_list`, `decision_batch_accept`, defect reports/triage/withdrawal/waivers, and rejection classification; none is MCP-callable or grantable. Batch previews expose each full manifest/review/Git/defect packet and bind exact issue/candidate/digest/decision-set preconditions. A stale batch saves nothing; a valid batch atomically saves all acceptances even when some closures remain blocked. Accepted items remain visible/actionable until explicit authorized completion. Existing `delivery_complete` uses current saved acceptance/authority and all guards; no duplicate human approval is invented. Git/CI/verifier fact callbacks cannot invoke completion or create human decisions. Explicit service-authorized worker/lead/QA/human command transitions remain valid.
 
 Implemented delegation refinement, 2026-11-07: `grant_list` returns this authenticated lead/PM's paginated issue-specific authority and status. Supply an available `grantId` to `issue_transition` or `delivery_complete`; the service rechecks grantee/action/scope/expiry/uses and all normal transition guards atomically. Human-only `grant_create` binds the displayed `authorizationScopeHash`, current issue version, and, for completion, exact candidate/digest. `grant_revoke` checks both issue and grant versions. Neither command is exposed over MCP. See [the executable local contract](local-development.md#human-action-grants) for current camelCase fields and limits. This refinement does not implement batch decisions or arbitrary human-event attribution.
 
@@ -156,17 +162,19 @@ Every assignment packet includes:
 
 The brief contains references and a compact summary; agents fetch the necessary design/evidence sections on demand. Do not copy the whole project history into every child prompt.
 
+Revision R1 additions: iteration name/end/goal are advisory packet context. QA packets freeze a versioned required defect-set reference, count/hash and paginated complete IDs/versions for every OPEN or stale-WAIVED defect. Reports bind that set and answer each member; accepted reports record their input and resulting sets after own authorized findings/fixes. Human/waiver/batch previews bind the complete confirmed decision set as an additional precondition alongside the existing artifact digest. Relevant concurrent mutations stale affected current evidence, not historical digest identities. Own authorized result sets avoid self-staling. Compact packets/expansion retain the NF05 budget.
+
 Handoff must state implemented behavior, criteria covered, evidence references, final artifact snapshot, known limitations, and anything still blocked. A narrative such as `finished, all good` is not sufficient.
 
 ## 6. Role playbooks
 
 **Product lead:** resolve workspace; discuss the requirement; create parent draft(s); write measurable design and non-goals; request human approval. After implementation, review the actual snapshot twice at the specified stages and present the final evidence to the user. The product role remains accountable for gaps even when PM handles dispatch.
 
-**PM:** read the approved or draft revision; propose small tasks with valid names and criterion coverage; declare dependencies and shared interfaces; leave assignment/dates empty when intentionally deferred. Apply a reviewed plan, choose compatible execution adapters, and dispatch only ready work. Reconcile failures and reassign with history. Do not declare new approved scope or use deadline pressure to skip gates.
+**PM:** read the approved or draft revision; propose small tasks with valid names and criterion coverage; declare dependencies and shared interfaces; leave assignment/dates empty when intentionally deferred. Apply a reviewed plan, choose compatible execution adapters, and dispatch only ready work. Reconcile failures and reassign with history. Do not declare new approved scope or use deadline pressure to skip gates. Plan optional iterations and close each with an explicit disposition for every unfinished member; an end date never justifies skipping a gate.
 
 **Worker:** fetch the exact work packet, confirm scope, claim atomically, and work only in its assigned execution directory. Renew ownership, run meaningful self-checks, publish immutable evidence, and submit for initial lead review. On rejection read the failed criteria, implement a new round, and resubmit through the full path.
 
-**QA:** start from a fresh assigned context and approved criteria. Independently inspect and test the candidate, including boundary/negative paths where relevant; record pass/fail/blocked/not-run and reproducible defects. Report tool/environment limitations honestly. Do not change implementation under the QA identity; fixes return to the worker.
+**QA:** start from a fresh assigned context and approved criteria. Independently inspect and test the candidate, including boundary/negative paths where relevant; record pass/fail/blocked/not-run and reproducible defects. Report tool/environment limitations honestly. Do not change implementation under the QA identity; fixes return to the worker. Give every listed defect an explicit result; never infer that a defect is fixed from unrelated passing checks.
 
 **Coordinator:** persist dispatch before spawn; attach actual provider IDs; bridge permissions/user-input requests to the human; handle heartbeats/events and interruption. A provider's successful turn is not a successful product acceptance.
 

@@ -31,12 +31,12 @@ Local installation
     Requirement (top-level parent; accountable product lead)
       Task (implementation slice)
       Task
-        Defect link (a separate issue related to the failed task)
+        Defect record (linked to the affected task; FR28)
 ```
 
-Workspace is a container, not an artificial requirement that must close every time the project ships. Each real requirement is a top-level parent inside its workspace partition. A requirement can also be an executable leaf if it has no children. MVP supports one task level under a requirement; defects are related records rather than another hidden hierarchy. Deeper nesting is deferred.
+Workspace is a container, not an artificial requirement that must close every time the project ships. Each real requirement is a top-level parent inside its workspace partition. A requirement can also be an executable leaf if it has no children. MVP supports one task level under a requirement; defects are related records rather than another hidden hierarchy. Deeper nesting is deferred. Iterations (FR15) and defects (FR28) are separate records that reference issues; neither adds a hierarchy level.
 
-Each item has an immutable ID, workspace-local display key, stable URL, title, Markdown description, requirement/design revision references, acceptance criteria, state, product owner, optional assignee, priority, optional dates/iteration, dependencies, evidence, and an append-only activity history.
+Each item has an immutable ID, workspace-local display key, stable URL, title, Markdown description, requirement/design revision references, acceptance criteria, state, product owner, optional assignee, priority, optional dates and iteration membership, dependencies, evidence, and an append-only activity history.
 
 ## 4. Requirements
 
@@ -58,18 +58,20 @@ Priority `M` means mandatory for the P5 MVP; `L` means later. Acceptance IDs ref
 | FR12 | M | Bind implementation, test, lead, QA, and human acceptance evidence to the reviewed requirement/artifact revision | AC05, AC20 |
 | FR13 | M | Require a final immutable, repository-verified commit link before Git-backed work reaches `DONE`; preserve non-Git evidence without fabricated commits | AC21–AC23 |
 | FR14 | M | Give each item a stable direct URL, searchable key, parent links, documents, and complete transition/decision history | AC09, AC24 |
-| FR15 | M | Support backlog, dependency-aware planning, optional estimates/dates/iterations, and a bounded concurrent-work policy | AC08, AC25 |
+| FR15 | M | Support backlog/dependencies, optional estimates/dates, optional iteration records with versioned complete membership and atomic close/carry-over/adoption dispositions, and bounded concurrency | AC08, AC25, AC40 |
 | FR16 | M | Visual web UI supports workspace switching, parent/task views, board/list, item details, design review, acceptance, and a gap panel | AC26, AC27 |
 | FR17 | M | Compact agent tools return scoped work packets, legal next actions, and concrete blocker reasons without requiring UI automation | AC28 |
 | FR18 | M | Codex, DSH, and Claude Code can all operate the same workspace data through documented installation/configuration paths | AC29, AC38 |
 | FR19 | M | Provide an embedded plugin review/overview surface where verified, plus a browser fallback on every target; disclose the actual supported surface | AC30 |
 | FR20 | M | Parent completion requires successful in-scope children and the selected integration rule; abandoned work cannot masquerade as delivered scope | AC31, AC32 |
 | FR21 | M | Retain audit actors, reasons, timestamps, approvals, runs, and changed fields; export records and restore consistent backups | AC24, AC33 |
-| FR22 | M | Find missing criteria, unassigned/unscheduled work, blocked dependencies, expired ownership, stale approvals, missing commits, and repeated rework | AC34 |
+| FR22 | M | Find missing criteria, unassigned/unscheduled work, blocked dependencies, expired ownership, stale approvals, missing commits, repeated rework, aging human decisions, overdue iterations, untriaged or escaped defects, and stale waivers | AC34 |
 | FR23 | M | Handle restart, transport retry, duplicate callbacks, interrupted runs, and external Git outages without false completion or duplicate dispatch | AC18, AC35 |
 | FR24 | M | Keep issue data/evidence local and workspace-scoped by default; protect human approval channels and exclude private records from public repository sync | AC14, AC36 |
 | FR25 | L | Optional GitHub/Jira/Linear issue projection with explicit field ownership and synchronization policy | Separate P6 spec |
-| FR26 | L | Shared server, multiple human accounts, workspace membership, remote runners, and notifications | Separate P6 spec |
+| FR26 | L | Shared server, multiple human accounts, workspace membership, remote runners, and remote notification channels such as chat, email, or webhooks; local desktop signals belong to FR27 | Separate P6 spec |
+| FR27 | M | Derive the human inbox from exact authoritative targets with first-unresolved ages and accepted-ready completion actions; provide complete readable evidence and exact target/defect-set-bound batch acceptance; local signals never decide unseen/changed items | AC14, AC22, AC39 |
+| FR28 | M | Track QA/user/escaped defects with human triage of agent proposals, complete versioned QA/decision defect sets, explicit independent verification, and human MINOR waivers bound to the artifact digest and resulting defect evidence | AC19, AC20, AC41 |
 
 ## 5. User journeys
 
@@ -135,6 +137,8 @@ The user also requested Chinese/English interface selection in Settings, modifie
 
 Service ownership correction, 2026-11-09: persistent startup belongs to the desktop or an explicit local-owner launcher. MCP, ordinary commands, and connection generation attach to an already verified owner-running authority; an offline client reports `SERVICE_OWNER_START_REQUIRED`. Native Codex testing showed that a daemon born inside its MCP host can disappear with a graceful host exit, while an independently owner-prestarted daemon survives the same lifecycle. No process-isolation escape is part of the design. AC29/35/38 must exercise host disconnect, offline non-start, explicit owner recovery, and reconnect to retained data. This correction preserves the desktop-first product scope and does not waive any release gate or approve product-managed work.
 
+Accepted scope revision R1, 2026-11-09: the user accepted [revision R1](proposals/r1-inbox-iterations-defects.md) with every proposed default. FR27 and FR28 become mandatory, and FR15, FR22, and FR26 are refined as shown above. Local desktop attention signals are in MVP scope; operating-system notifications are capability-reported, and remote notification channels remain FR26. Git or CI events and automation may record facts, trigger verification, or send reminders, but never advance a gate. This revision does not approve any requirement or delivery managed inside the application.
+
 The MVP includes real dispatch and independent QA, not only a board. Desktop packaging, common MCP access, and browser fallback must be proven in P1/P5. Optional native harness packages and embedded surfaces require their own evidence before being claimed as supported.
 
 The MVP does not include replacing coding harnesses, arbitrary shell execution from ticket text, cloud tenant operation, billing, SSO, organization management, full Scrum compliance, chat/email integrations, autonomous release deployment, or automatic Git merges. Git integration records and verifies evidence; merge/release authorization remains with the user's development workflow.
@@ -158,12 +162,25 @@ These choices make specification 0.1 implementable. They are recommendations, no
 | D09 | MVP has requirement + task hierarchy, with related defects and criterion-level coverage | Avoids recursive workflow complexity before the core is validated |
 | D10 | Browser UI is mandatory for every entry; native embedded capability is tested and reported per surface | Avoids promising unsupported host UI behavior; an unavailable required embedded surface must trigger a scope decision |
 
+Revision R1 decisions, accepted by the user on 2026-11-09 with every proposed default. Details are in [revision R1](proposals/r1-inbox-iterations-defects.md).
+
+| ID | Accepted decision | Effect |
+| --- | --- | --- |
+| D11 | The decision inbox, iteration records, and defect register (FR27, FR28, refined FR15/FR22) are mandatory for P5; operating-system notifications stay capability-reported | AC39–AC41 join the MVP gate; a portable package without verified notifications can still release |
+| D12 | At most one active iteration per workspace | Capacity and progress views stay single-track |
+| D13 | No tray or background desktop mode; signals exist only while the desktop runs | The verified close and exit behavior is unchanged; the inbox catches up at the next open |
+| D14 | Operating-system notifications are on where supported and show kind, workspace, and key; titles are opt-in | Notification history outside the app reveals no titles by default |
+| D15 | QA verifies every listed defect explicitly | Replaces implicit resolution by a later QA pass |
+| D16 | Any agent may propose a defect on an issue it can already read; a human triages | A proposal never becomes a confirmed defect without a human decision |
+
+R1 safety clarifications preserve D11–D16: Git/CI/verifier observations change facts/readiness only, while existing explicit scoped commands retain their authorization. Accepted pending work needs explicit completion without a fabricated second approval. Complete membership/defect-set snapshots are concurrency preconditions, not new approval roles or rewritten artifact digests. Closed history and unchanged pre-R1 evidence keep their original identities; affected fresh rounds/current decisions use the clarified contract.
+
 ## 10. Definition of ready and done
 
 **Ready to implement:** user-approved applicable design revision; concrete task scope and acceptance mapping; assigned accountable worker; cleared blocking dependencies; valid execution binding; available concurrency/cost policy; no effective hold; no unresolved readiness blockers. Dates and estimates remain optional.
 
-**Task done:** current implementation evidence; initial lead pass; independent QA pass; final lead pass; human acceptance of that snapshot or an exact authorized close delegation; no unresolved blocking defects; Git/non-Git evidence complete; closure transaction and audit event committed.
+**Task done:** current artifact/review/QA and applicable defect-set evidence; human acceptance of that snapshot or exact authorized delegation; non-INFO defects resolved or current MINOR waivers; required Git/non-Git proof; an explicit authorized acceptance/completion transaction with its audit event. Fact callbacks cannot supply that transition.
 
-**Parent done:** applicable design approved; nonempty in-scope delivery; every in-scope child done; any exclusions explicitly approved; all parent criteria covered and passed; integration evidence and lead/human acceptance current. The service derives completion after these conditions pass; neither an empty child set nor `ABANDONED` alone satisfies them.
+**Parent done:** applicable design approved; nonempty in-scope delivery; every in-scope child done; exclusions approved; all parent criteria passed; current integration, lead/QA, defect-set and human evidence. The service derives readiness from these facts; an explicit authorized parent acceptance/completion command records DONE. Neither an empty child set nor ABANDONED nor a callback alone completes it.
 
 **Phase done:** required scenarios pass with captured evidence, outstanding defects are disclosed, and the human accepts the phase under the delivery plan. This document itself is not an approval receipt.
