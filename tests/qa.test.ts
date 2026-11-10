@@ -226,6 +226,8 @@ async function reviewedGitFixture() {
   } catch (error) { await f.close(); throw error; }
 }
 
+const lastFinish = (f: any, submissionId: string) => JSON.parse((f.store.db.prepare("SELECT data FROM events WHERE workspace_id=? AND operation='git_verification_finished' AND target_id=? ORDER BY sequence DESC LIMIT 1").get(f.workspace.id,submissionId) as { data: string }).data);
+
 test('Git recovery records readiness only; explicit completion closes the saved acceptance without a second approval', { timeout: 20000 },async () => {
   const f = await reviewedGitFixture(); let calls = 0;
   const verifier = new GitVerifier(f.store,new GitHubProvider(async () => ++calls === 1 ? new Response('unavailable',{ status: 503 }) : Response.json({ sha: f.sha,tree: { sha: f.tree } }),() => undefined));
@@ -234,14 +236,14 @@ test('Git recovery records readiness only; explicit completion closes the saved 
     const accepted = f.delivery(); assert.equal(accepted.issue.state,'USER_ACCEPTANCE'); assert.deepEqual(accepted.closureBlocked,['PROVIDER_UNAVAILABLE']);
     const digest = f.current(f.issue.id).acceptedDigest; assert.ok(digest); const count = f.store.list('delivery_approval',f.workspace.id).length;
     f.change('git_retry',f.issue.id,{ submissionId: git.id },f.lead); assert.equal(f.current(f.issue.id).acceptedDigest,digest);
+    const versionBefore = f.current(f.issue.id).version;
     verifier.tick(); await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'VERIFIED');
     const verified = f.store.get<GitSubmission>('git_submission',git.id); assert.equal(verified.treeSha,f.tree); assert.ok(verified.verifiedAt); assert.equal(verified.attempt,2);
-    const ready = f.current(f.issue.id); assert.equal(ready.state,'USER_ACCEPTANCE'); assert.equal(ready.acceptedDigest,digest);
-    const events = f.store.db.prepare('SELECT operation,data FROM events WHERE workspace_id=? ORDER BY sequence').all(f.workspace.id) as { operation: string; data: string }[];
-    assert.equal(events.some(e => e.operation === 'delivery_closed'),false);
-    assert.equal(JSON.parse(events.filter(e => e.operation === 'git_verification_finished').at(-1)!.data).readyToComplete,true);
+    const ready = f.current(f.issue.id); assert.equal(ready.state,'USER_ACCEPTANCE'); assert.equal(ready.acceptedDigest,digest); assert.equal(ready.version,versionBefore);
+    const events = f.store.db.prepare('SELECT operation FROM events WHERE workspace_id=?').all(f.workspace.id) as { operation: string }[];
+    assert.equal(events.some(e => e.operation === 'delivery_closed'),false); assert.equal(lastFinish(f,git.id).readyToComplete,true);
     const closed = f.change('delivery_complete',f.issue.id,{},f.lead); assert.equal(closed.issue.state,'DONE'); assert.deepEqual(closed.closureBlocked,[]);
-    assert.equal(f.current(f.issue.id).acceptedDigest,digest);
+    assert.equal(f.current(f.issue.id).acceptedDigest,digest); assert.equal(f.store.get<GitSubmission>('git_submission',git.id).verifiedAt,verified.verifiedAt);
     assert.equal(f.store.list('delivery_approval',f.workspace.id).length,count); assert.equal(f.store.list('git_attempt',f.workspace.id).length,2); assert.equal(calls,2);
     assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
   } finally { await verifier.close(); await f.close(); }
@@ -253,7 +255,7 @@ test('an existing remote commit with a different complete tree cannot close a re
   try {
     assert.throws(() => f.change('git_submit',f.issue.id,{ candidateId: f.current(f.issue.id).candidate!.id,commitUrl: `https://github.com/wrong/repository/commit/${f.sha}` }),(e: any) => e.code === 'COMMIT_REPOSITORY_MISMATCH');
     const git = f.attach(); f.delivery(); verifier.tick(); await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'FAILED');
-    assert.equal(f.store.get<GitSubmission>('git_submission',git.id).errorCode,'COMMIT_SNAPSHOT_MISMATCH'); assert.equal(f.current(f.issue.id).state,'USER_ACCEPTANCE');
+    assert.equal(f.store.get<GitSubmission>('git_submission',git.id).errorCode,'COMMIT_SNAPSHOT_MISMATCH'); assert.equal(f.current(f.issue.id).state,'USER_ACCEPTANCE'); assert.equal(lastFinish(f,git.id).readyToComplete,false);
     const result = f.change('delivery_complete',f.issue.id,{},f.lead); assert.deepEqual(result.closureBlocked,['COMMIT_SNAPSHOT_MISMATCH']); assert.equal(result.issue.state,'USER_ACCEPTANCE');
   } finally { await verifier.close(); await f.close(); }
 });
@@ -273,13 +275,13 @@ test('changing the final commit mapping invalidates acceptance and stale provide
   } finally { await verifier.close(); await f.close(); }
 });
 
-test('a hold blocks automatic Git closure and saved acceptance can complete after resume', { timeout: 20000 },async () => {
+test('a hold keeps verified delivery unready and saved acceptance can complete after resume', { timeout: 20000 },async () => {
   const f = await reviewedGitFixture(); let resolveResponse!: (response: Response) => void;
   const verifier = new GitVerifier(f.store,new GitHubProvider(async () => new Promise<Response>(done => { resolveResponse = done; }),() => undefined));
   try {
     const git = f.attach(); f.delivery(); verifier.tick(); await until(() => !!resolveResponse);
     f.change('issue_transition',f.issue.id,{ action: 'hold',reason: 'Fixture hold during remote verification' }); resolveResponse(Response.json({ sha: f.sha,tree: { sha: f.tree } }));
-    await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'VERIFIED'); assert.equal(f.current(f.issue.id).state,'ON_HOLD');
+    await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'VERIFIED'); assert.equal(f.current(f.issue.id).state,'ON_HOLD'); assert.equal(lastFinish(f,git.id).readyToComplete,false);
     f.change('issue_transition',f.issue.id,{ action: 'resume',reason: 'Resume exact fixture delivery' });
     const result = f.change('delivery_complete',f.issue.id,{},f.lead); assert.equal(result.issue.state,'DONE'); assert.equal(f.store.list('delivery_approval',f.workspace.id).length,1);
   } finally { await verifier.close(); await f.close(); }
