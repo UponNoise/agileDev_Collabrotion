@@ -1,11 +1,20 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Actor, DomainError, Issue, Run, ScopeDecision, Workspace } from '../src/contracts.js';
 import { IterationService, iterationIssueView, iterationMembershipHash, rejectLegacyIterationWrite } from '../src/iterations.js';
 import { Iteration, IterationIssue, IterationMembershipEvent, IterationSummary } from '../src/iteration-contracts.js';
 import { Store, canonical, hash } from '../src/store.js';
 import { scopeBinding, scopeState } from '../src/scope.js';
+import { Workflow } from '../src/workflow.js';
+import { Coordinator } from '../src/runner.js';
+import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
+import { createServer } from '../src/http.js';
+import { LocalClient } from '../src/client.js';
+import { applyFixturePlan } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
@@ -368,4 +377,80 @@ test('scoped default projections are compact and expose no candidate, raw eviden
   const historical = f.view(iteration, f.worker, { view: 'flow' });
   assert.equal(historical.iteration.partial, true);
   assert.equal(historical.iteration.membershipHash, undefined);
+});
+
+test('managed worker and independent QA receive the same bounded advisory context through their actual prompt paths', { timeout: 20000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agiledev-iteration-prompt-'));
+  const source = join(root, 'source');
+  mkdirSync(source);
+  writeFileSync(join(source, 'delivery.txt'), 'original fixture content');
+  const store = new Store(join(root, 'fixture.sqlite'));
+  const flow = new Workflow(store);
+  const human = store.bootstrap().actor;
+  const call = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
+  const workspace = call(human, 'workspace_register', { root: source, name: 'Advisory prompt fixture', prefix: 'PROMPT' }).workspace as Workspace;
+  const run = (operation: string, input: object) => call(human, operation, { workspaceId: workspace.id, ...input });
+  const parent = run('issue_create', { title: 'Independent prompt fixture', description: 'Capture bounded advisory context without a real model', criteria: ['A'] }).issue as Issue;
+  const change = (operation: string, id: string, input: object, actor = human) => call(actor, operation, { workspaceId: workspace.id, issueId: id, expectedVersion: store.get<Issue>('issue', id).version, ...input });
+  change('design_set', parent.id, { content: 'Deliver fixture content; planning context never authorizes a gate', criteria: ['A'] });
+  change('design_submit', parent.id, {});
+  change('design_decide', parent.id, { designId: store.get<Issue>('issue', parent.id).designId, decision: 'APPROVED', reason: 'Automated fixture only, not human project acceptance' });
+  const child = run('issue_create', { parentId: parent.id, expectedParentVersion: store.get<Issue>('issue', parent.id).version, title: '[Test] Prompt: capture context -> no workflow bypass', description: 'Capture worker and QA fixture prompts', criteria: ['A'] }).issue as Issue;
+  const worker = run('actor_enroll', { role: 'worker', name: 'Prompt worker fixture' }).actor as Actor;
+  const qa = run('actor_enroll', { role: 'qa', name: 'Prompt QA fixture' }).actor as Actor;
+  const lead = run('actor_enroll', { role: 'lead', name: 'Prompt lead fixture' }).actor as Actor;
+  const profile = run('check_profile_create', { name: 'Unused approved prompt-fixture check', command: process.execPath, args: ['.qa/check.mjs'], criteria: ['A'], timeoutMs: 1000 }).profile;
+  change('issue_assign', child.id, { actorId: worker.id, harness: 'codex' });
+  change('qa_configure', child.id, { actorId: qa.id, harness: 'dsh', checkProfileIds: [profile.id] });
+  applyFixturePlan(flow, human, parent.id);
+  const iterations = new IterationService(store);
+  const iteration = iterations.mutate(human, 'iteration_create', { workspaceId: workspace.id, idempotencyKey: randomUUID(), name: 'Bounded advisory goal', goal: 'g'.repeat(2000), startDate: '2026-11-01', endDate: '2026-11-14', timeZone: 'Asia/Taipei', reason: 'Automated metadata fixture' }).iteration as Iteration;
+  iterations.changeMembership(human, workspace.id, [{ issueId: child.id, expectedVersion: store.get<Issue>('issue', child.id).version, iterationId: iteration.id }], [iterations.precondition(iteration)], 'Fixture planning metadata');
+  assert.equal((flow.execute(human, 'plan_get', { workspaceId: workspace.id, issueId: parent.id }) as any).coverage.ready, true);
+  change('work_dispatch', child.id, { designId: store.get<Issue>('issue', parent.id).designId, scopeRevision: child.scopeRevision });
+  const contexts: AdapterContext[] = [];
+  const finish = new Map<string, (value: AdapterResult) => void>();
+  const adapter: ExecutionAdapter = { async start(context) { contexts.push(context); context.onProvider(`controlled-prompt-fixture-${randomUUID()}`); return { result: new Promise<AdapterResult>(done => finish.set(context.cwd, done)), interrupt: async () => { finish.get(context.cwd)?.({ outcome: 'cancelled' }); return true; } }; } };
+  const app = createServer(store);
+  const endpoint = await app.listen({ host: '127.0.0.1', port: 0 });
+  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter });
+  const until = async (check: () => boolean) => {
+    const deadline = Date.now() + 10000;
+    while (!check()) { if (Date.now() > deadline) throw new Error('Prompt fixture did not reach its expected state'); await new Promise(done => setTimeout(done, 20)); }
+  };
+  try {
+    await coordinator.start();
+    await until(() => contexts.length === 1);
+    const workerContext = contexts[0]!;
+    const actor = store.authenticate(workerContext.token);
+    writeFileSync(join(workerContext.cwd, 'delivery.txt'), 'delivered fixture content');
+    const current = store.get<Issue>('issue', child.id);
+    await new LocalClient(endpoint, workerContext.token).command('work_submit', { workspaceId: workspace.id, issueId: child.id, expectedVersion: current.version, fence: current.fence, summary: 'Controlled provider fixture, not a model run', files: ['delivery.txt'], idempotencyKey: randomUUID() });
+    finish.get(workerContext.cwd)!({ outcome: 'succeeded' });
+    await until(() => store.get<Run>('run', actor.runId!).state === 'SUCCEEDED');
+    change('review_submit', child.id, { candidateId: store.get<Issue>('issue', child.id).candidate!.id, verdict: 'PASS', reason: 'Automated independent initial review fixture' }, lead);
+    await until(() => contexts.length === 2);
+    const qaContext = contexts[1]!;
+    assert.notEqual(workerContext.cwd, qaContext.cwd);
+    assert.equal(store.authenticate(qaContext.token).role, 'qa');
+    for (const context of contexts) {
+      const advisoryLine = context.prompt.split('\n').find(line => line.startsWith('Advisory iteration context'))!;
+      assert.match(advisoryLine, /does not authorize scope or gate changes/);
+      const packet = JSON.parse(advisoryLine.slice(advisoryLine.indexOf('{')));
+      assert.equal(packet.id, iteration.id);
+      assert.equal(packet.name, iteration.name);
+      assert.equal(packet.endDate, iteration.endDate);
+      assert.equal(packet.goal.length, 201);
+      assert.equal(packet.advisory, true);
+      assert.ok(advisoryLine.length < 600);
+    }
+    assert.equal(readFileSync(join(source, 'delivery.txt'), 'utf8'), 'original fixture content');
+  } finally {
+    await coordinator.close();
+    await app.close();
+    store.close();
+    const childPath = relative(realpathSync(tmpdir()), realpathSync(root));
+    assert.ok(!isAbsolute(childPath) && !childPath.startsWith('..') && !childPath.includes(sep) && childPath.startsWith('agiledev-iteration-prompt-'));
+    rmSync(root, { recursive: true, force: true });
+  }
 });

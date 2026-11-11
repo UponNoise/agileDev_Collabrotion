@@ -183,9 +183,9 @@ export class IterationService {
   }
 
   packet(actor: Actor, issue: IterationIssue) {
-    this.store.issue(actor, issue.workspaceId, issue.id);
-    if (!issue.iterationId) return null;
-    const iteration = this.get(actor, issue.workspaceId, issue.iterationId);
+    const current: IterationIssue = this.store.issue(actor, issue.workspaceId, issue.id);
+    if (!current.iterationId) return null;
+    const iteration = this.get(actor, current.workspaceId, current.iterationId);
     if (iteration.state === 'CLOSED') return null;
     const characters = Array.from(iteration.goal);
     return { id: iteration.id, name: iteration.name, endDate: iteration.endDate, goal: characters.slice(0, 200).join('') + (characters.length > 200 ? '…' : ''), advisory: true };
