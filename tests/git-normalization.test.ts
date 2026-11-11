@@ -624,3 +624,45 @@ test('only genuine legacy shape and exact current proof identities can clear del
     } finally { await f.close(); }
   }
 });
+
+test('verifier callback leaves an accepted parent in USER_ACCEPTANCE until explicit completion', async () => {
+  const f = await multiRepoFixture();
+  const s = f.store; const flow = f.flow; const owner = f.owner; const w = f.workspace;
+  const call = (op: string, input: object) => flow.execute(owner, op, { idempotencyKey: randomUUID(), ...input }) as any;
+  const change = (op: string, id: string, input: object = {}) => call(op, { workspaceId: w.id, issueId: id, expectedVersion: s.get<Issue>('issue', id).version, ...input });
+  let proofTree = '';
+  const verifier = new GitVerifier(s, new GitHubProvider(async () => Response.json({ sha: f.primarySha, tree: { sha: proofTree } }), () => undefined));
+  try {
+    const parent = call('issue_create', { workspaceId: w.id, title: 'Callback parent', description: 'Parent scope', criteria: ['SCOPE'] }).issue as Issue;
+    change('design_set', parent.id, { content: 'Assemble the accepted child', criteria: ['SCOPE'] });
+    change('design_submit', parent.id);
+    change('design_decide', parent.id, { designId: s.get<Issue>('issue', parent.id).designId, decision: 'APPROVED', reason: 'Fixture approval' });
+    const child = call('issue_create', { workspaceId: w.id, parentId: parent.id, expectedParentVersion: s.get<Issue>('issue', parent.id).version, title: '[Test] Callback: deliver content -> accepted child', description: 'Child', criteria: ['SCOPE'] }).issue as Issue;
+    const built = await buildAcceptedLeaf(f, child.id, s.get<Issue>('issue', parent.id).designId!, s.get<Issue>('issue', parent.id).description, { legacySubmission: true });
+    const childDigest = acceptanceDigest(s, s.get<Issue>('issue', child.id));
+    const done = s.get<Issue>('issue', child.id); done.acceptedDigest = childDigest; done.state = 'DONE'; s.put('issue', done, w.id);
+    s.put('delivery_approval', { id: randomUUID(), issueId: child.id, actorId: owner.id, candidateId: built.candidate.id, digest: childDigest, decision: 'ACCEPT', reason: 'Fixture child acceptance', at: new Date().toISOString() }, w.id);
+    applyFixturePlan(flow, owner, parent.id);
+    const manifest = integrationManifest(s, s.get<Issue>('issue', parent.id))!;
+    const proof = await buildAcceptedLeaf(f, parent.id, s.get<Issue>('issue', parent.id).designId!, s.get<Issue>('issue', parent.id).description, { digestPolicy: 4 });
+    proofTree = snapshotGitTree(proof.snapshot);
+    const queued = s.get<any>('git_submission', proof.git.id); queued.state = 'QUEUED'; delete queued.verifiedAt; s.put('git_submission', queued, w.id);
+    const p = s.get<Issue>('issue', parent.id); p.candidate!.integration = manifest; p.state = 'USER_ACCEPTANCE'; p.stage = null; s.put('candidate', p.candidate!, w.id); s.put('issue', p, w.id);
+    const parentDigest = acceptanceDigest(s, s.get<Issue>('issue', parent.id));
+    const accepted = s.get<Issue>('issue', parent.id); accepted.acceptedDigest = parentDigest; s.put('issue', accepted, w.id);
+    s.put('delivery_approval', { id: randomUUID(), issueId: parent.id, actorId: owner.id, candidateId: accepted.candidate!.id, digest: parentDigest, decision: 'ACCEPT', reason: 'Fixture parent acceptance', at: new Date().toISOString() }, w.id);
+    assert.deepEqual((flow.execute(owner, 'issue_get', { workspaceId: w.id, issueId: parent.id }) as any).closureBlocked, ['GIT_VERIFICATION_PENDING']);
+    verifier.tick();
+    await until(() => s.get<GitSubmission>('git_submission', proof.git.id).state === 'VERIFIED');
+    assert.equal(s.get<Issue>('issue', parent.id).state, 'USER_ACCEPTANCE');
+    assert.equal(s.get<Issue>('issue', parent.id).acceptedDigest, parentDigest);
+    const events = s.db.prepare('SELECT operation,target_id AS targetId,data FROM events WHERE workspace_id=? ORDER BY sequence').all(w.id) as { operation: string; targetId: string; data: string }[];
+    assert.equal(events.some(e => e.operation === 'delivery_closed'), false);
+    const finished = events.filter(e => e.operation === 'git_verification_finished' && e.targetId === proof.git.id).map(e => JSON.parse(e.data));
+    assert.equal(finished.at(-1).readyToComplete, true); assert.equal(finished.at(-1).issueId, parent.id);
+    const approvals = s.list('delivery_approval', w.id).length;
+    const closed = change('delivery_complete', parent.id);
+    assert.equal(closed.issue.state, 'DONE'); assert.deepEqual(closed.closureBlocked, []);
+    assert.equal(s.list('delivery_approval', w.id).length, approvals);
+  } finally { await verifier.close(); await f.close(); }
+});
