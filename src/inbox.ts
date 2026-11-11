@@ -48,18 +48,38 @@ function undo(issue: Issue, event: AuditEvent, relevant?: ReadonlySet<string>) {
 }
 
 class History {
-  readonly events: AuditEvent[];
   private readonly targets = new Map<string, AuditEvent[]>();
+  private readonly bindings: AuditEvent[] = [];
+  private readonly bindingStarts: { id: string; sequence: number }[];
   constructor(readonly store: Store, readonly workspace: Workspace) {
-    this.events = (store.db.prepare('SELECT sequence,target_id AS targetId,operation,data,at FROM events WHERE workspace_id=? ORDER BY sequence').all(workspace.id) as (Omit<AuditEvent, 'data'> & { data: string })[]).map(row => {
+    const starts = new Map<string, number>();
+    for (const row of store.db.prepare('SELECT sequence,target_id AS targetId,operation,data,at FROM events WHERE workspace_id=? ORDER BY sequence').all(workspace.id) as (Omit<AuditEvent, 'data'> & { data: string })[]) {
       let data: AuditEvent['data'] = null;
       try { const parsed: unknown = JSON.parse(row.data); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = parsed as Record<string, any>; } catch {}
       const event: AuditEvent = { ...row, data };
       if (event.targetId) { const events = this.targets.get(event.targetId) ?? []; events.push(event); this.targets.set(event.targetId, events); }
-      return event;
-    });
+      if (event.operation === 'workspace_git_bind' || event.operation === 'scope_git_binding_set') {
+        this.bindings.push(event);
+        const id = event.operation === 'workspace_git_bind' ? event.targetId : event.data?.bindingId;
+        if (typeof id === 'string' && !starts.has(id)) starts.set(id, event.sequence);
+      }
+    }
+    this.bindingStarts = [...starts].map(([id, sequence]) => ({ id, sequence })).sort((a, b) => a.sequence - b.sequence);
   }
   for(id: string) { return this.targets.get(id) ?? []; }
+  related(ids: ReadonlySet<string>) {
+    const events = new Map(this.bindings.map(event => [event.sequence, event]));
+    for (const id of ids) for (const event of this.for(id)) events.set(event.sequence, event);
+    return [...events.values()].sort((a, b) => a.sequence - b.sequence);
+  }
+  bindingAt(sequence: number) {
+    let low = 0; let high = this.bindingStarts.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (this.bindingStarts[middle]!.sequence <= sequence) low = middle + 1; else high = middle;
+    }
+    return this.bindingStarts[low - 1]?.id;
+  }
   epoch(event?: AuditEvent | null): Epoch | null { return event ? { sequence: event.sequence, at: iso(event.at) } : null; }
   design(issue: Issue, design: Design) {
     for (const event of this.for(issue.id).toReversed()) {
@@ -110,23 +130,17 @@ class History {
     const related = new Set([issue.id, issue.parentId!, ...(current.decision?.replacements ?? []).map(binding => binding.issueId)]);
     const shadows = new Map([...related].map(id => [id, structuredClone(this.store.get<Issue>('issue', id))]));
     const statuses = new Map<string, Design['status']>();
-    const bindingStarts = new Map<string, number>();
-    for (const event of this.events) {
-      const id = event.operation === 'workspace_git_bind' ? event.targetId : event.operation === 'scope_git_binding_set' ? event.data?.bindingId : null;
-      if (typeof id === 'string') bindingStarts.set(id, Math.min(bindingStarts.get(id) ?? Infinity, event.sequence));
-    }
     let sequence = Infinity;
     const view = Object.create(this.store) as Store;
     view.get = <T>(kind: string, id: string): T => {
       if (kind === 'issue' && shadows.has(id)) return shadows.get(id) as T;
       if (kind === 'design' && statuses.has(id)) return { ...this.store.get<Design>(kind, id), status: statuses.get(id)! } as T;
-      if (kind === 'workspace' && id === this.workspace.id && bindingStarts.size) {
-        const bound = [...bindingStarts].filter(([, start]) => start <= sequence).sort((a, b) => b[1] - a[1])[0]?.[0];
-        return { ...this.workspace, gitBindingId: bound } as T;
+      if (kind === 'workspace' && id === this.workspace.id && this.bindingStarts.length) {
+        return { ...this.workspace, gitBindingId: this.bindingAt(sequence) } as T;
       }
       return this.store.get<T>(kind, id);
     };
-    const events = this.events.filter(event => event.targetId && related.has(event.targetId) || event.operation === 'workspace_git_bind' || event.operation === 'scope_git_binding_set');
+    const events = this.related(related);
     for (const event of events.toReversed()) {
       if (!event.data) return null;
       if (event.targetId && shadows.has(event.targetId) && !undo(shadows.get(event.targetId)!, event, new Set(['state','scopeRevision','parentId','description','criteria','dependencies','artifactMode','artifactReason','designId','designBindingId','scopeDecisionId']))) return null;
