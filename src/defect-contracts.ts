@@ -66,6 +66,22 @@ export interface DefectSet {
   hash: string;
   members: { id: string; version: number }[];
 }
+export interface DefectRejectionRecord {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  requirementId: string;
+  actorId: string;
+  classification: 'DEFECT' | 'SCOPE_CHANGE' | 'CLARIFICATION';
+  candidateId: string;
+  digest: string;
+  designId: string | null;
+  scopeRevision: number;
+  defectIds: string[];
+  requestHash: string;
+  eventSequence: number;
+  at: string;
+}
 
 const id = z.string().min(1).max(150);
 const text = z.string().trim().min(1).max(65536);
@@ -78,6 +94,11 @@ const finding = {
   actual: text
 };
 export const defectFindingSchema = z.object(finding).strict();
+export const defectRejectionSchema = z.discriminatedUnion('classification', [
+  z.object({ classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).min(1).max(20) }).strict(),
+  z.object({ classification: z.literal('SCOPE_CHANGE') }).strict(),
+  z.object({ classification: z.literal('CLARIFICATION') }).strict()
+]);
 export const defectObservationSchema = z.object({
   kind: z.enum(['ISSUE_SCOPE', 'SNAPSHOT', 'DELIVERY']),
   issueVersion: version.nullable(),
@@ -108,3 +129,4 @@ export type DefectReportInput = z.input<typeof defectCoreSchemas.report>;
 export type DefectTriageInput = z.input<typeof defectCoreSchemas.triage>;
 export type DefectWithdrawInput = z.input<typeof defectCoreSchemas.withdraw>;
 export type DefectListInput = z.input<typeof defectCoreSchemas.list>;
+export type DefectRejectionInput = z.input<typeof defectRejectionSchema>;

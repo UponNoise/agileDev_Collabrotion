@@ -240,3 +240,62 @@ test('list pagination, severity and confirmed-origin filters expose no fabricate
   assert.equal(canonical(f.store.list('defect', f.workspace.id)), raw);
   assert.deepEqual(f.store.db.prepare('SELECT COUNT(*) AS count FROM receipts').get(), receipts);
 });
+
+test('rejection classifications create only their intended facts and cannot be replayed as another class', () => {
+  const f = fixture(); const value = f.seedDelivery(f.issue().id, 'USER_ACCEPTANCE');
+  const approval = { id: randomUUID(), issueId: value.id, actorId: f.human.id, candidateId: value.candidate!.id, digest: f.digest(value), decision: 'REJECT', at: new Date().toISOString() };
+  f.store.put('delivery_approval', approval, f.workspace.id);
+  const before = canonical(f.current(value.id));
+  const classified = f.registry.classifyRejection(f.human, f.workspace.id, value.id, approval.id, { classification: 'CLARIFICATION' });
+  assert.equal(classified.classification, 'CLARIFICATION'); assert.equal(classified.defectIds.length, 0);
+  assert.equal(f.registry.needsScopeRevision(value), false); assert.equal(f.store.list('defect', f.workspace.id).length, 0);
+  const eventCount = f.store.db.prepare('SELECT COUNT(*) AS count FROM events').get();
+  assert.deepEqual(f.registry.classifyRejection(f.human, f.workspace.id, value.id, approval.id, { classification: 'CLARIFICATION' }), classified);
+  assert.deepEqual(f.store.db.prepare('SELECT COUNT(*) AS count FROM events').get(), eventCount);
+  assert.throws(() => f.registry.classifyRejection(f.human, f.workspace.id, value.id, approval.id, { classification: 'SCOPE_CHANGE' }), fails('IDEMPOTENCY_CONFLICT'));
+  assert.throws(() => f.registry.classifyRejection(f.lead, f.workspace.id, value.id, approval.id, { classification: 'CLARIFICATION' }), fails('ROLE_DENIED'));
+  assert.equal(canonical(f.current(value.id)), before);
+  const nextApproval = { ...approval, id: randomUUID() }; f.store.put('delivery_approval', nextApproval, f.workspace.id);
+  const defects = f.registry.classifyRejection(f.human, f.workspace.id, value.id, nextApproval.id, { classification: 'DEFECT', findings: [finding, { ...finding, severity: 'MINOR', actual: 'Second distinct fixture problem' }] });
+  assert.equal(defects.defectIds.length, 2);
+  for (const id of defects.defectIds) assert.equal(f.registry.get(f.human, f.workspace.id, id).origin, 'USER_ACCEPTANCE');
+  assert.throws(() => f.registry.classifyRejection(f.human, f.workspace.id, value.id, 'nonexistent-approval', { classification: 'DEFECT', findings: [] }), fails('INVALID_INPUT'));
+});
+
+test('scope-change rework waits for an actual newer approved requirement revision after rejection', () => {
+  const f = fixture(); const parent = f.issue('Scope revision fixture');
+  const change = (op: string, input: object = {}) => f.write(f.human, op, { workspaceId: f.workspace.id, issueId: parent.id, expectedVersion: f.current(parent.id).version, ...input });
+  change('design_set', { content: 'The initial fixture design', criteria: ['AC-1'] });
+  change('design_submit');
+  change('design_decide', { designId: f.current(parent.id).designId, decision: 'APPROVED', reason: 'Automated initial fixture approval' });
+  const oldDesign = f.current(parent.id).designId;
+  const source = f.seedDelivery(parent.id, 'USER_ACCEPTANCE');
+  const approval = { id: randomUUID(), issueId: source.id, actorId: f.human.id, candidateId: source.candidate!.id, digest: f.digest(source), decision: 'REJECT', at: new Date().toISOString() };
+  f.store.put('delivery_approval', approval, f.workspace.id);
+  const request = f.registry.classifyRejection(f.human, f.workspace.id, source.id, approval.id, { classification: 'SCOPE_CHANGE' });
+  assert.equal(request.designId, oldDesign); assert.equal(f.registry.needsScopeRevision(f.current(source.id)), true);
+  assert.equal(f.store.list('defect', f.workspace.id).length, 0);
+  change('design_set', { content: 'The revised fixture design', criteria: ['AC-1'] });
+  assert.notEqual(f.current(parent.id).designId, oldDesign);
+  assert.equal(f.registry.needsScopeRevision(f.current(source.id)), true);
+  change('design_submit');
+  assert.equal(f.registry.needsScopeRevision(f.current(source.id)), true);
+  change('design_decide', { designId: f.current(parent.id).designId, decision: 'APPROVED', reason: 'Automated approval of the newer exact revision' });
+  assert.equal(f.registry.needsScopeRevision(f.current(source.id)), false);
+  const unchanged = canonical(f.store.list('delivery_rejection', f.workspace.id));
+  assert.equal(f.registry.needsScopeRevision(f.current(source.id)), false);
+  assert.equal(canonical(f.store.list('delivery_rejection', f.workspace.id)), unchanged);
+});
+
+test('a requirement scope-change request also protects its descendants without granting new authority', () => {
+  const f = fixture(); const parent = f.issue('Parent revision scope'); const child = f.issue('child', parent.id);
+  const source = f.seedDelivery(parent.id, 'USER_ACCEPTANCE');
+  const approval = { id: randomUUID(), issueId: source.id, actorId: f.human.id, candidateId: source.candidate!.id, digest: f.digest(source), decision: 'REJECT', at: new Date().toISOString() };
+  f.store.put('delivery_approval', approval, f.workspace.id);
+  f.registry.classifyRejection(f.human, f.workspace.id, source.id, approval.id, { classification: 'SCOPE_CHANGE' });
+  assert.equal(f.registry.needsScopeRevision(f.current(parent.id)), true);
+  assert.equal(f.registry.needsScopeRevision(f.current(child.id)), true);
+  assert.equal(f.current(child.id).state, 'NOT_STARTED');
+  assert.equal(f.store.list('grant', f.workspace.id).length, 0);
+  assert.equal(f.store.list('approval', f.workspace.id).length, 0);
+});

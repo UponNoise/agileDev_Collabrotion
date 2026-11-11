@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { type Actor, type Issue, type QaReport, type Snapshot, type Workspace, DomainError } from './contracts.js';
+import { type Actor, type Design, type Issue, type QaReport, type Snapshot, type Workspace, DomainError } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
-import { defectCoreSchemas, defectFindingSchema, defectOrigins, defectSeverities, defectStates, type DefectFinding, type DefectListInput, type DefectObservation, type DefectProposalInput, type DefectRecord, type DefectReportInput, type DefectSet, type DefectSource, type DefectTriageInput, type DefectWithdrawInput } from './defect-contracts.js';
+import { defectCoreSchemas, defectFindingSchema, defectOrigins, defectRejectionSchema, defectSeverities, defectStates, type DefectFinding, type DefectListInput, type DefectObservation, type DefectProposalInput, type DefectRecord, type DefectRejectionInput, type DefectRejectionRecord, type DefectReportInput, type DefectSet, type DefectSource, type DefectTriageInput, type DefectWithdrawInput } from './defect-contracts.js';
 
 interface HistoricalDefect {
   id: string; workspaceId: string; issueId: string; state: string; severity: string;
@@ -263,6 +263,50 @@ export class DefectRegistry {
         return this.create(actor, issue, finding, 'USER_ACCEPTANCE', observation, { kind: 'DELIVERY_REJECTION', id: approval.id, index }, 'OPEN');
       });
     }).immediate();
+  }
+
+  classifyRejection(actor: Actor, workspaceId: string, issueId: string, approvalId: string, input: DefectRejectionInput) {
+    requireHuman(actor);
+    const a = parsed(defectRejectionSchema, input);
+    return this.store.db.transaction(() => {
+      const issue = this.store.issue(actor, workspaceId, issueId);
+      const approval = this.store.get<DeliveryApproval>('delivery_approval', approvalId);
+      if (!['USER_ACCEPTANCE', 'USER_REJECTED'].includes(issue.state) || approval.issueId !== issue.id || approval.actorId !== actor.id || approval.decision !== 'REJECT' || approval.candidateId !== issue.candidate?.id || approval.digest !== this.effects.deliveryDigest(issue)) throw new DomainError('APPROVAL_STALE', 'Classification must reference the current actual human rejection');
+      const requestHash = hash(canonical(a));
+      const existing = maybe<DefectRejectionRecord>(this.store, 'delivery_rejection', approvalId);
+      if (existing) {
+        if (existing.requestHash !== requestHash) throw new DomainError('IDEMPOTENCY_CONFLICT', 'The rejection classification was already recorded differently');
+        return existing;
+      }
+      const requirement = issue.parentId ? this.store.get<Issue>('issue', issue.parentId) : issue;
+      const defects = a.classification === 'DEFECT' ? this.recordRejection(actor, workspaceId, issueId, approvalId, a.findings) : [];
+      this.store.event(workspaceId, actor, 'delivery_rejection_classified', issue.id, { approvalId, classification: a.classification, requirementId: requirement.id, designId: requirement.designId, defectIds: defects.map(value => value.id) });
+      const event = this.store.db.prepare('SELECT last_insert_rowid() AS sequence').get() as { sequence: number };
+      const record: DefectRejectionRecord = { id: approvalId, workspaceId, issueId, requirementId: requirement.id, actorId: actor.id, classification: a.classification, candidateId: approval.candidateId, digest: approval.digest, designId: requirement.designId, scopeRevision: requirement.scopeRevision, defectIds: defects.map(value => value.id), requestHash, eventSequence: event.sequence, at: approval.at };
+      this.store.put('delivery_rejection', record, workspaceId);
+      if (a.classification === 'SCOPE_CHANGE') this.store.put('scope_revision_current', { id: issue.id, workspaceId, issueId, requestId: record.id }, workspaceId);
+      return record;
+    }).immediate();
+  }
+
+  needsScopeRevision(issue: Issue) {
+    const requirement = issue.parentId ? this.store.get<Issue>('issue', issue.parentId) : issue;
+    return [...new Set([issue.id, requirement.id])].some(id => {
+      const pointer = maybe<{ workspaceId: string; issueId: string; requestId: string }>(this.store, 'scope_revision_current', id);
+      if (!pointer) return false;
+      const request = maybe<DefectRejectionRecord>(this.store, 'delivery_rejection', pointer.requestId);
+      if (!request || pointer.workspaceId !== issue.workspaceId || pointer.issueId !== id || request.workspaceId !== issue.workspaceId || request.issueId !== id || request.requirementId !== requirement.id || request.classification !== 'SCOPE_CHANGE') return true;
+      if (!requirement.designId || requirement.designId === request.designId) return true;
+      const design = maybe<Design>(this.store, 'design', requirement.designId);
+      if (!design || design.issueId !== requirement.id || design.status !== 'APPROVED' || design.requirementDescription !== requirement.description) return true;
+      const approved = this.store.list<{ actorId: string; designId: string; hash: string; decision: string }>('approval', issue.workspaceId).some(value => value.designId === design.id && value.hash === design.hash && value.decision === 'APPROVED' && maybe<Actor>(this.store, 'actor', value.actorId)?.role === 'human');
+      if (!approved) return true;
+      const events = this.store.db.prepare("SELECT data,actor_id FROM events WHERE workspace_id=? AND target_id=? AND operation='design_decide' AND sequence>?").all(issue.workspaceId, requirement.id, request.eventSequence) as { data: string; actor_id: string }[];
+      return !events.some(value => {
+        const data = JSON.parse(value.data) as { designId?: string; decision?: string };
+        return data.designId === design.id && data.decision === 'APPROVED' && maybe<Actor>(this.store, 'actor', value.actor_id)?.role === 'human';
+      });
+    });
   }
 
   recordQaFindings(actor: Actor, reportId: string) {
