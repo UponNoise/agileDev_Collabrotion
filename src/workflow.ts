@@ -11,8 +11,9 @@ import { githubCommitUrl, inspectGitBinding, normalizeLegacyAttempt, submissionE
 import { workspaceView,issueView,runsView } from './web-views.js';
 import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
+import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSettings } from './inbox.js';
 
-const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get']);
+const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -45,7 +46,9 @@ export class Workflow {
   private read(actor: Actor, op: Operation, a: Record<string, any>): unknown {
     const s = this.store;
     if (op === 'workspace_list') return { workspaces: s.list<Workspace>('workspace').filter(w => actor.role === 'human' || actor.workspaceIds.includes(w.id)) };
+    if (op === 'inbox_list') return inboxList(s, actor, a, this.inboxPolicy(), this.now());
     const workspace = s.workspace(actor, a.workspaceId);
+    if (op === 'inbox_settings_get') return { settings: inboxSettings(s,actor,workspace.id) };
     if (op.startsWith('ui_')) {
       requireRole(actor,'human');
       if (op === 'ui_workspace') return workspaceView(s,workspace,a,issue => this.display(issue));
@@ -137,7 +140,7 @@ export class Workflow {
       const filtered = issues.filter(i => !a.state || i.state === a.state);
       return { issues: filtered.slice(a.offset, a.offset + a.limit).map(i => this.display(i)), total: filtered.length, nextOffset: a.offset + a.limit < filtered.length ? a.offset + a.limit : null };
     }
-    if (op === 'gap_list') return { gaps: issues.filter(i => !['DONE','ABANDONED'].includes(i.state)).flatMap(i => [...new Set([...this.readiness(i).blocking,...(i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [])])].map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )) };
+    if (op === 'gap_list') return { gaps: [...issues.filter(i => !['DONE','ABANDONED'].includes(i.state)).flatMap(i => [...new Set([...this.readiness(i).blocking,...(i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [])])].map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )),...inboxAgingGaps(s,actor,workspace.id,this.inboxPolicy(),this.now(),new Set(issues.map(issue => issue.id)))] };
     if (op === 'event_list') {
       requireRole(actor, 'human', 'lead', 'pm');
       return { events: s.db.prepare('SELECT sequence,actor_id AS actorId,operation,target_id AS targetId,data,at FROM events WHERE workspace_id=? AND sequence>? ORDER BY sequence LIMIT ?').all(a.workspaceId, a.after, a.limit).map((r: any) => ({ ...r, data: JSON.parse(r.data) })) };
@@ -168,6 +171,17 @@ export class Workflow {
   design(issue: Issue): Design | null {
     const root = issue.parentId ? this.store.get<Issue>('issue', issue.parentId) : issue;
     return root.designId ? this.store.get<Design>('design', root.designId) : null;
+  }
+  private inboxPolicy(): InboxPolicy {
+    return {
+      delivery: issue => {
+        let digest: string | null = null;
+        try { digest = acceptanceDigest(this.store,issue); } catch {}
+        try { const blockers = this.closureBlockers(issue); return { digest,accepted: !!digest && !blockers.includes('HUMAN_ACCEPTANCE_REQUIRED'),blockers }; }
+        catch (error) { return { digest: null,accepted: false,blockers: [error instanceof DomainError ? error.code : 'EVIDENCE_STALE'] }; }
+      },
+      unmanaged: issue => this.unmanagedWork(issue)
+    };
   }
   readiness(i: Issue, admission = true) {
     const blocking: string[] = [];
@@ -480,6 +494,7 @@ export class Workflow {
       return { workspace: w };
     }
     const w = s.workspace(actor, a.workspaceId);
+    if (op === 'inbox_settings_update') return updateInboxSettings(s,actor,{ workspaceId: w.id,expectedVersion: a.expectedVersion,agingThresholdHours: a.agingThresholdHours },this.now());
     if (op === 'workspace_git_bind') {
       requireRole(actor,'human');
       if ((w.gitBindingId ?? null) !== a.expectedBindingId) throw new DomainError('VERSION_CONFLICT','Workspace Git binding changed; reload it before retrying');
