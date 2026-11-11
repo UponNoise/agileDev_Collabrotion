@@ -40,6 +40,8 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | `defect_list` / `defect_get` | Workspace, issue, state, severity, origin, cursor; or a defect | Read within the caller's existing scope |
 | `defect_propose` | Target issue, severity, reproduction, expected/actual behavior, optional criteria | Any agent on an issue it can read; creates `PROPOSED` only, for human triage |
 
+The user's 2026-11-11 clarification preserves proposal access to unstarted/unsealed readable issues. A pending proposal has null confirmed origin and an explicit issue-scope observation when no immutable artifact exists; it grants no defect-blocking authority. Human triage may reject or convert it to a linked `NOT_STARTED` requirement (`CONVERTED`). Confirmation requires valid current source context and immutable evidence, preserving the original observation; neither an agent nor a conversion creates QA, approval, or completion evidence.
+
 The common schema envelope contains `contract_version`, `workspace_id`, and for mutations `expected_version` plus `idempotency_key`. Multi-record commands list all relevant aggregate preconditions. Lease renewals use the lease version; other commands use the issue/plan version. Read-only queries do not require mutation keys.
 
 Human web endpoints additionally support design decisions, acceptance decisions, grants/revocations, and explicit scope exclusion/reopen decisions. They are not registered as agent-callable tools. A future chat-human adapter must pass the same human attribution tests before forwarding those commands.
