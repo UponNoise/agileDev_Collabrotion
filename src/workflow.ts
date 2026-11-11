@@ -461,8 +461,8 @@ export class Workflow {
       else { git.state = 'UNAVAILABLE'; git.errorCode = unavailable?.errorCode; }
       s.put('git_submission',git,git.workspaceId);
       const actor = s.get<Actor>('actor',git.actorId);
-      s.event(git.workspaceId,actor,'git_verification_finished',git.id,{ attemptId: attempt.id,state: git.state,errorCode: git.errorCode,entries: round.map(a => ({ entryIndex: a.entryIndex,repository: a.repository,sha: a.sha,state: a.state,errorCode: a.errorCode,treeSha: a.treeSha })),performedBy: 'git-verifier' });
-      if (current && issue.state === 'USER_ACCEPTANCE' && issue.acceptedDigest && !this.closureBlockers(issue).length) { issue.state = 'DONE'; this.save(actor,'delivery_closed',issue,{ submissionId: git.id,performedBy: 'git-verifier',cause: 'Current human acceptance and verified commit' }); }
+      const readyToComplete = current && issue.state === 'USER_ACCEPTANCE' && !!issue.acceptedDigest && !this.closureBlockers(issue).length;
+      s.event(git.workspaceId,actor,'git_verification_finished',git.id,{ attemptId: attempt.id,state: git.state,errorCode: git.errorCode,entries: round.map(a => ({ entryIndex: a.entryIndex,repository: a.repository,sha: a.sha,state: a.state,errorCode: a.errorCode,treeSha: a.treeSha })),performedBy: 'git-verifier',issueId: issue.id,readyToComplete });
     }).immediate();
   }
   private mutate(actor: Actor, op: Operation, a: Record<string, any>): Record<string, unknown> {
