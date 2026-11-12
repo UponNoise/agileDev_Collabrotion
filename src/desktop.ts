@@ -60,7 +60,7 @@ async function openWorkspace(serviceStart: Promise<unknown>) {
     } catch {}
   }
   const preload = app.isPackaged ? join(dirname(fileURLToPath(import.meta.url)), 'desktop-preload.cjs') : resolve(dirname(fileURLToPath(import.meta.url)), '../src/desktop-preload.cjs');
-  window = new BrowserWindow({ ...bounds, minWidth: 390, minHeight: 500, title: 'AgileDev Collaboration', backgroundColor: '#ffffff', show: false, webPreferences: { session: partition, preload, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, webviewTag: false, devTools: !app.isPackaged } });
+  window = new BrowserWindow({ ...bounds, minWidth: 390, minHeight: 500, title: 'AgileDev Collaboration', backgroundColor: '#ffffff', show: false, webPreferences: { session: partition, preload, backgroundThrottling: false, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, webviewTag: false, devTools: !app.isPackaged } });
   installDesktopAttention(window, config.endpoint);
   const openCommitLink = (url: string) => {
     const target = desktopCommitLink(config.endpoint, window?.webContents.getURL(), url);

@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { registerHooks } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { attentionSnapshot, desktopCapabilities, DesktopAttention } from '../src/desktop-attention.js';
 import { desktopAttentionAllowed } from '../src/desktop-policy.js';
@@ -158,4 +160,79 @@ test('actual desktop adapter guards IPC, cleans up on close, and only explicit t
   assert.throws(() => update(event, snapshot(1)));
   window.emit('closed');
   assert.equal(handlers.size, 0);
+});
+
+test('actual desktop startup keeps polling unthrottled without granting renderer privileges or showing early', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agiledev-desktop-start-'));
+  const originalFetch = globalThis.fetch;
+  const globals = globalThis as any;
+  let options: any; let loadedUrl: string | undefined; let shown = false; let created: any;
+  let complete: (value: void) => void;
+  const loaded = new Promise<void>(resolve => { complete = resolve; });
+  const partition = {
+    setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {},
+    webRequest: { onBeforeRequest() {} }, cookies: { set: async () => {} }
+  };
+  const app = Object.assign(new EventEmitter(), {
+    isPackaged: false, setName() {}, setPath() {}, enableSandbox() {}, quit() {},
+    requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve()
+  });
+  class FixtureWindow extends EventEmitter {
+    webContents = Object.assign(new EventEmitter(), {
+      mainFrame: { url: endpoint }, getURL: () => endpoint,
+      setWindowOpenHandler() {}, send() {}
+    });
+    constructor(input: unknown) { super(); options = input; created = this; }
+    isDestroyed() { return false; }
+    isFocused() { return false; }
+    isMinimized() { return false; }
+    show() { shown = true; }
+    async loadURL(url: string) { loadedUrl = url; complete(); }
+  }
+  globals.__agiledevDesktopStartupFixture = {
+    app, BrowserWindow: FixtureWindow,
+    dialog: { showErrorBox: (_title: string, message: string) => { throw new Error(message); } },
+    Menu: { setApplicationMenu() {} }, screen: { getPrimaryDisplay: () => ({ workArea: { width: 1400, height: 900 } }) },
+    session: { fromPartition: (name: string) => { assert.equal(name, 'persist:agiledev'); return partition; } }, shell: {},
+    dataDirectory: () => directory,
+    readDescriptor: () => ({ endpoint, ownerToken: 'automated-owner-test-fixture' }),
+    serviceAvailable: async () => true,
+    execFile: (_file: string, args: string[], _options: unknown, callback: (error: null, stdout: string, stderr: string) => void) => {
+      assert.equal(args.at(-1), 'service-start'); queueMicrotask(() => callback(null, '', ''));
+    }
+  };
+  const exportSource = (names: string[]) => names.map(name => `export const ${name}=globalThis.__agiledevDesktopStartupFixture.${name};`).join('');
+  const hooks = registerHooks({ resolve(specifier, context, next) {
+    const names = specifier === 'electron' ? ['app', 'BrowserWindow', 'dialog', 'Menu', 'screen', 'session', 'shell']
+      : specifier === 'node:child_process' ? ['execFile']
+      : specifier === './service-launcher.js' && context.parentURL?.includes('/desktop.ts') ? ['dataDirectory', 'readDescriptor', 'serviceAvailable'] : null;
+    return names ? { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(exportSource(names))}` } : next(specifier, context);
+  } });
+  globalThis.fetch = (async (url: string) => ({
+    ok: true,
+    headers: { get: () => `agiledev_ui=${'a'.repeat(43)}; Path=/; HttpOnly` },
+    json: async () => String(url).endsWith('/pairing') ? { code: 'automated-pairing-fixture' } : { expiresAt: Date.now() + 60000 }
+  })) as any;
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await import('../src/desktop.js');
+    await Promise.race([loaded, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Controlled desktop startup did not reach its workspace')), 3000); })]);
+    assert.equal(loadedUrl, endpoint);
+    assert.equal(options.show, false);
+    assert.equal(shown, false);
+    assert.equal(options.webPreferences.backgroundThrottling, false);
+    assert.equal(options.webPreferences.sandbox, true);
+    assert.equal(options.webPreferences.contextIsolation, true);
+    assert.equal(options.webPreferences.nodeIntegration, false);
+    assert.equal(options.webPreferences.webSecurity, true);
+    assert.equal(options.webPreferences.webviewTag, false);
+    assert.equal(existsSync(options.webPreferences.preload), true);
+    assert.equal(options.webPreferences.preload.endsWith('desktop-preload.cjs'), true);
+  } finally {
+    clearTimeout(timeout);
+    created?.emit('closed');
+    hooks.deregister(); globalThis.fetch = originalFetch;
+    delete globals.__agiledevDesktopStartupFixture;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
