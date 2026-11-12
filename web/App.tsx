@@ -324,7 +324,7 @@ export function App() {
               >
                 <Icon name={name === 'decisions' ? 'reviews' : name} />
                 {t(labels[name])}
-                {name === 'decisions' ? <span className="decision-count" aria-label={t('Blocking decisions across all readable workspaces')}>{blockingDecisions ?? '…'}{inbox.error ? ' !' : ''}</span> : null}
+                {name === 'decisions' ? <span className="decision-count" aria-live="polite" aria-atomic="true" aria-label={`${t('Blocking decisions across all readable workspaces')}: ${blockingDecisions ?? t('Loading…')}${inbox.error ? ' !' : ''}`}>{blockingDecisions ?? '…'}{inbox.error ? ' !' : ''}</span> : null}
               </button>
             ))}
           </nav>

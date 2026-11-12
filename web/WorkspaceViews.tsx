@@ -409,16 +409,22 @@ export function Runs({
   const [data, setData] = useState<{ runs: Run[]; total: number; nextOffset: number | null } | null>(null);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Run | null>(null);
+  const [targetedRun, setTargetedRun] = useState<Run | null>(null);
+  const [targetError, setTargetError] = useState('');
   const [action, setAction] = useState<'interrupt' | 'reconcile' | null>(null);
   useEffect(() => {
+    setTargetedRun(null);
+    setTargetError('');
+    setSelected(null);
+    setAction(null);
     if (!runId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
         const result = await command<{ run: Run }>('run_get', { workspaceId, runId });
-        if (active) { setSelected(result.run); setError(''); }
-      } catch (failure) { if (active) setError(errorText(failure)); }
+        if (active) { setTargetedRun(result.run); setTargetError(''); }
+      } catch (failure) { if (active) setTargetError(errorText(failure)); }
       finally { if (active) timer = setTimeout(load, 1000); }
     };
     void load();
@@ -446,12 +452,13 @@ export function Runs({
       clearTimeout(timer);
     };
   }, [workspaceId, offset]);
-  const current = data?.runs.find((run) => run.id === selected?.id) ?? selected;
+  const selection = selected ?? targetedRun;
+  const current = data?.runs.find((run) => run.id === selection?.id) ?? selection;
   return (
     <div className="runs">
-      {error ? (
+      {targetError || error ? (
         <p className="error" role="alert">
-          {t(error)}
+          {t(targetError || error)}
         </p>
       ) : null}
       {data?.runs.length ? (
