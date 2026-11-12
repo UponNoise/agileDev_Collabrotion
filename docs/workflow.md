@@ -182,7 +182,7 @@ Final lead pass exposes an exact delivery digest. Human `delivery_decide` can ac
 
 ### Defect register, verification, and waivers, 2026-11-09
 
-Accepted revision R1 (D11, D15, D16) makes defects register records with a workspace-local key, origin (`QA`, `USER_ACCEPTANCE`, or `ESCAPED`), severity, criterion IDs, reproduction, expected and actual behavior, the observed snapshot or digest, reporter, owner, and source record. Their states are `PROPOSED`, `OPEN`, `RESOLVED`, `WAIVED`, `REJECTED`, and `WITHDRAWN`.
+Accepted revision R1 (D11, D15, D16) makes defects register records with a workspace-local key, origin (`QA`, `USER_ACCEPTANCE`, or `ESCAPED`), severity, criterion IDs, reproduction, expected and actual behavior, the observed snapshot or digest, reporter, owner, and source record. Their states are `PROPOSED`, `OPEN`, `RESOLVED`, `WAIVED`, `REJECTED`, `WITHDRAWN`, and proposal-only `CONVERTED`.
 
 User clarification, 2026-11-11: the three origins describe confirmed defects. An agent may report a pending problem on any readable issue; it starts `PROPOSED` with `origin: null` and a truthful snapshot/delivery observation, or an explicit unsealed issue-scope observation with null snapshot/digest. It is non-blocking and absent from confirmed defect sets. Human rejection or conversion to a linked unstarted requirement records `REJECTED` or proposal-only `CONVERTED`, not QA resolution. Human confirmation requires exact current issue/defect versions and valid immutable evidence in an actual user-acceptance or closed-delivery context; QA origin requires a QA report. Preserve the original observation and record the later confirmation separately. Do not invent an artifact, confirmed origin, approval, or reopening of an unstarted issue.
 
