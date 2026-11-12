@@ -18,6 +18,15 @@ export function desktopClipboardAllowed(endpoint: string, permission: string, re
     (request.requestingOrigin === undefined || isWorkspaceUrl(endpoint, request.requestingOrigin));
 }
 
+export function desktopAttentionAllowed(endpoint: string, request: {
+  workspaceContents: boolean;
+  isMainFrame: boolean;
+  contentsUrl?: string;
+  requestingUrl?: string;
+}) {
+  return request.workspaceContents && request.isMainFrame && isWorkspaceUrl(endpoint, request.contentsUrl) && isWorkspaceUrl(endpoint, request.requestingUrl);
+}
+
 export function desktopCommitLink(endpoint: string, contentsUrl: string | undefined, target: string) {
   if (!isWorkspaceUrl(endpoint, contentsUrl)) return undefined;
   const match = target.match(/^https:\/\/github\.com\/([a-z0-9][a-z0-9-]*)\/([a-z0-9_.-]+)\/commit\/([a-f0-9]{40})$/);
