@@ -6,6 +6,8 @@ export const harnesses = ['codex', 'claude-code', 'dsh'] as const;
 export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];
+export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED'] as const;
+export type InboxKind = typeof inboxKinds[number];
 export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string }
 export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null; gitBindingId?: string }
 export interface GitBinding { id: string; workspaceId: string; repository: string; subdirectory: string; remote: string; actorId: string; createdAt: string }
@@ -64,6 +66,9 @@ const planTask = z.object({ ref: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,49}$
 export const schemas = {
   workspace_register: z.object({ ...mutation, root: text, name: z.string().min(1).max(120), prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/) }).strict(),
   workspace_list: z.object({}).strict(),
+  inbox_list: z.object({ workspaceId: id.optional(),kind: z.enum(inboxKinds).optional(),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
+  inbox_settings_get: z.object(scoped).strict(),
+  inbox_settings_update: z.object({ ...scoped,...mutation,expectedVersion: z.number().int().nonnegative(),agingThresholdHours: z.number().int().min(1).max(168) }).strict(),
   ui_workspace: z.object({ ...scoped,search: z.string().max(300).default(''),state: z.enum(states).optional(),view: z.enum(['backlog','reviews']).default('backlog'),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20),afterCursor: z.number().int().nonnegative().optional() }).strict(),
   ui_issue: z.object({ ...target,after: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(30) }).strict(),
   ui_runs: z.object({ ...scoped,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
@@ -115,4 +120,4 @@ export const schemas = {
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile','inbox_list','inbox_settings_get','inbox_settings_update'].includes(k)) as Operation[];
