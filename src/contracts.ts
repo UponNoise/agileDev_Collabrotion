@@ -1,3 +1,4 @@
+import { iterationSchemas, iterationMembershipPreconditionSchema } from './iteration-contracts.js';
 import { z } from 'zod';
 
 export const roles = ['human', 'lead', 'pm', 'worker', 'qa'] as const;
@@ -6,6 +7,8 @@ export const harnesses = ['codex', 'claude-code', 'dsh'] as const;
 export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];
+export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED'] as const;
+export type InboxKind = typeof inboxKinds[number];
 export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string }
 export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null; gitBindingId?: string }
 export interface GitBinding { id: string; workspaceId: string; repository: string; subdirectory: string; remote: string; actorId: string; createdAt: string }
@@ -47,7 +50,7 @@ export interface Issue {
   finalReview: string | null; savedState: { state: State; stage: Issue['stage'] } | null;
   qaAssignee?: string; qaHarness?: Harness; checkProfileIds?: string[];
   artifactMode?: 'git' | 'artifact'; artifactReason?: string; acceptedDigest?: string; gitSubmissionId?: string;
-  aggregate?: boolean; planId?: string; scopeDecisionId?: string; unmanagedExecution?: boolean; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null;
+  aggregate?: boolean; planId?: string; scopeDecisionId?: string; unmanagedExecution?: boolean; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null; iterationId?: string | null; legacyIterationLabel?: string | null;
 }
 export class DomainError extends Error {
   constructor(public code: string, message: string, public statusCode = 409, public details?: unknown) { super(message); }
@@ -59,11 +62,16 @@ const scoped = { workspaceId: id };
 const target = { ...scoped, issueId: id };
 const change = { ...target, ...mutation, expectedVersion: z.number().int().positive() };
 const estimate = z.object({ value: z.number().positive().max(100000), unit: z.enum(['hours','points']), confidence: z.enum(['low','medium','high']) }).strict().nullable();
-const schedule = { priority: z.number().int().min(0).max(4).optional(),plannedStart: z.iso.date().nullable().optional(),dueDate: z.iso.date().nullable().optional(),estimate: estimate.optional(),iteration: z.string().min(1).max(120).nullable().optional() };
-const planTask = z.object({ ref: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,49}$/),issueId: id.optional(),expectedVersion: z.number().int().positive().optional(),title: z.string().min(1).max(300),description: z.string().max(65536).optional(),criteria: z.array(id).max(100).optional(),dependencies: z.array(z.union([z.object({ ref: id }).strict(),z.object({ issueId: id }).strict()])).max(100).optional(),assigneeId: id.nullable().optional(),harness: z.enum(harnesses).nullable().optional(),...schedule }).strict();
+const schedule = { priority: z.number().int().min(0).max(4).optional(),plannedStart: z.iso.date().nullable().optional(),dueDate: z.iso.date().nullable().optional(),estimate: estimate.optional(),iterationId: id.nullable().optional() };
+const retiredIterationError = { error: (issue: z.core.$ZodRawIssue) => issue.code === 'unrecognized_keys' && (issue.keys as string[]).some(key => ['iteration','legacyIterationLabel'].includes(key)) ? 'Use iterationId; legacyIterationLabel is read-only' : undefined };
+const planTask = z.object({ ref: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,49}$/),issueId: id.optional(),expectedVersion: z.number().int().positive().optional(),title: z.string().min(1).max(300),description: z.string().max(65536).optional(),criteria: z.array(id).max(100).optional(),dependencies: z.array(z.union([z.object({ ref: id }).strict(),z.object({ issueId: id }).strict()])).max(100).optional(),assigneeId: id.nullable().optional(),harness: z.enum(harnesses).nullable().optional(),...schedule },retiredIterationError).strict();
 export const schemas = {
+  ...iterationSchemas,
   workspace_register: z.object({ ...mutation, root: text, name: z.string().min(1).max(120), prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/) }).strict(),
   workspace_list: z.object({}).strict(),
+  inbox_list: z.object({ workspaceId: id.optional(),kind: z.enum(inboxKinds).optional(),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
+  inbox_settings_get: z.object(scoped).strict(),
+  inbox_settings_update: z.object({ ...scoped,...mutation,expectedVersion: z.number().int().nonnegative(),agingThresholdHours: z.number().int().min(1).max(168) }).strict(),
   ui_workspace: z.object({ ...scoped,search: z.string().max(300).default(''),state: z.enum(states).optional(),view: z.enum(['backlog','reviews']).default('backlog'),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20),afterCursor: z.number().int().nonnegative().optional() }).strict(),
   ui_issue: z.object({ ...target,after: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(30) }).strict(),
   ui_runs: z.object({ ...scoped,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
@@ -73,8 +81,8 @@ export const schemas = {
   issue_create: z.object({ ...scoped, ...mutation, parentId: id.optional(), expectedParentVersion: z.number().int().positive().optional(), title: z.string().min(1).max(300), description: z.string().max(65536).default(''), criteria: z.array(id).max(100).default([]), artifactMode: z.enum(['git', 'artifact']).optional(), artifactReason: text.optional() }).strict(),
   issue_get: z.object(target).strict(),
   issue_list: z.object({ ...scoped, state: z.enum(states).optional(), limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().min(0).default(0) }).strict(),
-  issue_update: z.object({ ...change, title: z.string().min(1).max(300).optional(), description: z.string().max(65536).optional(), criteria: z.array(id).max(100).optional(),...schedule }).strict(),
-  plan_apply: z.object({ ...change,expectedPlanId: id.nullable().default(null),designId: id.nullable(),mode: z.enum(['DRAFT','READY']),tasks: z.array(planTask).max(100),integrationCriteria: z.array(id).max(100).default([]),overlapReasons: z.record(id,text).refine(value => Object.keys(value).length <= 100).default({}),reason: text }).strict(),
+  issue_update: z.object({ ...change, title: z.string().min(1).max(300).optional(), description: z.string().max(65536).optional(), criteria: z.array(id).max(100).optional(),...schedule,memberships: z.array(iterationMembershipPreconditionSchema).max(100).default([]) },retiredIterationError).strict(),
+  plan_apply: z.object({ ...change,memberships: z.array(iterationMembershipPreconditionSchema).max(100).default([]),expectedPlanId: id.nullable().default(null),designId: id.nullable(),mode: z.enum(['DRAFT','READY']),tasks: z.array(planTask).max(100),integrationCriteria: z.array(id).max(100).default([]),overlapReasons: z.record(id,text).refine(value => Object.keys(value).length <= 100).default({}),reason: text }).strict(),
   plan_get: z.object({ ...target,planId: id.optional(),view: z.enum(['summary','full']).default('summary'),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
   scope_get: z.object({ ...target,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
   scope_decide: z.object({ ...change,expectedParentVersion: z.number().int().positive(),designId: id,expectedDecisionId: id.nullable().default(null),scopeHash: id,childScopeHash: id,action: z.enum(['EXCLUDE','REPLACE','RESTORE']),replacements: z.array(z.object({ issueId: id,expectedVersion: z.number().int().positive(),scopeHash: id }).strict()).max(100).default([]),reason: text,reopenParent: z.boolean().default(false),reopenChild: z.boolean().default(false) }).strict(),
@@ -115,4 +123,4 @@ export const schemas = {
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile','inbox_list','inbox_settings_get','inbox_settings_update'].includes(k)) as Operation[];

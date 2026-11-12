@@ -8,8 +8,12 @@ import { IssueForm } from './IssueForms';
 import type { IssueDialog } from './IssueForms';
 import { IssuePanel } from './IssuePanel';
 import { Backlog, Runs, Settings, WorkspaceRegistration } from './WorkspaceViews';
+import { Decisions, InboxSettingsForm, useDecisionInbox } from './Decisions';
+import type { DecisionFilter } from './Decisions';
+import type { InboxEntry } from './api';
 
 const labels: Record<View, string> = {
+  decisions: 'Decisions',
   backlog: 'Backlog',
   board: 'Board',
   reviews: 'Reviews',
@@ -23,6 +27,7 @@ function route() {
   return {
     workspaceId: match?.[1] ?? query.get('workspace'),
     issueId: match?.[2] ?? null,
+    runId: query.get('run'),
     view: view in labels ? view : ('backlog' as View)
   };
 }
@@ -89,13 +94,15 @@ export function App() {
   const [syncError, setSyncError] = useState('');
   const [menu, setMenu] = useState(false);
   const [dialog, setDialog] = useState<IssueDialog | null>(null);
+  const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>({ workspaceId: '', kind: '', offset: 0 });
   const workspaceId = locationState.workspaceId ?? workspaces[0]?.id ?? null;
   const view = locationState.view;
-  function navigate(workspace: string | null, issue: string | null, nextView: View = view) {
+  const inbox = useDecisionInbox(actor, refresh, decisionFilter, view === 'decisions');
+  function navigate(workspace: string | null, issue: string | null, nextView: View = view, runId?: string) {
     const url =
       issue && workspace
         ? `/w/${workspace}/issues/${issue}?view=${nextView}`
-        : `/?${new URLSearchParams({ ...(workspace ? { workspace } : {}), view: nextView })}`;
+        : `/?${new URLSearchParams({ ...(workspace ? { workspace } : {}), view: nextView, ...(runId ? { run: runId } : {}) })}`;
     history.pushState(null, '', url);
     setLocation(route());
     setMenu(false);
@@ -115,6 +122,19 @@ export function App() {
     }
     return false;
   };
+  useEffect(() => {
+    if (inbox.error instanceof ApiError && inbox.error.status === 401) {
+      setCsrf(null);
+      setActor(null);
+    }
+  }, [inbox.error]);
+  const blockingDecisions = actor ? inbox.global?.summary.blocking : undefined;
+  useEffect(() => {
+    document.title = `${blockingDecisions === undefined ? '' : `(${blockingDecisions}) `}${t('AgileDev — local workspace')}`;
+  }, [blockingDecisions, t]);
+  function openDecision(entry: InboxEntry) {
+    navigate(entry.workspaceId, entry.target.runId ? null : entry.issueId, entry.target.runId ? 'runs' : 'reviews', entry.target.runId);
+  }
   useEffect(() => {
     const pop = () => setLocation(route());
     window.addEventListener('popstate', pop);
@@ -302,8 +322,9 @@ export function App() {
                   setOffset(0);
                 }}
               >
-                <Icon name={name} />
+                <Icon name={name === 'decisions' ? 'reviews' : name} />
                 {t(labels[name])}
+                {name === 'decisions' ? <span className="decision-count" aria-live="polite" aria-atomic="true" aria-label={`${t('Blocking decisions across all readable workspaces')}: ${blockingDecisions ?? t('Loading…')}${inbox.error ? ' !' : ''}`}>{blockingDecisions ?? '…'}{inbox.error ? ' !' : ''}</span> : null}
               </button>
             ))}
           </nav>
@@ -326,7 +347,12 @@ export function App() {
               {t(fatal)}
             </p>
           ) : null}
-          {!workspaceId ? (
+          {view === 'decisions' ? (
+            <main id="main" className="workspace-main">
+              <header className="workspace-heading"><div><h1>{t('Decisions')}</h1><p>{t('Only human decisions. Inspect the current revision, delivery, scope, or execution before deciding.')}</p></div></header>
+              <Decisions feed={inbox} filter={decisionFilter} setFilter={setDecisionFilter} workspaces={workspaces} open={openDecision} retry={saved} />
+            </main>
+          ) : !workspaceId ? (
             <main id="main" className="first-workspace">
               <h1>{t('Create your first workspace')}</h1>
               <p>{t('Register a project directory to start planning requirements.')}</p>
@@ -438,12 +464,16 @@ export function App() {
                   </>
                 ) : null}
                 {view === 'settings' ? (
-                  <Settings data={current} onSaved={saved} onRegistered={registered} />
+                  <>
+                    <InboxSettingsForm key={workspaceId} workspaceId={workspaceId} onSaved={saved} />
+                    <Settings data={current} onSaved={saved} onRegistered={registered} />
+                  </>
                 ) : null}
                 {view === 'runs' ? (
                   <Runs
                     key={workspaceId}
                     workspaceId={workspaceId}
+                    runId={locationState.runId}
                     online={online}
                     onSelect={(id) => navigate(workspaceId, id, 'backlog')}
                   />

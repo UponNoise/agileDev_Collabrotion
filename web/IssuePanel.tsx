@@ -193,8 +193,12 @@ export function IssuePanel({
               <dd>{issue.plannedStart ?? t('Unscheduled')}</dd>
               <dt>{t('Due date')}</dt>
               <dd>{issue.dueDate ?? t('Unscheduled')}</dd>
-              <dt>{t('Iteration')}</dt>
-              <dd>{issue.iteration ?? t('Not set')}</dd>
+              <dt>{t('Iteration ID')}</dt>
+              <dd className="mono">{issue.iterationId ?? t('Not set')}</dd>
+              {issue.legacyIterationLabel ?? issue.iteration ? <>
+                <dt>{t('Legacy iteration label')}</dt>
+                <dd>{issue.legacyIterationLabel ?? issue.iteration}</dd>
+              </> : null}
               <dt>{t('Estimate')}</dt>
               <dd>
                 {issue.estimate

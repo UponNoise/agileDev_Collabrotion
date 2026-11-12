@@ -64,6 +64,27 @@ The daemon now consumes approved `work_dispatch` records automatically. `AGILEDE
 
 Keep the service running in one terminal; run commands in another. Stop with Ctrl+C. A live daemon lock prevents a second instance. A stale lock can be recovered only when its recorded process no longer exists. Do not delete a live lock to force another writer.
 
+## Human decision inbox
+
+The W2c service slice adds a derived human inbox; its web view, batch acceptance, defect-triage entries, and desktop signals remain later packages. Start the owner-managed service first, then use the local owner CLI or an authenticated human browser session. Scoped agent credentials cannot call these commands, and they are absent from the MCP catalogue and lifecycle grants.
+
+```powershell
+'{}' | node dist/cli.js command inbox_list -
+@{ workspaceId = '<workspace-id>'; kind = 'DESIGN_REVIEW'; limit = 20 } | ConvertTo-Json | node dist/cli.js command inbox_list -
+@{ workspaceId = '<workspace-id>' } | ConvertTo-Json | node dist/cli.js command inbox_settings_get -
+@{ workspaceId = '<workspace-id>'; expectedVersion = 0; agingThresholdHours = 48; idempotencyKey = 'set-inbox-aging-48h' } | ConvertTo-Json | node dist/cli.js command inbox_settings_update -
+```
+
+`inbox_list` accepts optional `workspaceId` and `kind`, `offset` (default 0), and `limit` (default 20, range 1-100). It returns the filtered `entries`, `total`, `nextOffset`, an unfiltered-kind `summary` for the selected workspace scope, per-workspace counts/settings, and `generatedAt`. Omit `workspaceId` for all workspaces readable by the human. Blocking entries precede nonblocking ones; unavailable ages precede known ages within that tier, then the oldest known pending time and stable workspace/entry IDs. Pagination is stable for unchanged state; reload after concurrent changes.
+
+The five implemented kinds are `DESIGN_REVIEW`, `DELIVERY_ACCEPTANCE`, `SCOPE_DECISION`, `RUN_RECONCILE`, and `CLOSURE_BLOCKED`. Each entry includes its issue link/key, exact current issue/design/candidate/digest/run/scope context in `target`, blockers, and a next action. Listing never decides or mutates an issue. Current saved acceptance remains a nonblocking `CLOSURE_BLOCKED` entry after Git recovers: its status becomes `READY_TO_COMPLETE` and its action becomes `delivery_complete`. Only that explicit authorized command, or an explicit acceptance whose guards already pass, closes delivery; no duplicate human approval is created by readiness.
+
+Entry identities and first-pending audit epochs survive reads, metadata edits, repeated uncertainty observations, verification retries, and guard recovery. A resubmitted design cycle or a genuinely replaced decision target starts another epoch. `pendingSince`, `pendingSequence`, `ageMs`, and `ageProvenance` disclose available evidence: unknown or malformed historical time is `null` with `UNAVAILABLE` age provenance, rather than the current time or a run's creation time. A known audit sequence can remain present when its timestamp is unavailable. `clockSkew` marks a recorded timestamp ahead of the service clock.
+
+`inbox_settings_get` returns `{ settings }`. A workspace with no explicit preference has version 0 and a 24-hour threshold, without creating a record. `inbox_settings_update` compares `expectedVersion`, accepts integer thresholds from 1 through 168 hours, and uses the normal idempotency envelope. It writes only the separate versioned preference, its audit event, and the command receipt; workspace/issue versions, approvals, digests, and grants stay unchanged. A stale version or reused key with different input fails normally. Every successful update advances the preference version; an exact retry replays once.
+
+The existing `gap_list` gains advisory `HUMAN_DECISION_AGING` entries for pending targets strictly older than their workspace threshold. Their fields include issue ID/key, kind, target ID, first pending time, age, and threshold. Agents receive these facts only within the existing gap-list issue scope; they do not gain an inbox tool. Unknown ages produce no invented aging verdict. This source/API slice does not establish the full AC39 UI, batch, defect-set, native notification, or AC37 load budgets.
+
 ## Register a workspace and enroll agents
 
 `command` reads JSON from stdin or from an explicit JSON file. For a discovered local installation it uses the local owner credential unless `AGILEDEV_TOKEN` is set. Any explicit `AGILEDEV_ENDPOINT` requires an explicit token, including for ordinary commands, so local owner credentials cannot be forwarded accidentally. `mcp` never falls back to the owner credential.
@@ -242,3 +263,39 @@ The reverse DSH-to-Codex attempt verifies the current DSH worker and a captured 
 The earlier machine checks passed Codex and DSH execution verification. On 2026-11-07, no-inference connection checks passed on Codex 0.167.0-alpha.3.2, Claude Code 2.1.317, and DSH 0.2.2-rc.1. Claude 2.1.317's actual isolated worker check again returned `Not logged in`; the issue returned to unstarted and its source stayed intact. The application did not change login state or copy Desktop credentials. Full three-harness execution acceptance remains pending; a connection check does not prove a model run can execute.
 
 For every mutation, use a unique `idempotencyKey` and current `expectedVersion`; child creation also requires `expectedParentVersion`. An exact retry returns the committed result with `replayed: true`. Reload after a version conflict. The prototype uses camelCase command fields; mapping/versioning against the earlier illustrative spec examples will be finalized before the command contract is frozen.
+
+
+## Iteration planning
+
+The seven `iteration_*` commands are available through the normal owner CLI, authenticated HTTP command route, and scoped MCP bridge. Human, lead and PM may mutate records; worker/QA credentials can only read iteration metadata and members in their existing issue read scope. Iterations never grant additional issue access. They are optional planning metadata, with no claim, dispatch, lifecycle or approval authority.
+
+- `iteration_create`: `workspaceId`, `name` (1-120 characters), `goal` (up to 2,000 characters), `startDate`, `endDate`, creation-time IANA `timeZone`, `reason`, `idempotencyKey`; creates `PLANNED` and optionally adopts explicitly bound legacy matches.
+- `iteration_update`: workspace/iteration IDs, `expectedVersion`, optional name/goal/start/end dates, reason and key. Closed records are immutable; creation time zone cannot be changed.
+- `iteration_start`: workspace/iteration IDs, version, reason and key. Requires `PLANNED` and no other `ACTIVE` record in the workspace.
+- `iteration_list`: `workspaceId`, optional state, offset/limit (default 0/20, maximum 100), and planner-only `legacyLabel` for an adoption preview. Returns `iterations`, `total`, `nextOffset`, and optional `adoption`.
+- `iteration_get`: workspace/iteration IDs, offset/limit, `view` (`summary` default, `full`, `flow`, `markdown`), optional `flowFrom` and `flowLimit` (default 31, maximum 366). Membership views return `iteration`, paginated `members`, `total`, `nextOffset`, and advisory `progress`. Planner full views add complete iteration preconditions, immutable closed `summary`, and derived represented requirements. Worker/QA views omit full-set hashes, summary references and hidden members/aggregates.
+
+Every mutation also uses the normal idempotency key. A membership snapshot has exactly:
+
+```json
+{
+  "iterationId": "iteration-uuid",
+  "expectedVersion": 3,
+  "membershipRevision": 2,
+  "membershipHash": "64-lowercase-hex-characters"
+}
+```
+
+Fetch the current planner iteration record, rather than constructing this snapshot from a filtered member page. `membershipHash` binds the complete sorted member ID set; issue versions additionally guard state/content edits.
+
+`iteration_membership_set` takes `workspaceId`, `changes: [{issueId, expectedVersion, iterationId}]`, `memberships: [snapshot]`, reason and key. Include a current complete snapshot for every changed source and destination iteration. A null target explicitly returns the issue to backlog. One transaction checks every supplied issue/set and updates all touched records, revision/hash, audit events and receipt. A conflict saves none of them; retain input and reload rather than silently recomputing consent.
+
+`issue_update` accepts the same optional `iterationId` plus `memberships`. `plan_apply` accepts `iterationId` on each task and a single top-level `memberships` array for all changed source/destination sets. New-task omission means backlog; existing-task or issue-update omission preserves membership, including ordinary title/date/estimate edits. Explicit null means backlog and requires the source snapshot. A complete plan applies membership moves as one batch, so several new tasks may share the same destination snapshot. The normal parent/task expected-version guards still apply. All these entry points preserve artifact design/coverage, current reviews/QA/delivery evidence and grants; iteration dates never justify bypassing another gate.
+
+`iteration_close` takes workspace/iteration IDs, `expectedVersion`, `membershipRevision`, `membershipHash`, complete `members: [{issueId, expectedVersion}]`, `dispositions: [{issueId, iterationId}]` for exactly the unfinished members, complete carry-over `destinations: [snapshot]`, reason and key. Each carry-over target must be another `PLANNED` iteration. Null dispositions mean backlog. Finished members lose live pointers; all lifecycle states stay unchanged. The transaction seals historical membership and an immutable `summary`, records explicit destinations and returns `{iteration, summary}`. A later authorized issue reopen remains in backlog and does not rewrite the closed record.
+
+A planner `iteration_get` with `view: "markdown"` returns the closed record's `mediaType: "text/markdown"` and derived local `content`; it writes no file and performs no external publishing. Save the returned content through the local export consumer. Open iterations have no sealed summary to export. Flow views return `points`, `nextDate`, `timeZone` and scoped/advisory flags, reconstructing membership and lifecycle/design events at each local-day boundary, including DST changes. Estimates are grouped by unit. Capacity identifies the existing installation-wide run limit alongside scoped usage; this does not create a workspace concurrency policy or velocity forecast.
+
+Stored old `iteration` labels are never rewritten on read or startup. Issue projections instead expose `iterationId` and read-only `legacyIterationLabel`. Old `iteration` or `legacyIterationLabel` writes fail naming `iterationId`. A planner legacy preview supplies the complete eligible `{issueId, expectedVersion}` `matches` and `matchHash`. Explicit create/adoption or membership adoption must submit that exact set and complete destination/source snapshots; the transaction re-derives matches and rejects unseen additions, removals, reopened matches or edits. No automatic iteration, assignment, carry-over or completion is created.
+
+Active overdue records add advisory `ITERATION_OVERDUE` gaps for planners. Worker and QA prompts receive only a bounded advisory name/end/goal excerpt. This service slice does not claim the iteration UI, constrained-machine performance, native harness acceptance, independent AC40 acceptance or completion of P5.

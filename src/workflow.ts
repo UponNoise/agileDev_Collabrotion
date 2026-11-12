@@ -1,3 +1,5 @@
+import { IterationService, iterationIssueView, rejectLegacyIterationWrite } from './iterations.js';
+import { isIterationOperation, iterationReadOperations } from './iteration-contracts.js';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -11,8 +13,9 @@ import { githubCommitUrl, inspectGitBinding, normalizeLegacyAttempt, submissionE
 import { workspaceView,issueView,runsView } from './web-views.js';
 import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
+import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSettings } from './inbox.js';
 
-const readOps = new Set(['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get']);
+const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -24,6 +27,10 @@ export class Workflow {
   execute(actor: Actor, operation: string, input: unknown): unknown {
     if (!(operation in schemas)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
     const op = operation as Operation;
+    if (input && typeof input === 'object') {
+      if (op === 'issue_update') rejectLegacyIterationWrite(input as Record<string, unknown>);
+      if (op === 'plan_apply' && Array.isArray((input as any).tasks)) for (const task of (input as any).tasks) if (task && typeof task === 'object') rejectLegacyIterationWrite(task);
+    }
     const parsed = schemas[op].safeParse(input);
     if (!parsed.success) throw new DomainError('INVALID_INPUT', 'Command failed schema validation', 400, parsed.error.flatten());
     const args = parsed.data as Record<string, any>;
@@ -44,8 +51,11 @@ export class Workflow {
   }
   private read(actor: Actor, op: Operation, a: Record<string, any>): unknown {
     const s = this.store;
+    if (isIterationOperation(op)) return this.iterations().read(actor, op, a);
     if (op === 'workspace_list') return { workspaces: s.list<Workspace>('workspace').filter(w => actor.role === 'human' || actor.workspaceIds.includes(w.id)) };
+    if (op === 'inbox_list') return inboxList(s, actor, a, this.inboxPolicy(), this.now());
     const workspace = s.workspace(actor, a.workspaceId);
+    if (op === 'inbox_settings_get') return { settings: inboxSettings(s,actor,workspace.id) };
     if (op.startsWith('ui_')) {
       requireRole(actor,'human');
       if (op === 'ui_workspace') return workspaceView(s,workspace,a,issue => this.display(issue));
@@ -124,7 +134,7 @@ export class Workflow {
       })() : null;
       const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
       const coverage = isAggregate(s,root) ? planCoverage(s,root) : null;
-      return { issue: this.display(issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue),executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
+      return { issue: this.display(issue), iteration: this.iterations().packet(actor,issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue),executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
     }
     if (op === 'evidence_get') {
       const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
@@ -137,7 +147,7 @@ export class Workflow {
       const filtered = issues.filter(i => !a.state || i.state === a.state);
       return { issues: filtered.slice(a.offset, a.offset + a.limit).map(i => this.display(i)), total: filtered.length, nextOffset: a.offset + a.limit < filtered.length ? a.offset + a.limit : null };
     }
-    if (op === 'gap_list') return { gaps: issues.filter(i => !['DONE','ABANDONED'].includes(i.state)).flatMap(i => [...new Set([...this.readiness(i).blocking,...(i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [])])].map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )) };
+    if (op === 'gap_list') return { gaps: [...issues.filter(i => !['DONE','ABANDONED'].includes(i.state)).flatMap(i => [...new Set([...this.readiness(i).blocking,...(i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [])])].map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )),...inboxAgingGaps(s,actor,workspace.id,this.inboxPolicy(),this.now(),new Set(issues.map(issue => issue.id))),...this.iterations().gaps(actor,workspace.id)] };
     if (op === 'event_list') {
       requireRole(actor, 'human', 'lead', 'pm');
       return { events: s.db.prepare('SELECT sequence,actor_id AS actorId,operation,target_id AS targetId,data,at FROM events WHERE workspace_id=? AND sequence>? ORDER BY sequence LIMIT ?').all(a.workspaceId, a.after, a.limit).map((r: any) => ({ ...r, data: JSON.parse(r.data) })) };
@@ -148,10 +158,11 @@ export class Workflow {
     if (!run) throw new DomainError('NOT_FOUND', 'Run not found', 404);
     return { run };
   }
+  private iterations() { return new IterationService(this.store, this.now); }
   private display(issue: Issue) {
     const title = issue.parentId ? `${this.store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
     const scope = issue.parentId ? scopeState(this.store,issue) : null;
-    return { ...issue, title, titleSuffix: issue.title, url: `/w/${issue.workspaceId}/issues/${issue.id}`,...(scope ? { scope: { status: scope.status,decisionId: scope.decision?.id ?? null,action: scope.decision?.action ?? null,blocking: scope.blocking } } : {}) };
+    return { ...iterationIssueView(issue), title, titleSuffix: issue.title, url: `/w/${issue.workspaceId}/issues/${issue.id}`,...(scope ? { scope: { status: scope.status,decisionId: scope.decision?.id ?? null,action: scope.decision?.action ?? null,blocking: scope.blocking } } : {}) };
   }
   private nextActions(actor: Actor, i: Issue): string[] {
     if (this.unmanagedWork(i)) return actor.role === 'human' && i.state !== 'DONE' ? ['work_reconcile'] : [];
@@ -168,6 +179,17 @@ export class Workflow {
   design(issue: Issue): Design | null {
     const root = issue.parentId ? this.store.get<Issue>('issue', issue.parentId) : issue;
     return root.designId ? this.store.get<Design>('design', root.designId) : null;
+  }
+  private inboxPolicy(): InboxPolicy {
+    return {
+      delivery: issue => {
+        let digest: string | null = null;
+        try { digest = acceptanceDigest(this.store,issue); } catch {}
+        try { const blockers = this.closureBlockers(issue); return { digest,accepted: !!digest && !blockers.includes('HUMAN_ACCEPTANCE_REQUIRED'),blockers }; }
+        catch (error) { return { digest: null,accepted: false,blockers: [error instanceof DomainError ? error.code : 'EVIDENCE_STALE'] }; }
+      },
+      unmanaged: issue => this.unmanagedWork(issue)
+    };
   }
   readiness(i: Issue, admission = true) {
     const blocking: string[] = [];
@@ -287,7 +309,7 @@ export class Workflow {
     }
     for (const task of tasks) {
       const child = this.store.get<Issue>('issue',refs.get(task.ref)!);
-      const changes = Object.fromEntries(['title','description','criteria','priority','plannedStart','dueDate','estimate','iteration'].filter(k => task[k] !== undefined && canonical(task[k]) !== canonical((child as any)[k])).map(k => [k,task[k]]));
+      const changes = Object.fromEntries(['title','description','criteria','priority','plannedStart','dueDate','estimate'].filter(k => task[k] !== undefined && canonical(task[k]) !== canonical((child as any)[k])).map(k => [k,task[k]]));
       if (Object.keys(changes).length) this.mutate(actor,'issue_update',{ workspaceId: root.workspaceId,issueId: child.id,expectedVersion: child.version,...changes });
     }
     const dependencies = new Map<string,string[]>();
@@ -303,6 +325,11 @@ export class Workflow {
       child = this.store.get<Issue>('issue',child.id);
       if (task.assigneeId !== undefined && (child.assignee !== task.assigneeId || child.harness !== task.harness)) this.mutate(actor,'issue_assign',{ workspaceId: root.workspaceId,issueId: child.id,expectedVersion: child.version,actorId: task.assigneeId,harness: task.harness });
     }
+    const membershipChanges = tasks.filter(task => task.iterationId !== undefined).map(task => {
+      const child = this.store.get<Issue>('issue',refs.get(task.ref)!);
+      return { issueId: child.id,expectedVersion: child.version,iterationId: task.iterationId as string | null };
+    });
+    if (membershipChanges.length) this.iterations().changeMembership(actor,root.workspaceId,membershipChanges,a.memberships ?? [],a.reason);
     const latest = this.store.get<Issue>('issue',root.id); latest.aggregate = true;
     const children = planChildren(this.store,latest);
     if (new Set(a.integrationCriteria).size !== a.integrationCriteria.length) throw new DomainError('PLAN_DUPLICATE_CRITERION','List each integration criterion once');
@@ -467,6 +494,7 @@ export class Workflow {
   }
   private mutate(actor: Actor, op: Operation, a: Record<string, any>): Record<string, unknown> {
     const s = this.store;
+    if (isIterationOperation(op)) return this.iterations().mutate(actor, op, a);
     if (op === 'workspace_register') {
       requireRole(actor, 'human');
       if (!isAbsolute(a.root) || !existsSync(a.root) || !statSync(a.root).isDirectory()) throw new DomainError('WORKSPACE_UNRESOLVED', 'Select an existing absolute directory');
@@ -480,6 +508,7 @@ export class Workflow {
       return { workspace: w };
     }
     const w = s.workspace(actor, a.workspaceId);
+    if (op === 'inbox_settings_update') return updateInboxSettings(s,actor,{ workspaceId: w.id,expectedVersion: a.expectedVersion,agingThresholdHours: a.agingThresholdHours },this.now());
     if (op === 'workspace_git_bind') {
       requireRole(actor,'human');
       if ((w.gitBindingId ?? null) !== a.expectedBindingId) throw new DomainError('VERSION_CONFLICT','Workspace Git binding changed; reload it before retrying');
@@ -717,8 +746,16 @@ export class Workflow {
         if (!i.parentId && previous) this.draftDesign(actor,i,previous.content,previous.criteria);
         else this.invalidate(i);
       }
-      for (const key of ['title', 'description', 'criteria', 'priority', 'plannedStart', 'dueDate', 'estimate', 'iteration'] as const) if (a[key] !== undefined) (i as any)[key] = a[key];
-      const result = this.save(actor, op, i); if (scopeChanged) this.childScopeChanged(actor,i); return result;
+      for (const key of ['title', 'description', 'criteria', 'priority', 'plannedStart', 'dueDate', 'estimate'] as const) if (a[key] !== undefined) (i as any)[key] = a[key];
+      let result: { issue: ReturnType<Workflow['display']> };
+      if (a.iterationId !== undefined && (i.iterationId ?? null) !== a.iterationId) {
+        this.iterations().changeMembership(actor,w.id,[{ issueId: i.id,expectedVersion: i.version,iterationId: a.iterationId }],a.memberships ?? [],'Issue planning metadata update', updated => {
+          i.iterationId = updated.iterationId;
+          this.save(actor,op,i,{ metadataOnly: !scopeChanged });
+        });
+        result = { issue: this.display(s.get<Issue>('issue',i.id)) };
+      } else result = this.save(actor, op, i);
+      if (scopeChanged) this.childScopeChanged(actor,s.get<Issue>('issue',i.id)); return result;
     }
     if (op === 'design_set') {
       requireRole(actor, 'human', 'lead');
