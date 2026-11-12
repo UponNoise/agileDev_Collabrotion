@@ -110,15 +110,16 @@ const rejects = (code: string) => (error: unknown) => error instanceof DomainErr
 test('an atomic PM plan creates unstarted cross-harness assignments, dependencies and explicit integration coverage once', () => {
   const f = fixture();
   f.approve();
+  const iteration = f.run('iteration_create', { name: 'Iteration 1', goal: 'Automated planning fixture', startDate: '2026-11-01', endDate: '2026-11-14', timeZone: 'UTC', reason: 'Automated fixture planning' }).iteration;
   const a = {
     ...f.task('client', ['A']),
     assigneeId: f.worker.id,
     harness: 'codex',
     estimate: { value: 3, unit: 'hours', confidence: 'low' },
-    iteration: 'Iteration 1'
+    iterationId: iteration.id
   };
   const b = { ...f.task('service', ['B']), dependencies: [{ ref: 'client' }], assigneeId: f.worker.id, harness: 'dsh' };
-  const command = { ...f.packet([a, b]), idempotencyKey: 'stable-plan' };
+  const command = { ...f.packet([a, b]), memberships: [{ iterationId: iteration.id,expectedVersion: iteration.version,membershipRevision: iteration.membershipRevision,membershipHash: iteration.membershipHash }], idempotencyKey: 'stable-plan' };
   const one = f.flow.execute(f.pm, 'plan_apply', command) as any;
   const replay = f.flow.execute(f.pm, 'plan_apply', command) as any;
   assert.equal(replay.replayed, true);
@@ -134,7 +135,7 @@ test('an atomic PM plan creates unstarted cross-harness assignments, dependencie
   assert.equal(first.harness, 'codex');
   assert.equal(second.harness, 'dsh');
   assert.deepEqual(first.estimate, { value: 3, unit: 'hours', confidence: 'low' });
-  assert.equal(first.iteration, 'Iteration 1');
+  assert.equal(first.iterationId, iteration.id);
   assert.deepEqual(second.dependencies, [first.id]);
   assert.ok(f.flow.readiness(second).blocking.includes('DEPENDENCY_BLOCKED'));
   assert.equal(f.store.list('run', f.workspace.id).length, 0);
