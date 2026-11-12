@@ -262,7 +262,6 @@ export function IssueForm({
               priority: Number(data.get('priority')),
               plannedStart: data.get('start') || null,
               dueDate: data.get('due') || null,
-              iteration: data.get('iteration') || null,
               estimate: data.get('estimate')
                 ? {
                     value: Number(data.get('estimate')),
@@ -292,8 +291,11 @@ export function IssueForm({
             <Field label={t('Due date')}>
               <input type="date" name="due" defaultValue={issue.dueDate ?? ''} />
             </Field>
-            <Field label={t('Iteration')}>
-              <input name="iteration" maxLength={120} defaultValue={issue.iteration ?? ''} />
+            <Field label={t('Iteration ID')} hint={t('Saving this plan preserves iteration membership.')}>
+              <input readOnly value={issue.iterationId ?? t('Not set')} />
+            </Field>
+            <Field label={t('Legacy iteration label')} hint={t('Historical labels are read-only and do not create iteration records.')}>
+              <input readOnly value={issue.legacyIterationLabel ?? issue.iteration ?? t('Not set')} />
             </Field>
             <Field label={t('Estimate')} hint={t('Optional forecast, not measured effort.')}>
               <input

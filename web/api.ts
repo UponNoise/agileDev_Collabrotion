@@ -8,6 +8,7 @@ import type {
   GitRepositoryEntry,
   GitSubmission,
   Issue,
+  InboxKind,
   Plan,
   Run,
   ScopeState,
@@ -15,8 +16,17 @@ import type {
   Workspace
 } from '../src/contracts';
 
-export type DisplayIssue = Issue & { url: string; titleSuffix: string; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
-export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings';
+export type DisplayIssue = Issue & { url: string; titleSuffix: string; iterationId?: string | null; legacyIterationLabel?: string | null; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
+export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings' | 'decisions';
+export interface InboxSettings {
+  workspaceId: string; version: number; agingThresholdHours: number; updatedAt: string | null; updatedBy: string | null;
+}
+export interface InboxEntry {
+  id: string; kind: InboxKind; workspaceId: string; workspaceName: string; issueId: string; key: string; title: string; url: string;
+  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null };
+  blocking: boolean; status: 'WAITING' | 'BLOCKED' | 'READY_TO_COMPLETE'; blockers: string[]; nextAction: string;
+  pendingSince: string | null; pendingSequence: number | null; ageMs: number | null; ageProvenance: 'AUDIT_EVENT' | 'UNAVAILABLE'; clockSkew: boolean;
+}
 export interface GitEntryView extends GitRepositoryEntry { attempt: GitAttempt | null }
 export type GitSubmissionView = Omit<GitSubmission, 'entries'> & { entries: GitEntryView[] };
 export interface WorkspaceData {
