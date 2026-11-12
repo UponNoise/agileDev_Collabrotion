@@ -453,7 +453,7 @@ export function Runs({
     };
   }, [workspaceId, offset]);
   const selection = selected ?? targetedRun;
-  const current = data?.runs.find((run) => run.id === selection?.id) ?? selection;
+  const current = data?.runs.find((run) => run.id === selection?.id) ?? (targetedRun?.id === selection?.id ? targetedRun : selection);
   return (
     <div className="runs">
       {targetError || error ? (
