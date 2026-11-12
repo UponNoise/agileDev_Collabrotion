@@ -103,7 +103,6 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     root.dataset.layout =
       width <= 760 ? 'narrow' : width <= 1150 ? 'compact' : width < 1440 ? 'desktop' : 'wide';
     root.dataset.density = width < 320 ? 'compressed' : 'normal';
-    document.title = translate(preferences.locale, 'AgileDev — local workspace');
   }, [preferences, viewport]);
   const t = useCallback((text: string) => translate(preferences.locale, text), [preferences.locale]);
   const value = useMemo(
