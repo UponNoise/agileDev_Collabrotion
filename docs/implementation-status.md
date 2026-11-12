@@ -1,6 +1,6 @@
 # Implementation evidence and remaining work
 
-Updated: 2026-11-11. Main `bc162d6` includes W1 through PR #6 and the explicit-completion callback correction through PR #8, following the desktop and Git compatibility integrations. R1 defaults D11–D16 are accepted; other R1 features and phase acceptance remain outstanding. Codex execution has resumed. W2a prepares the iteration core in its own checkout while W2c retains shared service routing/schema ownership. Prototype round 3 remains paused.
+Updated: 2026-11-11. Main `bc162d6` includes W1 through PR #6 and the explicit-completion callback correction through PR #8, following the desktop and Git compatibility integrations. R1 defaults D11–D16 are accepted; other R1 features and phase acceptance remain outstanding. Codex execution has resumed. W2a resumes full iteration API integration in its own checkout; W2c source is frozen at 5e77ca3 pending independent review, and the shared-path lease is explicitly transferred to W2a. Prototype round 3 remains paused.
 
 ## Concurrent ownership, 2026-11-09
 
@@ -8,7 +8,7 @@ Workers hold isolated worktrees and do not edit another worker's checkout:
 
 | Slice | Owner | Working location |
 | --- | --- | --- |
-| W2a iteration records and membership | Codex iteration implementation worker | `.agents/worktrees/r1-iterations`, branch `codex/r1-iterations` from main `244d4e1`, integrating `bc162d6`; claims `src/iterations.ts`, pure `src/iteration-contracts.ts`, `tests/iterations.test.ts`, this status entry, and only bounded advisory iteration context in the worker/QA prompt construction in `src/runner.ts`. Shared workflow/contracts/schema/type/gap/MCP wiring stays with W2c until explicit transfer. No web, Git proof, QA policy, adapter/harness configuration, dispatch/lifecycle, or desktop edits |
+| W2a iteration records and membership | Codex finish_iterations_api implementation worker (handoff 2026-11-12) | `.agents/worktrees/r1-iterations`, branch `codex/r1-iterations` from main `244d4e1`, integrating `bc162d6`; claims `src/iterations.ts`, pure `src/iteration-contracts.ts`, `tests/iterations.test.ts`, this status entry, and only bounded advisory iteration context in the worker/QA prompt construction in `src/runner.ts`. Shared-path ownership is transferred from frozen W2c: claims iteration-only additions in src/contracts.ts, src/workflow.ts, src/mcp.ts, planning/Workflow/HTTP/MCP tests, and iteration API documentation. Preserve W2c APIs and require its merge before W2a. No web, Git proof, QA policy, adapter/harness configuration, dispatch/lifecycle, or desktop edits |
 | Historical execution during Codex's usage limit | Claude, from 2026-11-10 at the user's direction | Claude used `.claude/worktrees/cross-agent-platform-ui-design-a56ece`; Codex resumed on 2026-11-11 and preserves that separate checkout |
 | W1 publication | Completed through PR #6 | Accepted and clarified specification `f9d9761` is merged at `244d4e1`; it records no product-managed approval |
 | R1 explicit completion | Completed through PR #8 | Source is merged at `bc162d6`; the callback records facts/readiness only. Shared follow-up source ownership is transferred to W2c before W2a |
