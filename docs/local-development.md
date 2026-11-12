@@ -64,6 +64,27 @@ The daemon now consumes approved `work_dispatch` records automatically. `AGILEDE
 
 Keep the service running in one terminal; run commands in another. Stop with Ctrl+C. A live daemon lock prevents a second instance. A stale lock can be recovered only when its recorded process no longer exists. Do not delete a live lock to force another writer.
 
+## Human decision inbox
+
+The W2c service slice adds a derived human inbox; its web view, batch acceptance, defect-triage entries, and desktop signals remain later packages. Start the owner-managed service first, then use the local owner CLI or an authenticated human browser session. Scoped agent credentials cannot call these commands, and they are absent from the MCP catalogue and lifecycle grants.
+
+```powershell
+'{}' | node dist/cli.js command inbox_list -
+@{ workspaceId = '<workspace-id>'; kind = 'DESIGN_REVIEW'; limit = 20 } | ConvertTo-Json | node dist/cli.js command inbox_list -
+@{ workspaceId = '<workspace-id>' } | ConvertTo-Json | node dist/cli.js command inbox_settings_get -
+@{ workspaceId = '<workspace-id>'; expectedVersion = 0; agingThresholdHours = 48; idempotencyKey = 'set-inbox-aging-48h' } | ConvertTo-Json | node dist/cli.js command inbox_settings_update -
+```
+
+`inbox_list` accepts optional `workspaceId` and `kind`, `offset` (default 0), and `limit` (default 20, range 1-100). It returns the filtered `entries`, `total`, `nextOffset`, an unfiltered-kind `summary` for the selected workspace scope, per-workspace counts/settings, and `generatedAt`. Omit `workspaceId` for all workspaces readable by the human. Blocking entries precede nonblocking ones; unavailable ages precede known ages within that tier, then the oldest known pending time and stable workspace/entry IDs. Pagination is stable for unchanged state; reload after concurrent changes.
+
+The five implemented kinds are `DESIGN_REVIEW`, `DELIVERY_ACCEPTANCE`, `SCOPE_DECISION`, `RUN_RECONCILE`, and `CLOSURE_BLOCKED`. Each entry includes its issue link/key, exact current issue/design/candidate/digest/run/scope context in `target`, blockers, and a next action. Listing never decides or mutates an issue. Current saved acceptance remains a nonblocking `CLOSURE_BLOCKED` entry after Git recovers: its status becomes `READY_TO_COMPLETE` and its action becomes `delivery_complete`. Only that explicit authorized command, or an explicit acceptance whose guards already pass, closes delivery; no duplicate human approval is created by readiness.
+
+Entry identities and first-pending audit epochs survive reads, metadata edits, repeated uncertainty observations, verification retries, and guard recovery. A resubmitted design cycle or a genuinely replaced decision target starts another epoch. `pendingSince`, `pendingSequence`, `ageMs`, and `ageProvenance` disclose available evidence: unknown or malformed historical time is `null` with `UNAVAILABLE` age provenance, rather than the current time or a run's creation time. A known audit sequence can remain present when its timestamp is unavailable. `clockSkew` marks a recorded timestamp ahead of the service clock.
+
+`inbox_settings_get` returns `{ settings }`. A workspace with no explicit preference has version 0 and a 24-hour threshold, without creating a record. `inbox_settings_update` compares `expectedVersion`, accepts integer thresholds from 1 through 168 hours, and uses the normal idempotency envelope. It writes only the separate versioned preference, its audit event, and the command receipt; workspace/issue versions, approvals, digests, and grants stay unchanged. A stale version or reused key with different input fails normally. Every successful update advances the preference version; an exact retry replays once.
+
+The existing `gap_list` gains advisory `HUMAN_DECISION_AGING` entries for pending targets strictly older than their workspace threshold. Their fields include issue ID/key, kind, target ID, first pending time, age, and threshold. Agents receive these facts only within the existing gap-list issue scope; they do not gain an inbox tool. Unknown ages produce no invented aging verdict. This source/API slice does not establish the full AC39 UI, batch, defect-set, native notification, or AC37 load budgets.
+
 ## Register a workspace and enroll agents
 
 `command` reads JSON from stdin or from an explicit JSON file. For a discovered local installation it uses the local owner credential unless `AGILEDEV_TOKEN` is set. Any explicit `AGILEDEV_ENDPOINT` requires an explicit token, including for ordinary commands, so local owner credentials cannot be forwarded accidentally. `mcp` never falls back to the owner credential.
