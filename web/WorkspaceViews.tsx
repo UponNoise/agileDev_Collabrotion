@@ -394,10 +394,12 @@ export function Settings({
 }
 export function Runs({
   workspaceId,
+  runId,
   online,
   onSelect
 }: {
   workspaceId: string;
+  runId?: string | null;
   online: boolean;
   onSelect(id: string): void;
 }) {
@@ -408,6 +410,20 @@ export function Runs({
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Run | null>(null);
   const [action, setAction] = useState<'interrupt' | 'reconcile' | null>(null);
+  useEffect(() => {
+    if (!runId) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      try {
+        const result = await command<{ run: Run }>('run_get', { workspaceId, runId });
+        if (active) { setSelected(result.run); setError(''); }
+      } catch (failure) { if (active) setError(errorText(failure)); }
+      finally { if (active) timer = setTimeout(load, 1000); }
+    };
+    void load();
+    return () => { active = false; clearTimeout(timer); };
+  }, [workspaceId, runId]);
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
