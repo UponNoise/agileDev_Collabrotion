@@ -263,3 +263,39 @@ The reverse DSH-to-Codex attempt verifies the current DSH worker and a captured 
 The earlier machine checks passed Codex and DSH execution verification. On 2026-11-07, no-inference connection checks passed on Codex 0.167.0-alpha.3.2, Claude Code 2.1.317, and DSH 0.2.2-rc.1. Claude 2.1.317's actual isolated worker check again returned `Not logged in`; the issue returned to unstarted and its source stayed intact. The application did not change login state or copy Desktop credentials. Full three-harness execution acceptance remains pending; a connection check does not prove a model run can execute.
 
 For every mutation, use a unique `idempotencyKey` and current `expectedVersion`; child creation also requires `expectedParentVersion`. An exact retry returns the committed result with `replayed: true`. Reload after a version conflict. The prototype uses camelCase command fields; mapping/versioning against the earlier illustrative spec examples will be finalized before the command contract is frozen.
+
+
+## Iteration planning
+
+The seven `iteration_*` commands are available through the normal owner CLI, authenticated HTTP command route, and scoped MCP bridge. Human, lead and PM may mutate records; worker/QA credentials can only read iteration metadata and members in their existing issue read scope. Iterations never grant additional issue access. They are optional planning metadata, with no claim, dispatch, lifecycle or approval authority.
+
+- `iteration_create`: `workspaceId`, `name` (1-120 characters), `goal` (up to 2,000 characters), `startDate`, `endDate`, creation-time IANA `timeZone`, `reason`, `idempotencyKey`; creates `PLANNED` and optionally adopts explicitly bound legacy matches.
+- `iteration_update`: workspace/iteration IDs, `expectedVersion`, optional name/goal/start/end dates, reason and key. Closed records are immutable; creation time zone cannot be changed.
+- `iteration_start`: workspace/iteration IDs, version, reason and key. Requires `PLANNED` and no other `ACTIVE` record in the workspace.
+- `iteration_list`: `workspaceId`, optional state, offset/limit (default 0/20, maximum 100), and planner-only `legacyLabel` for an adoption preview. Returns `iterations`, `total`, `nextOffset`, and optional `adoption`.
+- `iteration_get`: workspace/iteration IDs, offset/limit, `view` (`summary` default, `full`, `flow`, `markdown`), optional `flowFrom` and `flowLimit` (default 31, maximum 366). Membership views return `iteration`, paginated `members`, `total`, `nextOffset`, and advisory `progress`. Planner full views add complete iteration preconditions, immutable closed `summary`, and derived represented requirements. Worker/QA views omit full-set hashes, summary references and hidden members/aggregates.
+
+Every mutation also uses the normal idempotency key. A membership snapshot has exactly:
+
+```json
+{
+  "iterationId": "iteration-uuid",
+  "expectedVersion": 3,
+  "membershipRevision": 2,
+  "membershipHash": "64-lowercase-hex-characters"
+}
+```
+
+Fetch the current planner iteration record, rather than constructing this snapshot from a filtered member page. `membershipHash` binds the complete sorted member ID set; issue versions additionally guard state/content edits.
+
+`iteration_membership_set` takes `workspaceId`, `changes: [{issueId, expectedVersion, iterationId}]`, `memberships: [snapshot]`, reason and key. Include a current complete snapshot for every changed source and destination iteration. A null target explicitly returns the issue to backlog. One transaction checks every supplied issue/set and updates all touched records, revision/hash, audit events and receipt. A conflict saves none of them; retain input and reload rather than silently recomputing consent.
+
+`issue_update` accepts the same optional `iterationId` plus `memberships`. `plan_apply` accepts `iterationId` on each task and a single top-level `memberships` array for all changed source/destination sets. New-task omission means backlog; existing-task or issue-update omission preserves membership, including ordinary title/date/estimate edits. Explicit null means backlog and requires the source snapshot. A complete plan applies membership moves as one batch, so several new tasks may share the same destination snapshot. The normal parent/task expected-version guards still apply. All these entry points preserve artifact design/coverage, current reviews/QA/delivery evidence and grants; iteration dates never justify bypassing another gate.
+
+`iteration_close` takes workspace/iteration IDs, `expectedVersion`, `membershipRevision`, `membershipHash`, complete `members: [{issueId, expectedVersion}]`, `dispositions: [{issueId, iterationId}]` for exactly the unfinished members, complete carry-over `destinations: [snapshot]`, reason and key. Each carry-over target must be another `PLANNED` iteration. Null dispositions mean backlog. Finished members lose live pointers; all lifecycle states stay unchanged. The transaction seals historical membership and an immutable `summary`, records explicit destinations and returns `{iteration, summary}`. A later authorized issue reopen remains in backlog and does not rewrite the closed record.
+
+A planner `iteration_get` with `view: "markdown"` returns the closed record's `mediaType: "text/markdown"` and derived local `content`; it writes no file and performs no external publishing. Save the returned content through the local export consumer. Open iterations have no sealed summary to export. Flow views return `points`, `nextDate`, `timeZone` and scoped/advisory flags, reconstructing membership and lifecycle/design events at each local-day boundary, including DST changes. Estimates are grouped by unit. Capacity identifies the existing installation-wide run limit alongside scoped usage; this does not create a workspace concurrency policy or velocity forecast.
+
+Stored old `iteration` labels are never rewritten on read or startup. Issue projections instead expose `iterationId` and read-only `legacyIterationLabel`. Old `iteration` or `legacyIterationLabel` writes fail naming `iterationId`. A planner legacy preview supplies the complete eligible `{issueId, expectedVersion}` `matches` and `matchHash`. Explicit create/adoption or membership adoption must submit that exact set and complete destination/source snapshots; the transaction re-derives matches and rejects unseen additions, removals, reopened matches or edits. No automatic iteration, assignment, carry-over or completion is created.
+
+Active overdue records add advisory `ITERATION_OVERDUE` gaps for planners. Worker and QA prompts receive only a bounded advisory name/end/goal excerpt. This service slice does not claim the iteration UI, constrained-machine performance, native harness acceptance, independent AC40 acceptance or completion of P5.

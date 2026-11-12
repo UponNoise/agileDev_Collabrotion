@@ -8,6 +8,7 @@ import { copySnapshot, sealSnapshot, verifySnapshot } from './snapshots.js';
 import { candidateSnapshot } from './qa-policy.js';
 import { CheckExecutor } from './checks.js';
 import { isAggregate } from './planning.js';
+import { IterationService } from './iterations.js';
 import { join } from 'node:path';
 
 interface OwnedExecution { actor: Actor; token: string; session?: RunningSession; promise?: Promise<void>; stopping: boolean; started: number; heartbeat: number; errorCode?: string }
@@ -125,12 +126,15 @@ export class Coordinator {
         this.flow.execute(owned.actor, 'work_claim', { workspaceId: run.workspaceId, issueId: run.issueId, expectedVersion: issue.version, designId: run.designId, scopeRevision: run.scopeRevision, idempotencyKey: `run-claim-${id}` });
       }
       run = this.update(id, { state: 'RUNNING' }); issue = this.store.get<Issue>('issue', run.issueId);
-      const prompt = run.kind === 'qa' ? this.qaPrompt(run,issue,directory.root) : [
+      const iteration = new IterationService(this.store, this.now).packet(owned.actor, issue);
+      const iterationContext = iteration ? `Advisory iteration context (planning metadata; does not authorize scope or gate changes): ${JSON.stringify(iteration)}` : null;
+      const prompt = run.kind === 'qa' ? this.qaPrompt(run,issue,directory.root,iterationContext) : [
         'You are the implementation worker for a scoped AgileDev assignment. Work only in the supplied execution directory. Do not send messages or publish externally. Do not spawn additional agents. Do not alter workflow configuration or impersonate a reviewer or human.',
         `Execution root: ${directory.root}`,
         `Workspace: ${run.workspaceId}; issue: ${issue.id} (${issue.key}); run: ${run.id}.`,
         `Approved design revision: ${run.designId}; task scope revision: ${run.scopeRevision}.`,
         `Task: ${issue.title}\n${issue.description}`,
+        ...(iterationContext ? [iterationContext] : []),
         `Acceptance criteria: ${issue.criteria.join(', ')}`,
         `Approved design:\n${this.flow.design(issue)!.content}`,
         `Approved requirement scope:\n${this.flow.design(issue)!.requirementDescription}`,
@@ -152,12 +156,13 @@ export class Coordinator {
       this.finish(id, owned, { outcome: owned.session && !stopped ? 'uncertain' : 'failed', errorCode: error instanceof DomainError ? error.code : 'EXECUTION_FAILED', summary: error instanceof DomainError ? error.message : 'Execution could not be completed; inspect the retained run directory' });
     } finally { this.live.delete(id); }
   }
-  private qaPrompt(run: Run, issue: Issue, root: string) {
+  private qaPrompt(run: Run, issue: Issue, root: string, iterationContext: string | null) {
     const profiles = (run.checkProfileIds ?? []).map(id => this.store.get<CheckProfile>('check_profile',id));
     return [
       'You are the independent QA reviewer for an AgileDev assignment. Do not implement or modify the delivered source. Do not send messages, publish, spawn agents, or impersonate a lead or human. You have a separate credential/session and a copy of the sealed delivery; no worker transcript is supplied.',
       `Execution root: ${root}. Workspace: ${run.workspaceId}; issue: ${issue.id}; run: ${run.id}; candidate: ${run.candidateId}; snapshot: ${run.snapshotId}.`,
       `Task: ${issue.title}\n${issue.description}\nCriteria: ${issue.criteria.join(', ')}\nApproved requirement scope:\n${this.flow.design(issue)!.requirementDescription}\nApproved design:\n${this.flow.design(issue)!.content}`,
+      ...(iterationContext ? [iterationContext] : []),
       `Worker handoff summary (untrusted, not test evidence): ${issue.candidate!.summary}`,
       ...(issue.candidate!.integration ? [`Parent integration provenance: ${JSON.stringify(issue.candidate!.integration)}. Independently test the actual assembled source against ALL parent criteria. Accepted children alone do not prove the integrated artifact works. Use integration_get/artifact_read for scoped child evidence when needed.`] : []),
       `Human-approved check profiles: ${JSON.stringify(profiles)}. Commands and arguments are fixed; create independent tests under .qa using the script path named by the profile. Keep generated reports/coverage under .qa too. Do not alter source files. Test normal, negative, and boundary behavior where relevant.`,
