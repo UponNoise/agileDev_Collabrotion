@@ -696,6 +696,8 @@ summary {
 .evidence-block {
   margin-top: 24px;
 }
+.rejection-finding { border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 20px 0; }
+.rejection-finding > legend { font-weight: 600; padding: 0 6px; }
 .json {
   padding: 14px;
   border: 1px solid var(--line);
