@@ -11,6 +11,7 @@ import { Backlog, Runs, Settings, WorkspaceRegistration } from './WorkspaceViews
 import { Decisions, InboxSettingsForm, useDecisionInbox } from './Decisions';
 import type { DecisionFilter } from './Decisions';
 import type { InboxEntry } from './api';
+import { DesktopAttentionSettings, useDesktopAttention } from './DesktopAttention';
 
 const labels: Record<View, string> = {
   decisions: 'Decisions',
@@ -129,6 +130,12 @@ export function App() {
     }
   }, [inbox.error]);
   const blockingDecisions = actor ? inbox.global?.summary.blocking : undefined;
+  const desktopAttention = useDesktopAttention({
+    authenticated: !!actor,
+    blockingCount: blockingDecisions,
+    stale: inbox.loading || !!inbox.error,
+    openDecisions: () => { navigate(workspaceId, null, 'decisions'); saved(); }
+  });
   useEffect(() => {
     document.title = `${blockingDecisions === undefined ? '' : `(${blockingDecisions}) `}${t('AgileDev — local workspace')}`;
   }, [blockingDecisions, t]);
@@ -466,6 +473,7 @@ export function App() {
                 {view === 'settings' ? (
                   <>
                     <InboxSettingsForm key={workspaceId} workspaceId={workspaceId} onSaved={saved} />
+                    <DesktopAttentionSettings attention={desktopAttention} />
                     <Settings data={current} onSaved={saved} onRegistered={registered} />
                   </>
                 ) : null}
