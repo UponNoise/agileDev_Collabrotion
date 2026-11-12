@@ -400,7 +400,17 @@ export class IterationService {
     const history = this.history(iteration).filter(event => this.visible(actor, this.store.get<Issue>('issue', event.issueId)));
     const issueIds = new Set(history.map(event => event.issueId));
     const rootIds = new Set(history.map(event => event.parentId ?? event.issueId));
-    const events = this.events(iteration.workspaceId).filter(event => !!event.targetId && (issueIds.has(event.targetId) || rootIds.has(event.targetId)));
+    const runs = new Map(this.store.list<Run>('run', iteration.workspaceId).filter(run => run.workspaceId === iteration.workspaceId && issueIds.has(run.issueId)).map(run => [run.id, run]));
+    const events = this.events(iteration.workspaceId).flatMap(event => {
+      if (!event.targetId) return [];
+      if (event.operation === 'run_finished') {
+        const run = runs.get(event.targetId);
+        const state = event.data.issueState;
+        if (!run || event.actorId !== run.executionActorId || typeof state !== 'string' || !(states as readonly string[]).includes(state)) return [];
+        return [{ ...event, targetId: run.issueId, data: { ...event.data, state } }];
+      }
+      return issueIds.has(event.targetId) || rootIds.has(event.targetId) ? [event] : [];
+    });
     const timeline = [...history.map(membership => ({ at: membership.at, sequence: membership.sequence, membership })), ...events.map(event => ({ at: event.at, sequence: event.sequence, event }))].sort((a, b) => a.at.localeCompare(b.at) || a.sequence - b.sequence);
     const live = new Map<string, { state: State; rootId: string }>();
     const designs = new Map<string, string | null>();

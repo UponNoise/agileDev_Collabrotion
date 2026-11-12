@@ -13,6 +13,9 @@ import { Workflow } from '../src/workflow.js';
 import { createServer } from '../src/http.js';
 import { bindFixtureImplementation } from './fixtures.js';
 import { acceptanceDigest } from '../src/qa-policy.js';
+import { Coordinator } from '../src/runner.js';
+import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
+import { LocalClient } from '../src/client.js';
 
 const rejects = (code: string) => (error: unknown) => error instanceof DomainError && error.code === code;
 function fixture(t: TestContext) {
@@ -226,3 +229,67 @@ test('cross-workspace, terminal and closed membership requests reject at Workflo
   const iteration = f.create(); f.change('issue_transition',issue.id,{ action: 'abandon',reason: 'Fixture terminal issue' }); before = f.db(); assert.throws(() => f.move([issue.id],iteration.id),rejects('ISSUE_CLOSED')); assert.equal(f.db(),before);
   f.change('issue_transition',issue.id,{ action: 'reopen',reason: 'Explicit fixture reopen' }); f.cmd('iteration_close',f.close(iteration.id)); before = f.db(); assert.throws(() => f.move([issue.id],iteration.id),rejects('ITERATION_CLOSED')); assert.equal(f.db(),before);
 });
+
+
+for (const mode of ['failed','no-submission','cancelled','held-cancelled','submitted-failed','submitted-held-cancelled','abandoned-cancelled','transfer-failed','uncertain-reconcile'] as const) {
+  test(`real Coordinator flow records ${mode} without inventing historical state or gate advancement`, { timeout: 15000 }, async t => {
+    const f = fixture(t); f.setNow(new Date().toISOString()); const issue = f.issue(); writeFileSync(join(f.source,'source.txt'),'Controlled run source fixture\n');
+    f.change('design_set',issue.id,{ content: 'Controlled run fixture; not real project approval',criteria: ['C1'] }); f.change('design_submit',issue.id);
+    f.change('design_decide',issue.id,{ designId: f.current(issue.id).designId,decision: 'APPROVED',reason: 'Automated fixture approval only' });
+    f.change('issue_assign',issue.id,{ actorId: f.worker.actor.id,harness: 'codex' });
+    const today = new Date().toISOString().slice(0,10); const yesterday = new Date(Date.parse(`${today}T12:00:00Z`) - 86400000).toISOString().slice(0,10);
+    const iteration = f.create({ startDate: yesterday,endDate: today,timeZone: 'UTC' }); f.move([issue.id],iteration.id);
+    const run = f.change('work_dispatch',issue.id,{ designId: f.current(issue.id).designId,scopeRevision: f.current(issue.id).scopeRevision }).run as Run;
+    const contexts: AdapterContext[] = []; let finish!: (result: AdapterResult) => void;
+    const adapter: ExecutionAdapter = { async start(context) { contexts.push(context); context.onProvider(`controlled-flow-fixture-${randomUUID()}`); return { result: new Promise<AdapterResult>(done => { finish = done; }),interrupt: async () => { finish({ outcome: 'cancelled',errorCode: 'CONTROLLED_STOP' }); return true; } }; } };
+    const server = createServer(f.store); const endpoint = await server.listen({ host: '127.0.0.1',port: 0 });
+    const coordinator = new Coordinator(f.store,{ endpoint,directory: join(f.directory,'runs'),bridgeScript: resolve('dist/cli.js'),adapter });
+    const until = async (predicate: () => boolean) => { const deadline = Date.now() + 10000; while (!predicate()) { assert.ok(Date.now() < deadline,'Controlled Coordinator did not reach its expected state'); await new Promise(done => setTimeout(done,10)); } };
+    const flow = (id = iteration.id,actor = f.human) => f.cmd('iteration_get',{ iterationId: id,view: 'flow' },actor);
+    try {
+      await coordinator.start(); await until(() => contexts.length === 1 && f.current(issue.id).state === 'IN_PROGRESS');
+      assert.equal(flow().points.at(-1).counts.IN_PROGRESS,1);
+      const context = contexts[0]!;
+      if (mode.startsWith('submitted-')) {
+        writeFileSync(join(context.cwd,'delivery.txt'),'Controlled submitted fixture\n');
+        const current = f.current(issue.id); await new LocalClient(endpoint,context.token).command('work_submit',{ workspaceId: f.workspace.id,issueId: issue.id,expectedVersion: current.version,fence: current.fence,summary: 'Controlled source fixture, not a native model run',files: ['delivery.txt'],idempotencyKey: randomUUID() });
+        assert.equal(f.current(issue.id).state,'LEAD_REVIEW'); assert.ok(f.current(issue.id).candidate);
+      }
+      let destination: Iteration | null = null;
+      if (mode === 'transfer-failed') {
+        destination = f.create({ name: 'Transfer target',startDate: yesterday,endDate: today,timeZone: 'UTC' });
+        const hidden = f.issue(); f.move([issue.id,hidden.id],destination.id);
+      }
+      if (mode.includes('held')) f.change('issue_transition',issue.id,{ action: 'hold',reason: 'Explicit fixture hold before controlled stop' });
+      if (mode === 'abandoned-cancelled') f.change('issue_transition',issue.id,{ action: 'abandon',reason: 'Explicit fixture abandonment before controlled stop' });
+      if (mode.includes('cancelled')) {
+        const currentRun = f.store.get<Run>('run',run.id); f.cmd('run_interrupt',{ runId: run.id,expectedVersion: currentRun.version,reason: 'Explicit controlled stop, not a timer gate transition' }); await coordinator.tick();
+      } else finish({ outcome: mode === 'no-submission' ? 'succeeded' : mode === 'uncertain-reconcile' ? 'uncertain' : 'failed',errorCode: 'CONTROLLED_FLOW_FIXTURE' });
+      await until(() => ['FAILED','CANCELLED','UNCERTAIN'].includes(f.store.get<Run>('run',run.id).state));
+      if (mode === 'uncertain-reconcile') {
+        assert.equal(f.current(issue.id).state,'IN_PROGRESS'); assert.equal(flow().points.at(-1).counts.IN_PROGRESS,1);
+        const currentRun = f.store.get<Run>('run',run.id); f.cmd('run_reconcile',{ runId: run.id,expectedVersion: currentRun.version,confirmStopped: true,reason: 'Controlled adapter owns no OS process; explicit automated fixture stop confirmation' });
+      }
+      const expected = mode.includes('held') ? 'ON_HOLD' : mode === 'abandoned-cancelled' ? 'ABANDONED' : 'NOT_STARTED';
+      assert.equal(f.current(issue.id).state,expected); assert.equal(f.current(issue.id).candidate,null); assert.equal(f.current(issue.id).acceptedDigest,undefined); assert.equal(f.store.list('delivery_approval').length,0);
+      if (mode.includes('held')) assert.equal(f.current(issue.id).savedState?.state,mode.startsWith('submitted-') ? 'NOT_STARTED' : 'IN_PROGRESS');
+      const before = f.db(); const points = flow(destination?.id).points; const last = points.at(-1);
+      assert.equal(last.counts[expected],destination ? 2 : 1); assert.equal(last.counts.IN_PROGRESS,0); assert.equal(last.counts.LEAD_REVIEW,0); assert.equal(last.counts.DONE,0); assert.equal(f.db(),before);
+      if (destination) {
+        assert.equal(Object.values(flow().points.at(-1).counts).reduce((sum: any,value: any) => sum + value,0),0);
+        const scoped = flow(destination.id,f.worker.actor); assert.equal(scoped.partial,true); assert.equal(scoped.points.at(-1).counts.NOT_STARTED,1); assert.equal(scoped.points.at(-1).counts.IN_PROGRESS,0);
+      }
+      if (mode === 'failed') {
+        const ended = f.store.db.prepare("SELECT sequence FROM events WHERE target_id=? AND operation='run_finished'").get(run.id) as { sequence: number };
+        f.store.db.prepare('UPDATE events SET at=? WHERE workspace_id=? AND sequence<?').run(`${yesterday}T12:00:00Z`,f.workspace.id,ended.sequence);
+        f.store.db.prepare('UPDATE events SET at=? WHERE sequence=?').run(`${today}T12:00:00Z`,ended.sequence);
+        for (const record of f.store.list<any>('iteration_membership',f.workspace.id)) { record.at = `${yesterday}T12:00:00Z`; f.store.put('iteration_membership',record,f.workspace.id); }
+        const history = flow().points; assert.equal(history[0].counts.IN_PROGRESS,1); assert.equal(history[0].counts.NOT_STARTED,0); assert.equal(history.at(-1).counts.NOT_STARTED,1);
+        const sourceRun = f.store.get<Run>('run',run.id); f.store.put('run',{ ...sourceRun,workspaceId: 'foreign-workspace' },f.workspace.id);
+        assert.equal(flow().points.at(-1).counts.IN_PROGRESS,1); f.store.put('run',sourceRun,f.workspace.id);
+        f.store.db.prepare('UPDATE events SET actor_id=? WHERE sequence=?').run(f.human.id,ended.sequence);
+        assert.equal(flow().points.at(-1).counts.IN_PROGRESS,1);
+      }
+    } finally { await coordinator.close(); await server.close(); }
+  });
+}
