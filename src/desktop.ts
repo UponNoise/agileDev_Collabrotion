@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dataDirectory, readDescriptor, serviceAvailable } from './service-launcher.js';
 import { desktopClipboardAllowed, desktopCommitLink, isWorkspaceUrl } from './desktop-policy.js';
+import { installDesktopAttention } from './desktop-attention-runtime.js';
 
 const directory = dataDirectory();
 const profile = join(directory, 'desktop');
@@ -58,7 +59,9 @@ async function openWorkspace(serviceStart: Promise<unknown>) {
       if (Number.isFinite(saved.width) && Number.isFinite(saved.height)) bounds = { width: Math.min(area.width, Math.max(390, saved.width)), height: Math.min(area.height, Math.max(500, saved.height)) };
     } catch {}
   }
-  window = new BrowserWindow({ ...bounds, minWidth: 390, minHeight: 500, title: 'AgileDev Collaboration', backgroundColor: '#ffffff', show: false, webPreferences: { session: partition, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, webviewTag: false, devTools: !app.isPackaged } });
+  const preload = app.isPackaged ? join(dirname(fileURLToPath(import.meta.url)), 'desktop-preload.cjs') : resolve(dirname(fileURLToPath(import.meta.url)), '../src/desktop-preload.cjs');
+  window = new BrowserWindow({ ...bounds, minWidth: 390, minHeight: 500, title: 'AgileDev Collaboration', backgroundColor: '#ffffff', show: false, webPreferences: { session: partition, preload, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, webviewTag: false, devTools: !app.isPackaged } });
+  installDesktopAttention(window, config.endpoint);
   const openCommitLink = (url: string) => {
     const target = desktopCommitLink(config.endpoint, window?.webContents.getURL(), url);
     if (target) void shell.openExternal(target).catch(() => dialog.showErrorBox('AgileDev Collaboration', 'The commit link could not be opened in your browser.'));

@@ -20,7 +20,8 @@ for (const args of [
 ]) execFileSync(process.execPath, args, { cwd: root, stdio: 'inherit', windowsHide: true });
 mkdirSync(join(app, 'dist'), { recursive: true });
 mkdirSync(join(service, 'runtime'), { recursive: true });
-for (const file of ['desktop.js', 'desktop-policy.js', 'service-launcher.js']) cpSync(join(compiled, file), join(app, 'dist', file));
+for (const file of ['desktop.js', 'desktop-policy.js', 'desktop-attention.js', 'desktop-attention-runtime.js', 'service-launcher.js']) cpSync(join(compiled, file), join(app, 'dist', file));
+cpSync(join(root, 'src', 'desktop-preload.cjs'), join(app, 'dist', 'desktop-preload.cjs'));
 writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'agiledev-collaboration', productName: 'AgileDev Collaboration', author: 'AgileDev contributors', version: manifest.version, type: 'module', main: 'dist/desktop.js', private: true }, null, 2));
 for (const file of ['package.json', 'package-lock.json']) cpSync(join(root, file), join(service, file));
 cpSync(compiled, join(service, 'dist'), { recursive: true });
