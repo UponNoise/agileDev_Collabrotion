@@ -1,5 +1,9 @@
 const pairs: [string, string][] = [
   ['Decisions', '待我决策'],
+  ['Iteration ID', '迭代 ID'],
+  ['Legacy iteration label', '历史迭代标签'],
+  ['Saving this plan preserves iteration membership.', '保存计划会保留当前迭代归属。'],
+  ['Historical labels are read-only and do not create iteration records.', '历史标签仅供查看，不会自动创建迭代记录。'],
   ['Human decisions', '人工决策'],
   ['Only human decisions. Inspect the current revision, delivery, scope, or execution before deciding.', '仅列出需要人工处理的事项。请先查看当前修订、交付、范围或执行记录。'],
   ['Blocking decisions across all readable workspaces', '所有可读工作区的阻塞决策数'],

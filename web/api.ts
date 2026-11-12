@@ -16,7 +16,7 @@ import type {
   Workspace
 } from '../src/contracts';
 
-export type DisplayIssue = Issue & { url: string; titleSuffix: string; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
+export type DisplayIssue = Issue & { url: string; titleSuffix: string; iterationId?: string | null; legacyIterationLabel?: string | null; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
 export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings' | 'decisions';
 export interface InboxSettings {
   workspaceId: string; version: number; agingThresholdHours: number; updatedAt: string | null; updatedBy: string | null;
