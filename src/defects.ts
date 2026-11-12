@@ -92,6 +92,18 @@ export class DefectRegistry {
     return { defects: rows.slice(a.offset, a.offset + a.limit), total: rows.length, nextOffset: a.offset + a.limit < rows.length ? a.offset + a.limit : null };
   }
 
+  gaps(actor: Actor, workspaceId: string) {
+    this.store.workspace(actor,workspaceId);
+    const visible = new Map(this.store.list<Issue>('issue',workspaceId).flatMap(issue => {
+      try { this.store.issue(actor,workspaceId,issue.id); return [[issue.id,issue] as const]; }
+      catch (error) { if (error instanceof DomainError && error.code === 'SCOPE_DENIED') return []; throw error; }
+    }));
+    return this.all(workspaceId,new Set(visible.keys())).flatMap(defect => {
+      const code = defect.state === 'PROPOSED' ? 'DEFECT_TRIAGE_PENDING' : defect.state === 'OPEN' && defect.origin === 'ESCAPED' ? 'ESCAPED_DEFECT_OPEN' : null;
+      return code ? [{ issueId: defect.issueId,key: visible.get(defect.issueId)!.key,defectId: defect.id,code,severity: 'advisory' }] : [];
+    });
+  }
+
   get(actor: Actor, workspaceId: string, defectId: string) {
     this.store.workspace(actor, workspaceId);
     const raw = this.store.get<DefectRecord | HistoricalDefect>('defect', defectId);
@@ -188,7 +200,10 @@ export class DefectRegistry {
     const a = parsed(defectCoreSchemas.triage, input);
     return this.store.db.transaction(() => {
       const record = this.find(actor, a.workspaceId, a.defectId, a.expectedVersion);
-      if (record.state !== 'PROPOSED' || record.origin !== null) throw new DomainError('INVALID_TRANSITION', 'Only pending problem proposals can be triaged');
+      if (record.state !== 'PROPOSED' || record.origin !== null) return this.triageConfirmed(actor,record,a);
+      if (['REOPEN','DEFER'].includes(a.action)) throw new DomainError('INVALID_INPUT','Pending problems must be confirmed before an escaped-defect disposition');
+      if (a.action === 'REJECT' && (a.severity || a.observation || a.disposition || a.requirement)) throw new DomainError('INVALID_INPUT','Proposal rejection takes only a reason');
+      if (a.action === 'CONFIRM' && a.requirement || a.action === 'NEW_REQUIREMENT' && (a.severity || a.observation || a.disposition)) throw new DomainError('INVALID_INPUT','Triage fields do not match the selected action');
       const issue = this.store.issue(actor, a.workspaceId, record.issueId);
       expectedVersion(issue.version, a.expectedIssueVersion);
       const issueVersion = issue.version;
@@ -230,6 +245,33 @@ export class DefectRegistry {
       }
       return { defect: this.save(actor, record, 'defect_triaged', { decisionId: decision.id, action: a.action }), ...(requirement ? { requirement } : {}) };
     }).immediate();
+  }
+
+  private triageConfirmed(actor: Actor,record: DefectRecord,a: ReturnType<typeof defectCoreSchemas.triage.parse>) {
+    if (record.origin !== 'ESCAPED' || record.state !== 'OPEN' || !['REOPEN','DEFER','NEW_REQUIREMENT'].includes(a.action)) throw new DomainError('INVALID_TRANSITION','Only open escaped defects support a closed-delivery disposition');
+    if (a.severity || a.disposition || (a.action !== 'NEW_REQUIREMENT' && a.requirement)) throw new DomainError('INVALID_INPUT','Confirmed triage cannot change severity or take unrelated fields');
+    const issue = this.store.issue(actor,a.workspaceId,record.issueId);
+    expectedVersion(issue.version,a.expectedIssueVersion);
+    const observation = this.observe(issue);
+    if (issue.state !== 'DONE' || observation.kind !== 'DELIVERY' || !a.observation || canonical(observation) !== canonical(a.observation) || observation.digest !== record.observation.digest || observation.candidateId !== record.observation.candidateId || observation.snapshotId !== record.observation.snapshotId || observation.snapshotHash !== record.observation.snapshotHash) throw new DomainError('DEFECT_OBSERVATION_REQUIRED','Disposition requires the current closed delivery that contains the reported defect');
+    const issueVersion = issue.version;
+    let requirement: Issue | undefined;
+    if (a.action === 'REOPEN') {
+      if (!this.effects.reopen) throw new DomainError('CAPABILITY_UNSUPPORTED','The workflow reopen integration is required',501);
+      this.effects.reopen(actor,issue,a.reason);
+      const reopened = this.store.get<Issue>('issue',issue.id);
+      if (reopened.state !== 'NOT_STARTED' || reopened.version <= issue.version || reopened.candidate || reopened.acceptedDigest) throw new DomainError('DEFECT_EFFECT_INVALID','The reopen integration must apply the existing authorized reset');
+    } else if (a.action === 'NEW_REQUIREMENT') {
+      if (!a.requirement || !this.effects.createRequirement) throw new DomainError('INVALID_INPUT','A new requirement needs explicit requirement details');
+      if (maybe(this.store,'defect_requirement',record.id)) throw new DomainError('INVALID_TRANSITION','This defect already has a linked requirement');
+      requirement = this.effects.createRequirement(actor,issue,a.requirement,a.reason);
+      const saved = this.store.get<Issue>('issue',requirement.id);
+      if (saved.workspaceId !== issue.workspaceId || saved.parentId !== null || saved.state !== 'NOT_STARTED' || saved.designId || saved.assignee) throw new DomainError('DEFECT_EFFECT_INVALID','A linked requirement must start unapproved and unassigned in this workspace');
+    }
+    const decision = this.source(actor,issue,'HUMAN_TRIAGE',{ defectId: record.id,expectedDefectVersion: record.version,expectedIssueVersion: issueVersion,action: a.action,reason: a.reason,observation,requirementId: requirement?.id ?? null });
+    record.triageId = decision.id;
+    if (requirement) this.store.put('defect_requirement',{ id: record.id,workspaceId: issue.workspaceId,issueId: issue.id,defectId: record.id,requirementId: requirement.id,decisionId: decision.id },issue.workspaceId);
+    return { defect: this.save(actor,record,'defect_triaged',{ decisionId: decision.id,action: a.action }),...(requirement ? { requirement } : {}) };
   }
 
   withdraw(actor: Actor, input: DefectWithdrawInput) {

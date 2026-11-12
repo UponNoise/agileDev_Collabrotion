@@ -116,7 +116,7 @@ export const defectCoreSchemas = {
   get: z.object({ workspaceId: id, defectId: id }).strict(),
   triage: z.object({
     workspaceId: id, defectId: id, expectedVersion: version, expectedIssueVersion: version,
-    action: z.enum(['REJECT', 'CONFIRM', 'NEW_REQUIREMENT']), reason: text,
+    action: z.enum(['REJECT', 'CONFIRM', 'NEW_REQUIREMENT', 'REOPEN', 'DEFER']), reason: text,
     severity: z.enum(defectSeverities).optional(), observation: defectObservationSchema.optional(),
     disposition: z.enum(['REOPEN', 'DEFER']).optional(),
     requirement: z.object({ title: z.string().trim().min(1).max(300), description: text, criteria: z.array(id).max(100).default([]) }).strict().optional()
