@@ -132,6 +132,65 @@ test('unrelated repository binding changes do not replace an artifact scope deci
   assert.equal(after.id, before.id); assert.equal(after.pendingSequence, before.pendingSequence);
 });
 
+test('many pending scopes retain exact epochs across shared repository history and unrelated audits', t => {
+  const f = fixture(t, true);
+  const parent = f.cmd('issue_create', { title: 'Bulk artifact scope fixture', description: 'Explicit non-Git fixture scope', criteria: ['C1'], artifactMode: 'artifact', artifactReason: 'Fixture document delivery' }).issue as Issue;
+  f.design(parent.id, true); const child = f.issue(parent.id);
+  f.change('issue_transition', child.id, { action: 'abandon', reason: 'Automated bulk scope fixture' });
+  const first = f.pin(child.id, 'issue_transition', now - 2 * day);
+  const root = f.current(parent.id); const task = f.current(child.id); const design = f.store.get<Design>('design', root.designId!);
+  const template = f.store.db.prepare('SELECT operation,target_id,data,at FROM events WHERE target_id IN (?,?) ORDER BY sequence').all(parent.id, child.id) as { operation: string; target_id: string; data: string; at: string }[];
+  const expected = new Map([[child.id, { sequence: first, at: iso(now - 2 * day) }]]);
+  f.store.db.transaction(() => {
+    const insert = f.store.db.prepare('INSERT INTO events(workspace_id,actor_id,operation,target_id,data,at) VALUES(?,?,?,?,?,?)');
+    for (let index = 1; index < 64; index++) {
+      const parentId = randomUUID(); const childId = randomUUID(); const designId = randomUUID();
+      const remap = (value: string) => value.replaceAll(parent.id, parentId).replaceAll(child.id, childId).replaceAll(design.id, designId);
+      f.store.put('issue', { ...structuredClone(root), id: parentId, key: `INB-P${index}`, designId }, f.workspace.id);
+      f.store.put('issue', { ...structuredClone(task), id: childId, key: `INB-C${index}`, parentId }, f.workspace.id);
+      f.store.put('design', { ...structuredClone(design), id: designId, issueId: parentId }, f.workspace.id);
+      for (const event of template) {
+        const at = event.operation === 'issue_transition' && event.target_id === child.id ? iso(now - 2 * day + index * 1000) : event.at;
+        const result = insert.run(f.workspace.id, f.owner.id, event.operation, remap(event.target_id), remap(event.data), at);
+        if (event.operation === 'issue_transition' && event.target_id === child.id) expected.set(childId, { sequence: Number(result.lastInsertRowid), at });
+      }
+    }
+    for (let index = 0; index < 8000; index++) insert.run(f.workspace.id, f.owner.id, 'fixture_observation', `unrelated-${index % 100}`, index % 2 ? '{}' : 'malformed fixture audit', iso(now));
+  }).immediate();
+  const before = f.list({ limit: 100 });
+  assert.equal(before.total, 64);
+  const gitRoot = f.issue();
+  for (const repository of ['other', 'third']) {
+    const bindingId = f.store.get<Workspace>('workspace', f.workspace.id).gitBindingId;
+    execFileSync('git', ['remote', 'set-url', 'origin', `https://github.com/fixture/${repository}.git`], { cwd: f.source, windowsHide: true });
+    f.cmd('workspace_git_bind', { expectedBindingId: bindingId });
+  }
+  assert.ok(f.store.db.prepare("SELECT sequence FROM events WHERE target_id=? AND operation='scope_git_binding_set'").get(gitRoot.id));
+  const stored = database(f.store); const after = f.list({ limit: 100 });
+  assert.equal(after.total, 64); assert.deepEqual(after.entries.map((entry: any) => entry.id), before.entries.map((entry: any) => entry.id));
+  for (const entry of after.entries) { assert.equal(entry.pendingSequence, expected.get(entry.issueId)!.sequence); assert.equal(entry.pendingSince, expected.get(entry.issueId)!.at); }
+  assert.equal(database(f.store), stored); assert.equal(f.store.list('inbox_entry').length, 0);
+});
+
+test('Git binding aliases preserve the first binding-change epoch when replaying scope history', t => {
+  const f = fixture(t, true); const parent = f.issue(); f.design(parent.id, true); const child = f.issue(parent.id);
+  f.change('issue_transition', child.id, { action: 'abandon', reason: 'Automated Git scope fixture' });
+  const packet = f.flow.execute(f.owner, 'scope_get', { workspaceId: f.workspace.id, issueId: child.id }) as any;
+  f.change('scope_decide', child.id, { expectedParentVersion: f.current(parent.id).version, designId: f.current(parent.id).designId, expectedDecisionId: null, scopeHash: packet.scopeHash, childScopeHash: packet.children[0].scopeHash, action: 'EXCLUDE', reason: 'Automated explicit exclusion' });
+  f.store.db.prepare('UPDATE events SET at=?').run(iso(now - 5 * day));
+  f.change('design_set', parent.id, { content: 'Reset scope before fixture rebind', criteria: ['C1'] }); f.pin(parent.id, 'design_set', now - 4 * day);
+  for (const [index, repository] of ['other', 'third'].entries()) {
+    const previous = f.store.get<Workspace>('workspace', f.workspace.id).gitBindingId;
+    execFileSync('git', ['remote', 'set-url', 'origin', `https://github.com/fixture/${repository}.git`], { cwd: f.source, windowsHide: true });
+    const binding = f.cmd('workspace_git_bind', { expectedBindingId: previous }).binding;
+    const at = now - (3 - index) * day;
+    const sequence = f.pin(parent.id, 'scope_git_binding_set', at); f.pin(binding.id, 'workspace_git_bind', at + 3600000);
+    const entry = f.list().entries.find((value: any) => value.kind === 'SCOPE_DECISION');
+    assert.equal(entry.pendingSequence, sequence); assert.equal(entry.pendingSince, iso(at)); assert.ok(entry.blockers.includes('SCOPE_DECISION_STALE'));
+    const stable = entry.id; f.change('issue_update', parent.id, { priority: index }); assert.equal(f.list().entries.find((value: any) => value.kind === 'SCOPE_DECISION').id, stable);
+  }
+});
+
 test('uncertain execution uses the uncertainty event rather than run creation and preserves its first epoch', t => {
   const f = fixture(t); const issue = f.issue(); const id = randomUUID();
   const run: Run = { id, workspaceId: f.workspace.id, issueId: issue.id, actorId: f.owner.id, harness: 'codex', state: 'UNCERTAIN', version: 2, createdAt: iso(now - 30 * day), designId: 'automated-design', scopeRevision: 1 };
