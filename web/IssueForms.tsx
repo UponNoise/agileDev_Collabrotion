@@ -696,7 +696,7 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
       <div className="form-body">
         <p className="notice">{t('Your decision applies only to this reviewed snapshot. Acceptance is saved if closure is still blocked.')}</p>
         <DeliveryEvidence packet={packet} />
-        <Field label={t('Decision reason')}><textarea name="reason" required rows={4} value={reason} onChange={event => setReason(event.target.value)} placeholder={t('Explain your acceptance or requested changes')} /></Field>
+        <Field label={t('Decision reason')}><textarea name="reason" aria-label={t('Decision reason')} required rows={4} value={reason} onChange={event => setReason(event.target.value)} placeholder={t('Explain your acceptance or requested changes')} /></Field>
         {rejecting ? <section aria-labelledby="rejection-heading">
           <h3 id="rejection-heading">{t('Classify requested rework')}</h3>
           <Field label={t('Rejection classification')}>
@@ -718,9 +718,9 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
               <fieldset><legend>{t('Affected criteria (optional)')}</legend>
                 {issue.criteria.map(id => <label className="check-row" key={id}><input type="checkbox" checked={finding.criterionIds.includes(id)} onChange={event => updateFinding(finding.id, { criterionIds: event.target.checked ? [...finding.criterionIds, id] : finding.criterionIds.filter(value => value !== id) })} /><span>{id}</span></label>)}
               </fieldset>
-              <Field label={t('Reproduction steps')}><textarea required maxLength={65536} rows={3} value={finding.reproduce} onChange={event => updateFinding(finding.id, { reproduce: event.target.value })} /></Field>
-              <Field label={t('Expected behavior')}><textarea required maxLength={65536} rows={3} value={finding.expected} onChange={event => updateFinding(finding.id, { expected: event.target.value })} /></Field>
-              <Field label={t('Actual behavior')}><textarea required maxLength={65536} rows={3} value={finding.actual} onChange={event => updateFinding(finding.id, { actual: event.target.value })} /></Field>
+              <Field label={t('Reproduction steps')}><textarea aria-label={t('Reproduction steps')} required maxLength={65536} rows={3} value={finding.reproduce} onChange={event => updateFinding(finding.id, { reproduce: event.target.value })} /></Field>
+              <Field label={t('Expected behavior')}><textarea aria-label={t('Expected behavior')} required maxLength={65536} rows={3} value={finding.expected} onChange={event => updateFinding(finding.id, { expected: event.target.value })} /></Field>
+              <Field label={t('Actual behavior')}><textarea aria-label={t('Actual behavior')} required maxLength={65536} rows={3} value={finding.actual} onChange={event => updateFinding(finding.id, { actual: event.target.value })} /></Field>
               <button type="button" disabled={findings.length === 1} aria-label={t('Remove defect {number}').replace('{number}', String(index + 1))} onClick={() => setFindings(previous => previous.filter(value => value.id !== finding.id))}>{t('Remove defect')}</button>
             </fieldset>)}
             <button type="button" disabled={findings.length >= 20} onClick={() => setFindings(previous => [...previous, emptyFinding()])}>{t('Add defect')}</button>
