@@ -6,6 +6,7 @@ export type Locale = 'en' | 'zh-CN';
 interface Preferences {
   locale: Locale;
   zoom: number;
+  attentionPaused: boolean;
 }
 const key = 'agiledev.ui.preferences.v1';
 const limit = (value: number) => Math.min(200, Math.max(50, Math.round(value / 5) * 5));
@@ -16,13 +17,15 @@ const measureViewport = () => ({
 function parse(value: string | null): Preferences {
   const fallback: Preferences = {
     locale: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en',
-    zoom: 100
+    zoom: 100,
+    attentionPaused: false
   };
   try {
     const saved = value ? JSON.parse(value) : null;
     return {
       locale: saved?.locale === 'en' || saved?.locale === 'zh-CN' ? saved.locale : fallback.locale,
-      zoom: typeof saved?.zoom === 'number' && Number.isFinite(saved.zoom) ? limit(saved.zoom) : 100
+      zoom: typeof saved?.zoom === 'number' && Number.isFinite(saved.zoom) ? limit(saved.zoom) : 100,
+      attentionPaused: typeof saved?.attentionPaused === 'boolean' ? saved.attentionPaused : false
     };
   } catch {
     return fallback;
@@ -31,8 +34,10 @@ function parse(value: string | null): Preferences {
 const Context = createContext<{
   locale: Locale;
   zoom: number;
+  attentionPaused: boolean;
   setLocale(locale: Locale): void;
   setZoom(value: number): void;
+  setAttentionPaused(paused: boolean): void;
   t(text: string): string;
 } | null>(null);
 export function PreferencesProvider({ children }: { children: ReactNode }) {
@@ -50,6 +55,10 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   );
   const setZoom = useCallback(
     (value: number) => setPreferences((current) => ({ ...current, zoom: limit(value) })),
+    []
+  );
+  const setAttentionPaused = useCallback(
+    (attentionPaused: boolean) => setPreferences(current => ({ ...current, attentionPaused })),
     []
   );
   useEffect(() => {
@@ -106,8 +115,8 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   }, [preferences, viewport]);
   const t = useCallback((text: string) => translate(preferences.locale, text), [preferences.locale]);
   const value = useMemo(
-    () => ({ ...preferences, setLocale, setZoom, t }),
-    [preferences, setLocale, setZoom, t]
+    () => ({ ...preferences, setLocale, setZoom, setAttentionPaused, t }),
+    [preferences, setLocale, setZoom, setAttentionPaused, t]
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
