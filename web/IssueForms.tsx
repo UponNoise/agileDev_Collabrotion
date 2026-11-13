@@ -700,7 +700,7 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
         {rejecting ? <section aria-labelledby="rejection-heading">
           <h3 id="rejection-heading">{t('Classify requested rework')}</h3>
           <Field label={t('Rejection classification')}>
-            <select ref={classificationInput} required value={classification} onChange={event => setClassification(event.target.value as typeof classification)}>
+            <select ref={classificationInput} aria-label={t('Rejection classification')} required value={classification} onChange={event => setClassification(event.target.value as typeof classification)}>
               <option value="" disabled>{t('Choose a classification')}</option>
               <option value="DEFECT">{t('Defect in this delivery')}</option>
               <option value="SCOPE_CHANGE">{t('Requirement scope change')}</option>
@@ -711,7 +711,7 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
             <p className="muted">{t('Record 1 to 20 defects observed on this exact delivery. Affected criteria are optional; select only criteria listed on this issue.')}</p>
             {findings.map((finding, index) => <fieldset className="rejection-finding" key={finding.id}>
               <legend>{t('Defect {number}').replace('{number}', String(index + 1))}</legend>
-              <Field label={t('Severity')}><select required value={finding.severity} onChange={event => updateFinding(finding.id, { severity: event.target.value as RejectionFinding['severity'] })}>
+              <Field label={t('Severity')}><select aria-label={t('Severity')} required value={finding.severity} onChange={event => updateFinding(finding.id, { severity: event.target.value as RejectionFinding['severity'] })}>
                 <option value="" disabled>{t('Choose a severity')}</option>
                 {findingSeverities.map(severity => <option value={severity} key={severity}>{t(severity)}</option>)}
               </select></Field>
