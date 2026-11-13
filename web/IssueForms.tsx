@@ -843,7 +843,7 @@ function DeliveryEvidence({ packet }: { packet: IssueData }) {
       {packet.closureBlocked.length ? (
         <>
           <h3>{t('Closure checks')}</h3>
-          <ul>
+          <ul className="delivery-blockers">
             {packet.closureBlocked.map((code) => (
               <li key={code}>{code}</li>
             ))}
