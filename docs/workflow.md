@@ -295,3 +295,35 @@ Accepted revision R1 (D12) makes iterations planning records, not issues. Each h
 Human, lead, and PM create, edit, start, and close iterations. Every membership mutation, including `plan_apply`/`issue_update` entry points, increments the affected source/destination iteration's `membershipRevision` and updates a canonical hash of the complete sorted member ID set. Close binds the iteration version, full membership revision/hash, all member issue versions, and every unfinished disposition; carry-over also binds each destination iteration version and complete membership revision/hash. Validate and update all touched sets/issues atomically: add/remove, transfer, or member-state races fail the whole command without partial carry-over. Legacy-label adoption binds and rechecks the complete eligible issue ID/version set, including newly eligible additions, and the destination set; it never adopts an unseen match. Nothing rolls over on a timer.
 
 Closing seals immutable historical membership and an event-derived summary. Finished members have no live iteration membership; unfinished members move only by their explicit carry-over/backlog disposition. A later authorized reopen of a former closed-iteration member starts in the current backlog, preserving the closed membership/summary and approval history; it never reactivates or rewrites the closed iteration. Existing labels remain read-only until explicit adoption. Iteration dates, forecasts, membership, and close affect planning metadata only, not artifact approval, grants, capacity, or issue lifecycle. An active overdue iteration yields advisory `ITERATION_OVERDUE`.
+
+## 12. Revision R2: decision presentation, agent messages, and consult sessions
+
+Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D17–D24; not implemented. Rationale and details are in [revision R2](proposals/r2-surfaces-coordination-scope.md). Until accepted, sections 1–11 remain the governing rules.
+
+### Human decisions
+
+Presentation changes no gate. A decision card submits the same design ID and hash, candidate ID and digest, and issue version that the commands require today. A stale target is presented again; a client never resubmits a decision for content the person has not seen. A reason stays required to request changes, request rework, abandon, change scope, and reconcile execution, and becomes optional for `APPROVED` and `ACCEPT`. A person's rejection is one free-text reason; structured findings are optional. A delivery card lists open MINOR findings, and accepting it records those findings with the acceptance of that digest. Separate MINOR waivers, versioned defect sets and explicit per-defect QA verification are deferred until after P5. Batch delivery acceptance is withdrawn.
+
+### Agent messages
+
+A message is an immutable record in an issue's thread. It has a sender taken from the credential, a recipient (a role on that issue, a named actor, or the owner), a kind (`QUESTION`, `REPLY`, `NOTE`), a bounded body, and an optional `replyTo`. Both parties must already have scope on the issue.
+
+- A message is information and never authority. No message approves, accepts, reviews, waives, completes, assigns or changes scope, whoever sends it, the owner included. No command accepts a message as evidence of a human decision or a QA result.
+- The worker and the QA reviewer of the same issue cannot message each other in either direction. Messages that a QA run exchanges with lead or PM are listed in that run's report evidence.
+- Lead and PM may address a question to the owner. The inbox derives one entry from the unanswered message, and the owner's reply is a message. Workers and QA ask lead or PM.
+- A recipient treats message content as untrusted peer input within its own role and the approved scope.
+
+### Consult runs
+
+When a question requests it and the workspace allows it, the coordinator starts one bounded consult run for the recipient in the recipient's harness. Its run-scoped credential is limited to read operations and `message_send`. It cannot submit work, reviews or QA reports, and it changes no issue state. A final text answer without the tool call is not a reply.
+
+| Rule | Default |
+| --- | --- |
+| Workspace switch | Off until the owner turns it on |
+| Wakes per issue per day | 3 |
+| Consult run time limit | 10 minutes |
+| Concurrency | Counts toward the active-run cap |
+| Nesting | A consult run cannot wake; replies never wake |
+| Failure | An unavailable harness, failed authentication or exhausted budget stores the message and reports the reason; no retry |
+
+Wake modes `fresh`, `resume` and `queue` are capability-reported for each harness and offered only after verification. Rework and re-test prompts carry the previous rejection and its findings.
