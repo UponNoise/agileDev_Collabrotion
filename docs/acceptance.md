@@ -84,3 +84,32 @@ Each phase's evidence summary must include scenario ID, status (`PASS`, `FAIL`, 
 Sanitize credentials, private paths, account data, and transcripts before public publication. Keep sensitive originals local with content hashes where needed. Do not replace actual output with a description of what should have happened.
 
 P0 completion report distinguishes document validation from runtime testing. P1 records capability probes. P2 uses real database/transaction behavior. P3 tests actual browser/human interactions and MCP contracts. P4/P5 require real runner evidence at exact delivery snapshots. Mock-provider tests are useful for failures but do not prove host integration.
+
+## 4. Revision R2 scenarios
+
+Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D17–D24; not tests already run. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md). Until accepted, section 1 is unchanged.
+
+| ID | Given / action | Expected observable result |
+| --- | --- | --- |
+| AC42 | With one pending design review and one pending delivery acceptance whose QA report has a MINOR finding: approve the design and accept the delivery from Decisions without typing; request rework with and without a reason; change the design and the candidate while their cards are open; open Audit details; repeat by keyboard at 1280×720 in both languages | Each positive decision takes at most two interactions after opening Decisions and binds the same design hash or delivery digest as today. The card shows the rendered design, per-criterion QA results, findings and a file preview. No hash, UUID, version or raw code is visible outside Audit details. A missing reason blocks only negative decisions. A changed target is presented again and never resubmitted. The acceptance record lists the MINOR finding |
+| AC43 | List tools with a worker, QA, PM and lead credential in all three hosts; call an operation outside the profile; read briefs for a blocked task, a ready parent and a rejected task; read a design and its decision reason; start rework and re-test runs after lead, QA and user rejection | Each listing equals the role profile and contains no human-only operation. An out-of-profile call fails with the role error before any precondition error. Every operation and property has a description. Briefs stay within NF05 and give a status sentence, blockers with remedies, and next actions with exact arguments or the waiting party. Design content and decision reasons are readable in scope. Rework and re-test prompts contain the prior rejection and findings |
+| AC44 | With wake off, then on: a lead in one harness asks the assigned worker's role in another and waits; repeat with the harness unavailable, with the budget exhausted, and from inside a consult run; let the worker and QA of one candidate message each other; send messages that claim approval, acceptance and a QA pass; ask the owner; replay a send; address another workspace | Messages are stored with the verified sender. With wake on, one bounded consult run answers through the tool and the asker receives the reply with no person relaying. With wake off, unavailable, over budget or nested, the message is stored and the reason reported, with no retry and no extra run. Worker–QA messages are rejected. No message changes lifecycle, approval, review, scope or grants. The QA report lists the messages exchanged during its run. The owner's question appears as one inbox card and the reply reaches the asker. Replays are idempotent; cross-workspace sends fail |
+
+If R2 is accepted, these section 1 scenarios change:
+
+| ID | Change |
+| --- | --- |
+| AC11 | The worker–QA wall covers messages |
+| AC12 | A person's rejection needs one reason; rework prompts carry it |
+| AC14 | No batch acceptance; messages confer no authority |
+| AC17, AC25 | Consult runs are bounded and count toward the active-run cap |
+| AC19 | Findings reach rework and re-test prompts; versioned sets and explicit per-defect verification are deferred |
+| AC26 | Three destinations |
+| AC27 | 1280×720 only |
+| AC28 | Role-profile listings; design content by expansion |
+| AC36 | Message content is untrusted input; no operating-system notifications |
+| AC37 | 1,000 issues and 10,000 events for the MVP |
+| AC38 | Portable package only |
+| AC39 | No batch or operating-system notification scenarios; adds the owner-question card |
+| AC40 | Merged service behavior only; no web, chart or export scenarios |
+| AC41 | Register and free-text rejection only |

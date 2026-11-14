@@ -72,6 +72,9 @@ Priority `M` means mandatory for the P5 MVP; `L` means later. Acceptance IDs ref
 | FR26 | L | Shared server, multiple human accounts, workspace membership, remote runners, and remote notification channels such as chat, email, or webhooks; local desktop signals belong to FR27 | Separate P6 spec |
 | FR27 | M | Derive the human inbox from exact authoritative targets with first-unresolved ages and accepted-ready completion actions; provide complete readable evidence and exact target/defect-set-bound batch acceptance; local signals never decide unseen/changed items | AC14, AC22, AC39 |
 | FR28 | M | Track QA/user/escaped defects with human triage of agent proposals, complete versioned QA/decision defect sets, explicit independent verification, and human MINOR waivers bound to the artifact digest and resulting defect evidence | AC19, AC20, AC41 |
+| FR29 | M | Proposed by R2: present each human decision on one card with the content it needs, in plain language, with exact identifiers under audit details; require a reason only for negative decisions; keep exact revision and digest binding | AC42, AC14, AC39 |
+| FR30 | M | Proposed by R2: advertise tools by role, describe every operation and property, return briefs with remedies and exact next-action arguments, and make designs, decision reasons and prior rejections readable to the agents that need them | AC43, AC28 |
+| FR31 | M | Proposed by R2: let agents exchange issue-scoped messages and, where the owner allows it, start bounded consult sessions in another harness; messages carry no authority and never cross the worker–QA independence wall | AC44, AC11, AC14 |
 
 ## 5. User journeys
 
@@ -139,6 +142,8 @@ Service ownership correction, 2026-11-09: persistent startup belongs to the desk
 
 Accepted scope revision R1, 2026-11-09: the user accepted [revision R1](proposals/r1-inbox-iterations-defects.md) with every proposed default. FR27 and FR28 become mandatory, and FR15, FR22, and FR26 are refined as shown above. Local desktop attention signals are in MVP scope; operating-system notifications are capability-reported, and remote notification channels remain FR26. Git or CI events and automation may record facts, trigger verification, or send reminders, but never advance a gate. This revision does not approve any requirement or delivery managed inside the application.
 
+Proposed scope revision R2, 2026-11-14: at the user's request, [revision R2](proposals/r2-surfaces-coordination-scope.md) separates the human and agent surfaces (FR29, FR30), adds issue-scoped agent messages and bounded cross-harness consult sessions (FR31), and narrows the MVP by withdrawing or deferring unbuilt R1 items and reducing P5 acceptance scope. Its defaults D17–D24 await the user's confirmation. Until then FR29–FR31 and the narrowing of FR15, FR27, FR28, NF01 and NF06 are proposals, not requirements, and nothing in R2 is implemented. R2 relaxes no gate: human decisions stay human-only and exactly bound, independent QA is unchanged, and agent messages carry no authority.
+
 The MVP includes real dispatch and independent QA, not only a board. Desktop packaging, common MCP access, and browser fallback must be proven in P1/P5. Optional native harness packages and embedded surfaces require their own evidence before being claimed as supported.
 
 The MVP does not include replacing coding harnesses, arbitrary shell execution from ticket text, cloud tenant operation, billing, SSO, organization management, full Scrum compliance, chat/email integrations, autonomous release deployment, or automatic Git merges. Git integration records and verifies evidence; merge/release authorization remains with the user's development workflow.
@@ -174,6 +179,19 @@ Revision R1 decisions, accepted by the user on 2026-11-09 with every proposed de
 | D16 | Any agent may propose a defect on an issue it can already read; a human triages | A proposal never becomes a confirmed defect without a human decision |
 
 R1 safety clarifications preserve D11–D16: Git/CI/verifier observations change facts/readiness only, while existing explicit scoped commands retain their authorization. Accepted pending work needs explicit completion without a fabricated second approval. Complete membership/defect-set snapshots are concurrency preconditions, not new approval roles or rewritten artifact digests. Closed history and unchanged pre-R1 evidence keep their original identities; affected fresh rounds/current decisions use the clarified contract.
+
+Revision R2 decisions, proposed on 2026-11-14 at the user's request and awaiting the user's confirmation. They are recommendations, not decisions already made. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md).
+
+| ID | Proposed default | Effect |
+| --- | --- | --- |
+| D17 | One-card human decisions in plain language (H1–H9) are mandatory for P5; a reason is optional when approving a design or accepting a delivery; web changes follow prototype round 3 | Adds FR29; amends FR27 |
+| D18 | Role-scoped, fully described agent tools and briefs with remedies (G1–G7) are mandatory for P5; the NF05 brief budget stays | Adds FR30 |
+| D19 | Agent messages and `fresh` consult runs (C1–C9) are mandatory for P5; wake is off per workspace until the owner enables it; lead and PM may ask the owner through one inbox card; `resume` and `queue` follow a spike | Adds FR31 |
+| D20 | Withdraw batch delivery acceptance and operating-system notifications; remove the aging threshold from the UI | Narrows FR27; supersedes D14 and the batch part of D11 |
+| D21 | Freeze the merged iteration service; defer iteration web views, charts, export and adoption UI until after P5 | Narrows FR15 for the MVP; D12 stays |
+| D22 | Keep the defect register slice if its review passes; a person rejects with one reason; defer versioned defect sets, explicit per-defect QA verification and MINOR waivers until after P5 | Narrows FR28; supersedes D15 for the MVP; D16 stays |
+| D23 | Narrow P5 acceptance to 1280×720, 1,000 issues and 10,000 events, the portable package, and artifact or single-repository closure without reparenting | Amends NF01, NF06, AC27, AC37, AC38 |
+| D24 | One status page, one generated agent reference, dated evidence archived unchanged | Documentation only |
 
 ## 10. Definition of ready and done
 

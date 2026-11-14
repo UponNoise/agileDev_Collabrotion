@@ -227,3 +227,30 @@ In native mode, the current lead/PM uses the host's verified delegation bridge a
 If a host cannot safely propagate credentials or manage subagents, it may use the common issue tools in a disclosed tool-only mode. That is useful interim access, but does not satisfy P5 automatic multi-agent acceptance. Explicit user-approved scope changes are required before downgrading a mandatory target.
 
 Limited delegation depth does not force PM → worker nesting inside the host. PM can write dispatch intents and a root coordinator can create sibling worker/QA sessions. Record the logical PM assignment separately from provider parent-child relationships.
+
+## 10. Revision R2: role profiles, briefs, and messages
+
+Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D17–D24; not implemented. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md).
+
+`tools/list` for a credential contains only its role's profile: operations the service can authorize for that role, and no human-only operation. The service still enforces every permission. One shared definition feeds the listing, the authorization tests and the generated reference.
+
+| Role | Initial profile |
+| --- | --- |
+| Worker | `issue_get`, `design_get`, `work_heartbeat`, `work_submit`, `integration_get`, `artifact_read`, `evidence_get`, message tools |
+| QA | `issue_get`, `design_get`, `check_profile_list`, `qa_check_run`, `qa_check_get`, `qa_report_submit`, `integration_get`, `artifact_read`, `evidence_get`, message tools |
+| PM | Planning, dependency, assignment, QA configuration, dispatch, run, iteration, Git evidence, completion and read operations; message tools |
+| Lead | The PM profile plus `design_set`, `design_submit`, `review_submit` |
+| Consult run | Read operations of the recipient's role plus `message_send` |
+
+Every operation states its purpose, preconditions, effect and common rejections. Every input property states what it is and where its value comes from. The MCP `instructions` are the role's playbook.
+
+| Tool or field | Purpose / main inputs | Role and constraints |
+| --- | --- | --- |
+| `issue_get` additions | `status`, `blockers[{code, message, subjects, remedy}]`, `nextActions[{operation, args}]` or `waitingOn`, `design{id, status, hash, bytes, decision}`, `lastRejection`, `messages{total, awaitingYourReply}` | Within the NF05 budget; `nextActions` entries become objects |
+| `design_get` | Issue; returns design content, criteria, requirement scope, status, and decision history with reasons | Read within the caller's issue scope; workers and QA for their own issue and its parent |
+| `evidence_get` additions | Design-decision and delivery-decision records | Same scope as today |
+| `message_send` | Issue, recipient (role, actor or owner), kind, body, optional `replyTo`, optional wake request, idempotency key | Any agent with scope on the issue; a worker–QA pair on one issue is rejected; returns the delivery state |
+| `message_list` | Issue, cursor, page size | Read within scope; no read receipts |
+| `message_wait` | Issue or message, cursor, timeout of at most 50 seconds | Bounded long-poll for replies to the caller |
+
+Rejections return `{code, message, details, remedy}`. Authorization is checked before preconditions. Messages carry no authority. An agent cannot create, dismiss or resolve an inbox entry; the only entry a message produces is the owner-question entry derived from an unanswered message to the owner.

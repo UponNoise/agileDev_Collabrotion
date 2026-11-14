@@ -130,3 +130,23 @@ Planning artifacts were checked on 2026-11-04: local Markdown targets resolve, c
 The review also resolved parent aggregation versus execution ownership, scope acknowledgement before claim, same-execution lead self-review, approval invalidation after child-plan changes, and explicit embedded-UI fallback decisions.
 
 These checks validate document structure and planned coverage. They do not prove runtime behavior, harness compatibility, security isolation, performance, or QA correctness. No application tests, agent executions, plugin installs, or changes to the user's harness configurations occurred in P0. Product design acceptance remains pending; the public repository is a planning deliverable.
+
+## 10. Revision R2 plan
+
+Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D17–D24. Nothing here starts before that decision. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md).
+
+| ID | Proposed parent / task title | Role | Depends on | Primary acceptance |
+| --- | --- | --- | --- | --- |
+| B23 | Agent surface——[Feature] MCP: scope tools by role and describe every field -> agents act without guessing | Integration worker | R2 acceptance | AC43/28 |
+| B24 | Agent surface——[Feature] Briefs: return remedies, designs and rejection context -> rework starts informed | Domain worker | B23 | AC43/12/19 |
+| B25 | Agent coordination——[Feature] Messages: store issue threads and bounded waits -> agents ask without a relay | Backend worker | B23 | AC44 |
+| B26 | Agent coordination——[Feature] Wake: start bounded consult runs -> cross-harness answers within budget | Runner worker | B25, wake spike | AC44/17/25 |
+| B27 | Human surface——[Feature] Decisions: decide on one card in plain language -> positive decisions in two steps | Frontend worker | Prototype round 3, B24 | AC42/39 |
+| B28 | Human surface——[Feature] Workspace: three destinations and audit details -> no internal codes by default | Frontend worker | B27 | AC42/26/27 |
+| B29 | Documentation——[Docs] Baseline: one status page and a generated agent reference -> current behavior stated once | Integration worker | B23 | None |
+
+Order: B23, B24, then B25 and B26 in the service; prototype round 3 in parallel, then B27 and B28; B29 last. The wake spike reads CLI help and vendor documentation only. Any real model run needs the user's approval first.
+
+If R2 is accepted, the remaining R1 work narrows: B19 drops batch acceptance, B20 keeps the merged service and drops web views, charts, export and adoption UI, B21 keeps the register slice and drops versioned defect sets, explicit per-defect verification and MINOR waivers, and B22 drops operating-system notifications. B18 exercises AC01–AC44 as amended.
+
+Ownership is agreed before work starts. `workflow.ts`, `contracts.ts` and `mcp.ts` keep one integrator at a time; the defect register slice holds that lease until PR #13 merges or is parked. One web owner takes B27 and B28. While D17–D24 are undecided, R2 recommends not starting versioned defect sets, MINOR waivers, batch acceptance, operating-system notifications or iteration web views.
