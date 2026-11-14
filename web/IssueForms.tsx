@@ -1,6 +1,6 @@
 import { useDateText } from './Preferences';
 import { useText } from './Preferences';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Grant, Issue } from '../src/contracts';
 import { ApiError, command, errorText, formKey, harnessName, lines, mutation } from './api';
 import type { IssueData, WorkspaceData } from './api';
@@ -425,59 +425,7 @@ export function IssueForm({
       </Modal>
     );
   if (dialog.kind === 'delivery')
-    return (
-      <Modal title={t('Review delivery')} subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
-        <AsyncForm
-          onDone={done}
-          onSave={(data) =>
-            mutation('delivery_decide', {
-              ...base,
-              ...formKey(data),
-              candidateId: issue.candidate!.id,
-              digest: packet.deliveryDigest,
-              decision: String(data.get('decision')),
-              reason: String(data.get('reason'))
-            })
-          }
-        >
-          <div className="form-body">
-            <p className="notice">
-              {t(
-                'Your decision applies only to this reviewed snapshot. Acceptance is saved if closure is still blocked.'
-              )}
-            </p>
-            <DeliveryEvidence packet={packet} />
-            <Field label={t('Decision reason')}>
-              <textarea
-                name="reason"
-                required
-                rows={4}
-                placeholder={t('Explain your acceptance or requested changes')}
-              />
-            </Field>
-          </div>
-          <footer className="form-footer">
-            <button type="button" onClick={onClose}>
-              {t('Cancel')}
-            </button>
-            <span className="footer-actions">
-              <button type="submit" name="decision" value="REJECT">
-                {t('Request rework')}
-              </button>
-              <button
-                type="submit"
-                className="primary"
-                name="decision"
-                value="ACCEPT"
-                disabled={!packet.deliveryDigest}
-              >
-                {t('Accept delivery')}
-              </button>
-            </span>
-          </footer>
-        </AsyncForm>
-      </Modal>
-    );
+    return <DeliveryReview packet={packet} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'assignment')
     return (
       <Modal title={t('Assign worker')} subtitle={issue.key} onClose={onClose}>
@@ -706,6 +654,94 @@ export function IssueForm({
   return null;
 }
 
+const rejectionClasses = ['DEFECT', 'SCOPE_CHANGE', 'CLARIFICATION'] as const;
+const findingSeverities = ['BLOCKER', 'MAJOR', 'MINOR', 'INFO'] as const;
+interface RejectionFinding {
+  id: string;
+  severity: typeof findingSeverities[number] | '';
+  criterionIds: string[];
+  reproduce: string;
+  expected: string;
+  actual: string;
+}
+const emptyFinding = (): RejectionFinding => ({ id: crypto.randomUUID(), severity: '', criterionIds: [], reproduce: '', expected: '', actual: '' });
+
+function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClose(): void; onSaved(): void }) {
+  const t = useText();
+  const issue = packet.issue;
+  const [rejecting, setRejecting] = useState(false);
+  const [classification, setClassification] = useState<typeof rejectionClasses[number] | ''>('');
+  const [findings, setFindings] = useState<RejectionFinding[]>(() => [emptyFinding()]);
+  const [reason, setReason] = useState('');
+  const classificationInput = useRef<HTMLSelectElement>(null);
+  const acceptButton = useRef<HTMLButtonElement>(null);
+  const wasRejecting = useRef(false);
+  useEffect(() => {
+    if (rejecting) classificationInput.current?.focus();
+    else if (wasRejecting.current) acceptButton.current?.focus();
+    wasRejecting.current = rejecting;
+  }, [rejecting]);
+  const updateFinding = (id: string, change: Partial<RejectionFinding>) => setFindings(previous => previous.map(finding => finding.id === id ? { ...finding, ...change } : finding));
+  return <Modal title={t('Review delivery')} subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
+    <AsyncForm onDone={() => { onSaved(); onClose(); }} onSave={data => {
+      const decision = String(data.get('decision'));
+      const base = { workspaceId: issue.workspaceId, issueId: issue.id, expectedVersion: issue.version, ...formKey(data), candidateId: issue.candidate?.id, digest: packet.deliveryDigest, decision, reason: String(data.get('reason')) };
+      if (decision === 'ACCEPT') return mutation('delivery_decide', base);
+      if (decision !== 'REJECT' || !classification || !rejectionClasses.includes(classification)) throw new ApiError('REJECTION_CLASS_REQUIRED', 'Choose a rejection classification explicitly.', 400);
+      if (classification !== 'DEFECT') return mutation('delivery_decide', { ...base, classification });
+      if (findings.length < 1 || findings.length > 20 || findings.some(finding => !finding.severity || !findingSeverities.includes(finding.severity) || !finding.reproduce.trim() || !finding.expected.trim() || !finding.actual.trim())) throw new ApiError('DEFECT_INPUT_REQUIRED', 'Provide 1 to 20 defects with severity, reproduction, expected and actual behavior.', 400);
+      if (findings.some(finding => finding.criterionIds.some(id => !issue.criteria.includes(id)))) throw new ApiError('CRITERIA_UNMAPPED', 'Select only criteria from this issue.', 400);
+      return mutation('delivery_decide', { ...base, classification, findings: findings.map(({ severity, criterionIds, reproduce, expected, actual }) => ({ severity, criterionIds, reproduce: reproduce.trim(), expected: expected.trim(), actual: actual.trim() })) });
+    }}>
+      <div className="form-body">
+        <p className="notice">{t('Your decision applies only to this reviewed snapshot. Acceptance is saved if closure is still blocked.')}</p>
+        <DeliveryEvidence packet={packet} />
+        <Field label={t('Decision reason')}><textarea name="reason" aria-label={t('Decision reason')} required rows={4} value={reason} onChange={event => setReason(event.target.value)} placeholder={t('Explain your acceptance or requested changes')} /></Field>
+        {rejecting ? <section aria-labelledby="rejection-heading">
+          <h3 id="rejection-heading">{t('Classify requested rework')}</h3>
+          <Field label={t('Rejection classification')}>
+            <select ref={classificationInput} aria-label={t('Rejection classification')} required value={classification} onChange={event => setClassification(event.target.value as typeof classification)}>
+              <option value="" disabled>{t('Choose a classification')}</option>
+              <option value="DEFECT">{t('Defect in this delivery')}</option>
+              <option value="SCOPE_CHANGE">{t('Requirement scope change')}</option>
+              <option value="CLARIFICATION">{t('Clarification or feedback')}</option>
+            </select>
+          </Field>
+          {classification === 'SCOPE_CHANGE' ? <p className="notice">{t('Rework will require a different current design approved after this rejection. This does not create or approve a design.')}</p> : classification === 'CLARIFICATION' ? <p className="muted">{t('This records actionable feedback without creating a defect or requiring a new design approval.')}</p> : classification === 'DEFECT' ? <>
+            <p className="muted">{t('Record 1 to 20 defects observed on this exact delivery. Affected criteria are optional; select only criteria listed on this issue.')}</p>
+            {findings.map((finding, index) => <fieldset className="rejection-finding" key={finding.id}>
+              <legend>{t('Defect {number}').replace('{number}', String(index + 1))}</legend>
+              <Field label={t('Severity')}><select aria-label={t('Severity')} required value={finding.severity} onChange={event => updateFinding(finding.id, { severity: event.target.value as RejectionFinding['severity'] })}>
+                <option value="" disabled>{t('Choose a severity')}</option>
+                {findingSeverities.map(severity => <option value={severity} key={severity}>{t(severity)}</option>)}
+              </select></Field>
+              <fieldset><legend>{t('Affected criteria (optional)')}</legend>
+                {issue.criteria.map(id => <label className="check-row" key={id}><input type="checkbox" checked={finding.criterionIds.includes(id)} onChange={event => updateFinding(finding.id, { criterionIds: event.target.checked ? [...finding.criterionIds, id] : finding.criterionIds.filter(value => value !== id) })} /><span>{id}</span></label>)}
+              </fieldset>
+              <Field label={t('Reproduction steps')}><textarea aria-label={t('Reproduction steps')} required maxLength={65536} rows={3} value={finding.reproduce} onChange={event => updateFinding(finding.id, { reproduce: event.target.value })} /></Field>
+              <Field label={t('Expected behavior')}><textarea aria-label={t('Expected behavior')} required maxLength={65536} rows={3} value={finding.expected} onChange={event => updateFinding(finding.id, { expected: event.target.value })} /></Field>
+              <Field label={t('Actual behavior')}><textarea aria-label={t('Actual behavior')} required maxLength={65536} rows={3} value={finding.actual} onChange={event => updateFinding(finding.id, { actual: event.target.value })} /></Field>
+              <button type="button" disabled={findings.length === 1} aria-label={t('Remove defect {number}').replace('{number}', String(index + 1))} onClick={() => setFindings(previous => previous.filter(value => value.id !== finding.id))}>{t('Remove defect')}</button>
+            </fieldset>)}
+            <button type="button" disabled={findings.length >= 20} onClick={() => setFindings(previous => [...previous, emptyFinding()])}>{t('Add defect')}</button>
+          </> : null}
+          <p className="muted">{t('If a response is lost, retry this unchanged form for the same reviewed delivery. Changed evidence must be reviewed separately.')}</p>
+        </section> : null}
+      </div>
+      <footer className="form-footer">
+        <button type="button" onClick={onClose}>{t('Cancel')}</button>
+        <span className="footer-actions">{rejecting ? <>
+          <button type="button" onClick={() => setRejecting(false)}>{t('Back to acceptance')}</button>
+          <button type="submit" name="decision" value="REJECT" disabled={!packet.deliveryDigest}>{t('Confirm rejection')}</button>
+        </> : <>
+          <button type="button" onClick={() => setRejecting(true)}>{t('Request rework')}</button>
+          <button ref={acceptButton} type="submit" className="primary" name="decision" value="ACCEPT" disabled={!packet.deliveryDigest}>{t('Accept delivery')}</button>
+        </>}</span>
+      </footer>
+    </AsyncForm>
+  </Modal>;
+}
+
 function DeliveryEvidence({ packet }: { packet: IssueData }) {
   const t = useText();
   const issue = packet.issue;
@@ -807,7 +843,7 @@ function DeliveryEvidence({ packet }: { packet: IssueData }) {
       {packet.closureBlocked.length ? (
         <>
           <h3>{t('Closure checks')}</h3>
-          <ul>
+          <ul className="delivery-blockers">
             {packet.closureBlocked.map((code) => (
               <li key={code}>{code}</li>
             ))}

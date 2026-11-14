@@ -1,3 +1,4 @@
+import { defectCoreSchemas, defectFindingSchema } from './defect-contracts.js';
 import { iterationSchemas, iterationMembershipPreconditionSchema } from './iteration-contracts.js';
 import { z } from 'zod';
 
@@ -65,8 +66,20 @@ const estimate = z.object({ value: z.number().positive().max(100000), unit: z.en
 const schedule = { priority: z.number().int().min(0).max(4).optional(),plannedStart: z.iso.date().nullable().optional(),dueDate: z.iso.date().nullable().optional(),estimate: estimate.optional(),iterationId: id.nullable().optional() };
 const retiredIterationError = { error: (issue: z.core.$ZodRawIssue) => issue.code === 'unrecognized_keys' && (issue.keys as string[]).some(key => ['iteration','legacyIterationLabel'].includes(key)) ? 'Use iterationId; legacyIterationLabel is read-only' : undefined };
 const planTask = z.object({ ref: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,49}$/),issueId: id.optional(),expectedVersion: z.number().int().positive().optional(),title: z.string().min(1).max(300),description: z.string().max(65536).optional(),criteria: z.array(id).max(100).optional(),dependencies: z.array(z.union([z.object({ ref: id }).strict(),z.object({ issueId: id }).strict()])).max(100).optional(),assigneeId: id.nullable().optional(),harness: z.enum(harnesses).nullable().optional(),...schedule },retiredIterationError).strict();
+const delivery = { ...change, candidateId: id, digest: id, reason: text };
+const deliveryDecisionSchema = z.union([
+  z.object({ ...delivery, decision: z.literal('ACCEPT') }).strict(),
+  z.object({ ...delivery, decision: z.literal('REJECT'), classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).min(1).max(20) }).strict(),
+  z.object({ ...delivery, decision: z.literal('REJECT'), classification: z.enum(['SCOPE_CHANGE','CLARIFICATION']) }).strict()
+]);
 export const schemas = {
   ...iterationSchemas,
+  defect_propose: defectCoreSchemas.propose.extend(mutation),
+  defect_report: defectCoreSchemas.report.extend(mutation),
+  defect_triage: defectCoreSchemas.triage.extend(mutation),
+  defect_withdraw: defectCoreSchemas.withdraw.extend(mutation),
+  defect_list: defectCoreSchemas.list,
+  defect_get: defectCoreSchemas.get,
   workspace_register: z.object({ ...mutation, root: text, name: z.string().min(1).max(120), prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/) }).strict(),
   workspace_list: z.object({}).strict(),
   inbox_list: z.object({ workspaceId: id.optional(),kind: z.enum(inboxKinds).optional(),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
@@ -115,7 +128,7 @@ export const schemas = {
   qa_check_get: z.object({ ...scoped, checkId: id }).strict(),
   qa_report_submit: z.object({ ...change, candidateId: id, verdict: z.enum(['PASS','FAIL','BLOCKED']), summary: text, results: z.array(z.object({ criterionId: id, result: z.enum(['PASS','FAIL','BLOCKED','NOT_RUN']), evidenceIds: z.array(id).max(100), reason: text }).strict()).min(1).max(100), findings: z.array(z.object({ criterionId: id, severity: z.enum(['BLOCKER','MAJOR','MINOR','INFO']), expected: text, actual: text, reproduce: text }).strict()).max(100).default([]) }).strict(),
   evidence_get: z.object({ ...target, kind: z.enum(['snapshot','qa_report','review','git_submission','git_attempt','git_binding','defect','scope_decision']), evidenceId: id }).strict(),
-  delivery_decide: z.object({ ...change, candidateId: id, digest: id, decision: z.enum(['ACCEPT','REJECT']), reason: text }).strict(),
+  delivery_decide: deliveryDecisionSchema,
   git_submit: z.object({ ...change, candidateId: id, commitUrl: z.string().min(1).max(1000), additionalCommits: z.array(z.object({ repository: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/), commitUrl: z.string().min(1).max(1000) }).strict()).max(20).default([]) }).strict(),
   git_retry: z.object({ ...change, submissionId: id }).strict(),
   delivery_complete: z.object({ ...change, grantId: id.optional() }).strict(),
@@ -123,4 +136,4 @@ export const schemas = {
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile','inbox_list','inbox_settings_get','inbox_settings_update'].includes(k)) as Operation[];
+export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile','inbox_list','inbox_settings_get','inbox_settings_update','defect_report','defect_triage','defect_withdraw'].includes(k)) as Operation[];
