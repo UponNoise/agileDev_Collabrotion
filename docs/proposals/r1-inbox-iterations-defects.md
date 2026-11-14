@@ -140,7 +140,7 @@ Work packets add the iteration name, end date, and a goal excerpt within the NF0
 
 ### C1. Record and states
 
-Each defect has:
+Each confirmed defect has:
 
 - an ID and a workspace-local key from its own sequence, such as `ADC-D0001`;
 - its workspace and affected issue;
@@ -155,6 +155,7 @@ Each defect has:
 | State | Meaning | Entered by |
 | --- | --- | --- |
 | `PROPOSED` | Agent report awaiting human triage | `defect_propose` |
+| `CONVERTED` | Pending problem converted into a linked requirement draft; not a confirmed or QA-resolved defect | Human triage |
 | `OPEN` | Confirmed and unresolved | QA report, user rejection, human report, or triage acceptance |
 | `RESOLVED` | Verified fixed by an independent QA report | A QA `PASS` report naming the defect `FIXED` |
 | `WAIVED` | MINOR residual risk accepted for one delivery digest | Human waiver |
@@ -162,6 +163,10 @@ Each defect has:
 | `WITHDRAWN` | Human-reported defect retracted | Human, with a reason; `USER_ACCEPTANCE` and `ESCAPED` origins only |
 
 `INFO` defects never block. Existing records migrate with origin `QA`, keys in creation order, and unchanged state and resolution references. Historical closures are not rewritten.
+
+User clarification, 2026-11-11: D16 retains reporting on any readable issue, including an unstarted issue without an artifact. Such reports are pending problem proposals, not confirmed escaped, QA, or user-acceptance defects. Every agent proposal starts `PROPOSED` with `origin: null`; it records its actual issue version, scope revision, and design reference. A real sealed snapshot or historical delivery is referenced only when available; otherwise the observation is explicitly `ISSUE_SCOPE` with null snapshot/digest. Proposals, rejected proposals, and converted proposals have no blocking authority and do not enter confirmed defect sets.
+
+A human may reject the proposal or convert it to a linked `NOT_STARTED` requirement (`CONVERTED`), preserving the original observation and inventing no design approval or QA resolution. Confirmation requires current expected issue/defect versions and a valid immutable observation in an actual source context: `USER_ACCEPTANCE` for the current reviewed delivery or `ESCAPED` for a recorded closed delivery. QA origin is assigned only by a real QA report. Human confirmation preserves the initial proposal and records its new confirmation observation/source; it never backfills a digest as if the agent originally observed it. An unsealed or otherwise non-confirmable problem remains proposed or is converted. Existing closed-escaped `REOPEN`/`DEFER` rules still apply; an unstarted issue is not reopened by triage.
 
 ### C2. Origins
 

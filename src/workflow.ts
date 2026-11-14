@@ -1,3 +1,4 @@
+import { DefectRegistry } from './defects.js';
 import { IterationService, iterationIssueView, rejectLegacyIterationWrite } from './iterations.js';
 import { isIterationOperation, iterationReadOperations } from './iteration-contracts.js';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ import { currentPlan, isAggregate, planChildren, planCoverage, planScope, valida
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
 import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSettings } from './inbox.js';
 
-const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get']);
+const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -23,7 +24,9 @@ function version(issue: Issue, expected: number) {
   if (issue.version !== expected) throw new DomainError('VERSION_CONFLICT', 'Issue changed; reload before retrying', 409, { currentVersion: issue.version });
 }
 export class Workflow {
-  constructor(readonly store: Store, readonly now = () => Date.now()) {}
+  constructor(readonly store: Store, readonly now = () => Date.now()) {
+    store.db.transaction(() => store.list<Workspace>('workspace').forEach(workspace => this.defects().migrate(workspace.id))).immediate();
+  }
   execute(actor: Actor, operation: string, input: unknown): unknown {
     if (!(operation in schemas)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
     const op = operation as Operation;
@@ -54,6 +57,8 @@ export class Workflow {
     if (isIterationOperation(op)) return this.iterations().read(actor, op, a);
     if (op === 'workspace_list') return { workspaces: s.list<Workspace>('workspace').filter(w => actor.role === 'human' || actor.workspaceIds.includes(w.id)) };
     if (op === 'inbox_list') return inboxList(s, actor, a, this.inboxPolicy(), this.now());
+    if (op === 'defect_list') return this.defects().list(actor,a as any);
+    if (op === 'defect_get') return { defect: this.defects().get(actor,a.workspaceId,a.defectId) };
     const workspace = s.workspace(actor, a.workspaceId);
     if (op === 'inbox_settings_get') return { settings: inboxSettings(s,actor,workspace.id) };
     if (op.startsWith('ui_')) {
@@ -134,7 +139,7 @@ export class Workflow {
       })() : null;
       const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
       const coverage = isAggregate(s,root) ? planCoverage(s,root) : null;
-      return { issue: this.display(issue), iteration: this.iterations().packet(actor,issue), readiness: this.readiness(issue), nextActions: this.nextActions(actor, issue),executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
+      return { issue: this.display(issue), iteration: this.iterations().packet(actor,issue), readiness: this.readiness(issue), nextActions: [...this.nextActions(actor, issue),...(actor.role === 'human' ? [] : ['defect_propose'])],defects: { observation: this.defects().observe(issue),decisionSet: this.defects().confirmedSet(actor,workspace.id,issue.id) },executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
     }
     if (op === 'evidence_get') {
       const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
@@ -147,7 +152,7 @@ export class Workflow {
       const filtered = issues.filter(i => !a.state || i.state === a.state);
       return { issues: filtered.slice(a.offset, a.offset + a.limit).map(i => this.display(i)), total: filtered.length, nextOffset: a.offset + a.limit < filtered.length ? a.offset + a.limit : null };
     }
-    if (op === 'gap_list') return { gaps: [...issues.filter(i => !['DONE','ABANDONED'].includes(i.state)).flatMap(i => [...new Set([...this.readiness(i).blocking,...(i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [])])].map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )),...inboxAgingGaps(s,actor,workspace.id,this.inboxPolicy(),this.now(),new Set(issues.map(issue => issue.id))),...this.iterations().gaps(actor,workspace.id)] };
+    if (op === 'gap_list') return { gaps: [...issues.filter(i => !['DONE','ABANDONED'].includes(i.state)).flatMap(i => [...new Set([...this.readiness(i).blocking,...(i.state === 'USER_ACCEPTANCE' ? this.closureBlockers(i) : [])])].map(code => ({ issueId: i.id, key: i.key, code, severity: 'blocking' })).concat(i.plannedStart ? [] : [{ issueId: i.id, key: i.key, code: 'SCHEDULE_UNSET', severity: 'advisory' }] )),...inboxAgingGaps(s,actor,workspace.id,this.inboxPolicy(),this.now(),new Set(issues.map(issue => issue.id))),...this.iterations().gaps(actor,workspace.id),...this.defects().gaps(actor,workspace.id)] };
     if (op === 'event_list') {
       requireRole(actor, 'human', 'lead', 'pm');
       return { events: s.db.prepare('SELECT sequence,actor_id AS actorId,operation,target_id AS targetId,data,at FROM events WHERE workspace_id=? AND sequence>? ORDER BY sequence LIMIT ?').all(a.workspaceId, a.after, a.limit).map((r: any) => ({ ...r, data: JSON.parse(r.data) })) };
@@ -159,6 +164,13 @@ export class Workflow {
     return { run };
   }
   private iterations() { return new IterationService(this.store, this.now); }
+  private defects() {
+    return new DefectRegistry(this.store, {
+      deliveryDigest: issue => acceptanceDigest(this.store,issue),
+      reopen: (actor,issue,reason) => { this.mutate(actor,'issue_transition',{ workspaceId: issue.workspaceId,issueId: issue.id,expectedVersion: issue.version,action: 'reopen',reason }); },
+      createRequirement: (actor,issue,input) => this.mutate(actor,'issue_create',{ workspaceId: issue.workspaceId,...input }).issue as Issue
+    },this.now);
+  }
   private display(issue: Issue) {
     const title = issue.parentId ? `${this.store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
     const scope = issue.parentId ? scopeState(this.store,issue) : null;
@@ -194,6 +206,7 @@ export class Workflow {
   readiness(i: Issue, admission = true) {
     const blocking: string[] = [];
     if (this.unmanagedWork(i)) blocking.push('UNMANAGED_EXECUTION');
+    if (this.defects().needsScopeRevision(i)) blocking.push('SCOPE_REVISION_REQUIRED');
     if (i.lease && i.lease.expiresAt <= this.now()) blocking.push('LEASE_EXPIRED');
     const workspace = this.store.get<Workspace>('workspace',i.workspaceId); const root = i.parentId ? this.store.get<Issue>('issue',i.parentId) : i;
     if (i.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) blocking.push('DESIGN_BINDING_STALE');
@@ -420,12 +433,9 @@ export class Workflow {
     const report = this.store.get<QaReport>('qa_report',run.reportId); validateQaReport(this.store,issue,actor,report);
     const review = { id: randomUUID(), issueId: issue.id, workspaceId: issue.workspaceId, actorId: actor.id, sessionId: actor.sessionId, candidateId: report.candidateId, snapshotId: report.snapshotId, stage: 'QA', verdict: report.verdict, reportId: report.id, reason: report.summary, at: new Date(this.now()).toISOString() };
     this.store.put('review',review,issue.workspaceId);
-    for (const finding of report.findings) {
-      const defect = { id: randomUUID(), issueId: issue.id, workspaceId: issue.workspaceId, candidateId: report.candidateId, snapshotId: report.snapshotId, reportId: report.id, ownerId: issue.assignee, state: 'OPEN', ...finding };
-      this.store.put('defect',defect,issue.workspaceId);
-    }
+    this.defects().recordQaFindings(actor,report.id);
     if (report.verdict === 'PASS') {
-      for (const defect of this.store.list<any>('defect',issue.workspaceId).filter(d => d.issueId === issue.id && d.state === 'OPEN' && d.reportId !== report.id)) { defect.state = 'RESOLVED'; defect.resolutionReportId = report.id; this.store.put('defect',defect,issue.workspaceId); }
+      this.defects().resolveLegacyQaPass(actor,report.id);
       issue.qaReview = review.id; issue.state = 'LEAD_REVIEW'; issue.stage = 'FINAL';
     } else if (report.verdict === 'FAIL') { issue.state = 'QA_REJECTED'; issue.stage = null; }
     return this.save(actor,'qa_review_completed',issue,{ reviewId: review.id, reportId: report.id, verdict: report.verdict });
@@ -508,6 +518,13 @@ export class Workflow {
       return { workspace: w };
     }
     const w = s.workspace(actor, a.workspaceId);
+    if (['defect_propose','defect_report','defect_triage','defect_withdraw'].includes(op)) {
+      const { idempotencyKey,...input } = a;
+      if (op === 'defect_propose') return { defect: this.defects().propose(actor,input as any) };
+      if (op === 'defect_report') return { defect: this.defects().report(actor,input as any) };
+      if (op === 'defect_triage') return this.defects().triage(actor,input as any);
+      return { defect: this.defects().withdraw(actor,input as any) };
+    }
     if (op === 'inbox_settings_update') return updateInboxSettings(s,actor,{ workspaceId: w.id,expectedVersion: a.expectedVersion,agingThresholdHours: a.agingThresholdHours },this.now());
     if (op === 'workspace_git_bind') {
       requireRole(actor,'human');
@@ -719,7 +736,10 @@ export class Workflow {
       if (i.state !== 'USER_ACCEPTANCE' || i.candidate?.id !== a.candidateId || acceptanceDigest(s,i) !== a.digest) throw new DomainError('APPROVAL_STALE','Accept only the current reviewed delivery digest');
       const approval = { id: randomUUID(), issueId: i.id, actorId: actor.id, candidateId: i.candidate!.id, digest: a.digest, decision: a.decision, reason: a.reason, at: new Date(this.now()).toISOString() };
       s.put('delivery_approval',approval,w.id);
-      if (a.decision === 'REJECT') { i.state = 'USER_REJECTED'; i.acceptedDigest = undefined; }
+      if (a.decision === 'REJECT') {
+        this.defects().classifyRejection(actor,w.id,i.id,approval.id,{ classification: a.classification,...(a.classification === 'DEFECT' ? { findings: a.findings } : {}) });
+        i.state = 'USER_REJECTED'; i.acceptedDigest = undefined;
+      }
       else {
         i.acceptedDigest = a.digest;
         const children = inScopeChildren(s,i);

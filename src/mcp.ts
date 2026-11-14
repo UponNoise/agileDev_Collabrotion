@@ -4,6 +4,9 @@ import { agentOperations, DomainError, schemas } from './contracts.js';
 import { LocalClient } from './client.js';
 
 const descriptions: Record<string, string> = {
+  defect_propose: 'Record a nonblocking pending problem on an issue you can read. No artifact or confirmed origin is invented; human triage is required.',
+  defect_list: 'Read defect records only within the existing issue scope, with filters and bounded pagination.',
+  defect_get: 'Read one scoped defect and its actual observation, origin and human triage history.',
   iteration_list: 'Read scoped iteration records and advisory planning progress; no workflow gate changes.',
   iteration_get: 'Read scoped iteration membership, event-derived daily flow or an immutable close summary. Full membership preconditions and Markdown export require planning authority.',
   iteration_membership_set: 'Atomically change optional planning membership with every issue version and complete source/destination membership precondition. Never advances a gate.',
@@ -43,7 +46,7 @@ export async function connectMcp(client: LocalClient) {
     if (clientInfo) void client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }).catch(() => process.stderr.write('Could not record MCP initialization metadata.\n'));
   };
   for (const name of agentOperations) {
-    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get','grant_list','plan_get','integration_get','artifact_read','scope_get','iteration_list','iteration_get'].includes(name);
+    const readOnly = ['workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'check_profile_list', 'qa_check_get', 'evidence_get','grant_list','plan_get','integration_get','artifact_read','scope_get','iteration_list','iteration_get','defect_list','defect_get'].includes(name);
     server.registerTool(name, { description: descriptions[name] ?? `Perform ${name} within authenticated role and workspace scope. Mutations require current versions and a unique idempotency key.`, inputSchema: schemas[name], annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: true, openWorldHint: false } }, async (args: any) => {
       try {
         const result = await client.command(name, args);
