@@ -230,7 +230,7 @@ Limited delegation depth does not force PM → worker nesting inside the host. P
 
 ## 10. Revision R2: role profiles, briefs, and messages
 
-Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D17–D24; not implemented. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md).
+Status: accepted by the user on 2026-11-14 with D17–D24; not implemented. Details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md) §13. Where this section differs from sections 1–9, this section governs; `decision_batch_accept` is withdrawn. `defect_propose`, `defect_list` and `defect_get` are in every profile.
 
 `tools/list` for a credential contains only its role's profile: operations the service can authorize for that role, and no human-only operation. The service still enforces every permission. One shared definition feeds the listing, the authorization tests and the generated reference.
 
@@ -240,7 +240,7 @@ Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D
 | QA | `issue_get`, `design_get`, `check_profile_list`, `qa_check_run`, `qa_check_get`, `qa_report_submit`, `integration_get`, `artifact_read`, `evidence_get`, message tools |
 | PM | Planning, dependency, assignment, QA configuration, dispatch, run, iteration, Git evidence, completion and read operations; message tools |
 | Lead | The PM profile plus `design_set`, `design_submit`, `review_submit` |
-| Consult run | Read operations of the recipient's role plus `message_send` |
+| Consult run | Read operations of the recipient's role plus `message_send`, enforced by the service for its separate run-scoped actor |
 
 Every operation states its purpose, preconditions, effect and common rejections. Every input property states what it is and where its value comes from. The MCP `instructions` are the role's playbook.
 
@@ -249,8 +249,8 @@ Every operation states its purpose, preconditions, effect and common rejections.
 | `issue_get` additions | `status`, `blockers[{code, message, subjects, remedy}]`, `nextActions[{operation, args}]` or `waitingOn`, `design{id, status, hash, bytes, decision}`, `lastRejection`, `messages{total, awaitingYourReply}` | Within the NF05 budget; `nextActions` entries become objects |
 | `design_get` | Issue; returns design content, criteria, requirement scope, status, and decision history with reasons | Read within the caller's issue scope; workers and QA for their own issue and its parent |
 | `evidence_get` additions | Design-decision and delivery-decision records | Same scope as today |
-| `message_send` | Issue, recipient (role, actor or owner), kind, body, optional `replyTo`, optional wake request, idempotency key | Any agent with scope on the issue; a worker–QA pair on one issue is rejected; returns the delivery state |
-| `message_list` | Issue, cursor, page size | Read within scope; no read receipts |
-| `message_wait` | Issue or message, cursor, timeout of at most 50 seconds | Bounded long-poll for replies to the caller |
+| `message_send` | Issue, recipient (role, actor or owner), kind, body, optional `replyTo`, optional wake request, idempotency key | Any agent with scope on the issue; a worker–QA pair on one issue is rejected; `replyTo` must be visible to the sender; returns the delivery state |
+| `message_list` | Issue, cursor, page size | Only messages visible to the caller: those it sent or received, plus every message on the issue for the owner, lead and PM; no read receipts |
+| `message_wait` | Issue or message, cursor, timeout of at most 50 seconds | Bounded long-poll for visible replies to the caller |
 
 Rejections return `{code, message, details, remedy}`. Authorization is checked before preconditions. Messages carry no authority. An agent cannot create, dismiss or resolve an inbox entry; the only entry a message produces is the owner-question entry derived from an unanswered message to the owner.

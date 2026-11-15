@@ -72,11 +72,18 @@ These are **planned records**, not GitHub issues and not approved/in-progress as
 | B15 | Managed collaboration——[Feature] Git: verify immutable commit evidence -> traceable closure | Git integration worker | B13 | AC21–23 |
 | B16 | Managed collaboration——[Test] Recovery: interrupt and restart runs -> no false completion or duplicate execution | Reliability worker | B13–B15 | AC18/33/35 |
 | B17 | Packaged MVP——[Feature] Desktop: package application and MCP entry -> installable shared workspace | Integration worker | P4 gate | AC29/30/38 |
-| B18 | Packaged MVP——[Test] Delivery: exercise complete workflow -> accepted three-harness release | Independent QA | B17, B19–B22 | AC01–41 |
+| B18 | Packaged MVP——[Test] Delivery: exercise complete workflow -> accepted three-harness release | Independent QA | B17, B19–B28 | AC01–44 |
 | B19 | Human attention——[Feature] Inbox: exact pending/ready targets -> complete batch evidence and explicit completion | Full-stack worker | B10/B12, W1 and Git callback integration | AC14/22/39 |
 | B20 | Iteration planning——[Feature] Membership: bind complete sets -> atomic close/carry-over/adoption | Backend worker | B08/B10 | AC40 |
 | B21 | Defect tracking——[Feature] Evidence: bind complete sets -> explicit QA and atomic human waiver | Domain worker | B14 | AC19/20/41 |
 | B22 | Human attention——[Feature] Desktop: signal new blocking decisions -> owner notices without polling | Desktop worker | B17/B19 | AC36/39 |
+| B23 | Agent surface——[Feature] MCP: scope tools by role and describe every field -> agents act without guessing | Integration worker | R2 acceptance | AC43/28 |
+| B24 | Agent surface——[Feature] Briefs: return remedies, designs and rejection context -> rework starts informed | Domain worker | B23 | AC43/12/19/41/42 |
+| B25 | Agent coordination——[Feature] Messages: store issue threads and bounded waits -> agents ask without a relay | Backend worker | B23 | AC44/11 |
+| B26 | Agent coordination——[Feature] Wake: start bounded consult runs -> cross-harness answers within budget | Runner worker | B25, wake spike | AC44/17/25 |
+| B27 | Human surface——[Feature] Decisions: decide on one card in plain language -> positive decisions in two steps | Frontend worker | Prototype round 3, B24 | AC42/39/41 |
+| B28 | Human surface——[Feature] Workspace: three destinations and audit details -> no internal codes by default | Frontend worker | B27 | AC42/26/27 |
+| B29 | Documentation——[Docs] Baseline: one status page and a generated agent reference -> current behavior stated once | Integration worker | B23 | None |
 
 PM can split these after P1; each final task still needs its own acceptance criteria, owned outputs, and approved mapping. Do not assign a single worker to implement and independently QA the same task.
 
@@ -133,20 +140,10 @@ These checks validate document structure and planned coverage. They do not prove
 
 ## 10. Revision R2 plan
 
-Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D17–D24. Nothing here starts before that decision. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md).
+Status: accepted by the user on 2026-11-14 with D17–D24. Work starts when ownership is agreed. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md). Tasks B23–B29 are in the seed backlog (§4).
 
-| ID | Proposed parent / task title | Role | Depends on | Primary acceptance |
-| --- | --- | --- | --- | --- |
-| B23 | Agent surface——[Feature] MCP: scope tools by role and describe every field -> agents act without guessing | Integration worker | R2 acceptance | AC43/28 |
-| B24 | Agent surface——[Feature] Briefs: return remedies, designs and rejection context -> rework starts informed | Domain worker | B23 | AC43/12/19 |
-| B25 | Agent coordination——[Feature] Messages: store issue threads and bounded waits -> agents ask without a relay | Backend worker | B23 | AC44 |
-| B26 | Agent coordination——[Feature] Wake: start bounded consult runs -> cross-harness answers within budget | Runner worker | B25, wake spike | AC44/17/25 |
-| B27 | Human surface——[Feature] Decisions: decide on one card in plain language -> positive decisions in two steps | Frontend worker | Prototype round 3, B24 | AC42/39 |
-| B28 | Human surface——[Feature] Workspace: three destinations and audit details -> no internal codes by default | Frontend worker | B27 | AC42/26/27 |
-| B29 | Documentation——[Docs] Baseline: one status page and a generated agent reference -> current behavior stated once | Integration worker | B23 | None |
+Order: B23, B24, then B25 and B26 in the service; prototype round 3 in parallel, then B27 and B28; B29 last. The clarifications in R2 §13 add service work to B24 (MINOR acknowledgement, visible-risk-set binding, optional rejection findings) and B25 (per-message visibility and QA message evidence), and the defect-triage card to B27. The wake spike reads CLI help and vendor documentation only. Any real model run needs the user's approval first.
 
-Order: B23, B24, then B25 and B26 in the service; prototype round 3 in parallel, then B27 and B28; B29 last. The wake spike reads CLI help and vendor documentation only. Any real model run needs the user's approval first.
+The remaining R1 work narrows: B19 drops batch acceptance, and its defect-triage entry becomes a B27 card; B20 keeps the merged service and drops web views, charts, export and adoption UI; B21 keeps the merged register slice and drops versioned defect sets, explicit per-defect verification and MINOR waivers; B22 drops operating-system notifications. The parked W3a batch, W3b defect verification and Iterations web checkpoints stay parked. B18 exercises AC01–AC44 as amended.
 
-If R2 is accepted, the remaining R1 work narrows: B19 drops batch acceptance, B20 keeps the merged service and drops web views, charts, export and adoption UI, B21 keeps the register slice and drops versioned defect sets, explicit per-defect verification and MINOR waivers, and B22 drops operating-system notifications. B18 exercises AC01–AC44 as amended.
-
-Ownership is agreed before work starts. `workflow.ts`, `contracts.ts` and `mcp.ts` keep one integrator at a time; the defect register slice holds that lease until PR #13 merges or is parked. One web owner takes B27 and B28. While D17–D24 are undecided, R2 recommends not starting versioned defect sets, MINOR waivers, batch acceptance, operating-system notifications or iteration web views.
+Ownership is agreed before work starts. `workflow.ts`, `contracts.ts` and `mcp.ts` keep one integrator at a time; PR #13 has merged, so that lease is assigned again before B23 starts. One web owner takes B27 and B28 after B24 merges, because B24 also changes the web client's use of `nextActions`.

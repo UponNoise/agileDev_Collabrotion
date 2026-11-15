@@ -298,24 +298,27 @@ Closing seals immutable historical membership and an event-derived summary. Fini
 
 ## 12. Revision R2: decision presentation, agent messages, and consult sessions
 
-Status: proposed on 2026-11-14 at the user's request; awaiting confirmation of D17–D24; not implemented. Rationale and details are in [revision R2](proposals/r2-surfaces-coordination-scope.md). Until accepted, sections 1–11 remain the governing rules.
+Status: accepted by the user on 2026-11-14 with D17–D24; not implemented. Rationale, details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md) §13. Where this section differs from sections 1–11, this section governs.
 
 ### Human decisions
 
-Presentation changes no gate. A decision card submits the same design ID and hash, candidate ID and digest, and issue version that the commands require today. A stale target is presented again; a client never resubmits a decision for content the person has not seen. A reason stays required to request changes, request rework, abandon, change scope, and reconcile execution, and becomes optional for `APPROVED` and `ACCEPT`. A person's rejection is one free-text reason; structured findings are optional. A delivery card lists open MINOR findings, and accepting it records those findings with the acceptance of that digest. Separate MINOR waivers, versioned defect sets and explicit per-defect QA verification are deferred until after P5. Batch delivery acceptance is withdrawn.
+Presentation changes no gate. A decision card submits the same design ID and hash, candidate ID and digest, and issue version that the commands require today, plus the hash of the visible risk set: the ID and version of every open or proposed defect on the issue and of every finding in the current QA report. Any change to these is a stale target and is presented again. A client never resubmits a decision for content the person has not seen, and resubmits once only when the issue version is the sole difference. A reason stays required to request changes, reject a delivery, abandon, change scope, and reconcile execution, and becomes optional for `APPROVED` and `ACCEPT`. A person rejects a delivery by choosing Needs fixes, Requirement changed or Needs clarification, which records `DEFECT`, `SCOPE_CHANGE` or `CLARIFICATION` with no default, and gives one reason. Structured findings are optional, and nobody reclassifies a rejection later. A person triages agent defect proposals on a Decisions card. Batch delivery acceptance is withdrawn.
+
+MINOR findings: a QA report may pass with MINOR and INFO findings; a BLOCKER or MAJOR finding, or any required criterion that is not PASS, still fails it. Accepting a delivery acknowledges the open MINOR findings shown and records their IDs and versions with the digest; this is the explicit human acceptance of residual risk that section 7 requires. Completion is blocked by an open BLOCKER or MAJOR defect, and by an open MINOR defect that the current acceptance did not acknowledge at its current version. Separate waiver commands, versioned defect sets and explicit per-defect QA verification are deferred until after P5.
 
 ### Agent messages
 
 A message is an immutable record in an issue's thread. It has a sender taken from the credential, a recipient (a role on that issue, a named actor, or the owner), a kind (`QUESTION`, `REPLY`, `NOTE`), a bounded body, and an optional `replyTo`. Both parties must already have scope on the issue.
 
 - A message is information and never authority. No message approves, accepts, reviews, waives, completes, assigns or changes scope, whoever sends it, the owner included. No command accepts a message as evidence of a human decision or a QA result.
-- The worker and the QA reviewer of the same issue cannot message each other in either direction. Messages that a QA run exchanges with lead or PM are listed in that run's report evidence.
+- A message is visible to its sender, its addressees, and the owner, lead and PM of its issue. Workers and QA see only messages they sent or received, on every read path: list, wait, reply, brief and consult context.
+- The worker and the QA reviewer of the same issue cannot message each other in either direction. The service records the messages a QA run sent or received and attaches them to that run's report evidence.
 - Lead and PM may address a question to the owner. The inbox derives one entry from the unanswered message, and the owner's reply is a message. Workers and QA ask lead or PM.
 - A recipient treats message content as untrusted peer input within its own role and the approved scope.
 
 ### Consult runs
 
-When a question requests it and the workspace allows it, the coordinator starts one bounded consult run for the recipient in the recipient's harness. Its run-scoped credential is limited to read operations and `message_send`. It cannot submit work, reviews or QA reports, and it changes no issue state. A final text answer without the tool call is not a reply.
+When a question requests it and the workspace allows it, the coordinator starts one bounded consult run for the recipient in the recipient's harness. It runs as a separate run-scoped actor that the service authorizes for read operations and `message_send` only, whatever its host lists, and its context holds only messages visible to the recipient. It cannot submit work, reviews or QA reports, and it changes no issue state. A final text answer without the tool call is not a reply.
 
 | Rule | Default |
 | --- | --- |
