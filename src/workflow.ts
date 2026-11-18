@@ -16,6 +16,7 @@ import { workspaceView,issueView,runsView } from './web-views.js';
 import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
 import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSettings } from './inbox.js';
+import { rejectionContext } from './rejection-context.js';
 
 const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
@@ -183,7 +184,9 @@ export class Workflow {
       })() : null;
       const root = issue.parentId ? s.get<Issue>('issue',issue.parentId) : issue;
       const coverage = isAggregate(s,root) ? planCoverage(s,root) : null;
-      return { issue: this.display(issue), iteration: this.iterations().packet(actor,issue), readiness: this.readiness(issue), nextActions: [...this.nextActions(actor, issue),...(actor.role === 'human' ? [] : ['defect_propose'])],defects: { observation: this.defects().observe(issue),decisionSet: this.defects().confirmedSet(actor,workspace.id,issue.id) },executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
+      const rejection = rejectionContext(s, issue);
+      const lastRejection = rejection ? { stage: rejection.stage, at: rejection.at, reason: rejection.reason, findingCount: rejection.findingCount, evidenceKind: rejection.evidenceKind, evidenceId: rejection.evidenceId } : null;
+      return { issue: this.display(issue), iteration: this.iterations().packet(actor,issue), readiness: this.readiness(issue), nextActions: [...this.nextActions(actor, issue),...(actor.role === 'human' ? [] : ['defect_propose'])],lastRejection,defects: { observation: this.defects().observe(issue),decisionSet: this.defects().confirmedSet(actor,workspace.id,issue.id) },executionRecovery: { required: this.unmanagedWork(issue),fence: issue.fence,candidateId: issue.candidate?.id ?? null },deliveryDigest, git, closureBlocked: issue.state === 'USER_ACCEPTANCE' ? this.closureBlockers(issue) : [],planning: coverage ? { planId: root.planId ?? null,ready: coverage.ready,status: coverage.status,blocking: coverage.blocking,children: coverage.children } : null,...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {}) };
     }
     if (op === 'evidence_get') {
       const issue = s.issue(actor,a.workspaceId,a.issueId); const evidence = s.get<any>(a.kind,a.evidenceId);
