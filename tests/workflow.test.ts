@@ -131,6 +131,9 @@ test('issue brief reports the responsible party and binds a dispatchable action 
   assert.deepEqual(approval.subjects, [f.parent.id]);
   assert.equal(blocked.waitingOn.role, 'lead');
   assert.equal(blocked.nextActions.some((item: any) => item.operation === 'work_claim'), false);
+  const expandedBlockers = f.run(f.worker.actor, 'issue_get', { issueId: task.id, view: 'full' }).blockers;
+  const planBlocker = expandedBlockers.find((item: any) => item.remedy.operation === 'plan_apply');
+  assert.deepEqual(planBlocker.subjects, [f.parent.id]);
 
   f.approve();
   const planned = f.run(f.pm.actor, 'issue_get', { issueId: task.id });
@@ -278,6 +281,10 @@ test('legacy reset cannot clear uncertain managed execution or rewrite completio
 test('ancestor holds stop submission and material design changes invalidate active ownership', () => {
   const f = setup(); const task = f.task(); f.approve(); f.assign(task); f.claim(task);
   f.change(f.human.actor, 'issue_transition', f.parent.id, { action: 'hold', reason: 'Pause requirement' });
+  const brief = f.run(f.worker.actor, 'issue_get', { issueId: task.id });
+  const hold = brief.blockers.find((item: any) => item.code === 'ON_HOLD');
+  assert.deepEqual(hold.subjects, [f.parent.id]);
+  assert.equal(hold.remedy.operation, 'issue_transition');
   assert.throws(() => f.change(f.execution(task.id).actor, 'work_heartbeat', task.id, { fence: f.current(task.id).fence }), rejects('NOT_READY'));
   f.change(f.human.actor, 'issue_transition', f.parent.id, { action: 'resume', reason: 'Continue requirement' });
   f.execution(task.id).stop(f.human.actor);

@@ -51,6 +51,10 @@ export function queueQa(store: Store, issue: Issue) {
   const run: Run = { id: randomUUID(), issueId: issue.id, workspaceId: issue.workspaceId, actorId: issue.qaAssignee, harness: issue.qaHarness, kind: 'qa', candidateId: issue.candidate!.id, snapshotId: snapshot.id, state: 'QUEUED', version: 1, createdAt: new Date().toISOString(), designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, checkProfileIds: [...issue.checkProfileIds] };
   store.put('run',run,issue.workspaceId); return run;
 }
+export function qaChecksPending(checks: Pick<CheckRun, 'state'>[]) {
+  return checks.some(check => ['QUEUED','RUNNING','UNCERTAIN'].includes(check.state));
+}
+
 export function validateQaReport(store: Store, issue: Issue, actor: Actor, report: QaReport) {
   const snapshot = candidateSnapshot(store,issue);
   validateIntegration(store,issue);
@@ -59,7 +63,7 @@ export function validateQaReport(store: Store, issue: Issue, actor: Actor, repor
   verifySnapshot(snapshot,run.executionRoot!,true);
   if (new Set(report.results.map(r => r.criterionId)).size !== issue.criteria.length || report.results.length !== issue.criteria.length || report.results.some(r => !issue.criteria.includes(r.criterionId))) throw new DomainError('QA_COVERAGE_REQUIRED','Report every assigned criterion exactly once');
   const checks = store.list<CheckRun>('check',issue.workspaceId).filter(c => c.runId === run.id);
-  if (checks.some(c => ['QUEUED','RUNNING','UNCERTAIN'].includes(c.state))) throw new DomainError('CHECKS_PENDING','All checks must be settled before reporting');
+  if (qaChecksPending(checks)) throw new DomainError('CHECKS_PENDING','All checks must be settled before reporting');
   for (const result of report.results) {
     for (const id of result.evidenceIds) {
       const check = store.get<CheckRun>('check',id);

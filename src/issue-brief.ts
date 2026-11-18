@@ -30,6 +30,7 @@ const remedies: Record<string, [message: string, role: Party, operation?: Operat
   UNMANAGED_EXECUTION: ['Reconcile the previous execution before dispatch.', 'human', 'work_reconcile'],
   LEASE_EXPIRED: ['Inspect the previous run before recovering ownership.', 'pm', 'run_list'],
   RUN_STILL_LIVE: ['Wait for the current execution to settle.', 'coordinator'],
+  CHECKS_PENDING: ['Wait for the QA checks to settle before reporting.', 'coordinator', 'qa_check_get'],
   HUMAN_ACCEPTANCE_REQUIRED: ['Review and accept the current delivery.', 'human', 'delivery_decide'],
   UNRESOLVED_DEFECTS: ['Review the open defects before completion.', 'lead', 'defect_list'],
   GIT_VERIFICATION_REQUIRED: ['Submit the current candidate commit for verification.', 'pm', 'git_submit'],
@@ -69,10 +70,14 @@ export function commandFailure(code: string, message: string, details?: unknown)
   return { code, message, details: details ?? null, remedy: { role, action, ...(operation ? { operation } : {}) } };
 }
 
+export function isPlanningBlocker(code: string) {
+  return code.startsWith('PLAN_') || ['DELIVERY_SCOPE_REQUIRED', 'TASK_SCOPE_INCOMPLETE'].includes(code);
+}
+
 export function blockerDetail(code: string, issueId: string, retryGit: boolean) {
   const rule = Object.hasOwn(remedies, code) ? remedies[code] : undefined;
   const [message, role, operation] = rule ?? (
-    code.startsWith('PLAN_') || ['DELIVERY_SCOPE_REQUIRED', 'TASK_SCOPE_INCOMPLETE'].includes(code)
+    isPlanningBlocker(code)
       ? ['Update the plan to cover the approved scope.', 'pm', 'plan_apply'] as const
       : retryGit
         ? ['Inspect and retry the submitted Git evidence.', 'pm', 'git_retry'] as const
@@ -99,6 +104,7 @@ export function issueStatus(issue: Issue, ready: boolean) {
 }
 
 export function waitingParty(issue: Issue, design: Design | null, activeRun: Run | undefined, blockers: ReturnType<typeof blockerDetail>[], hasAction: boolean) {
+  if (blockers[0]?.code === 'CHECKS_PENDING') return { role: 'coordinator', reason: blockers[0].message };
   if (hasAction || issue.state === 'DONE' || issue.state === 'ABANDONED') return null;
   if (activeRun?.state === 'UNCERTAIN') return { role: 'human', reason: 'Reconcile the uncertain run.' };
   if (activeRun && ['QUEUED', 'STARTING', 'STOPPING'].includes(activeRun.state)) {

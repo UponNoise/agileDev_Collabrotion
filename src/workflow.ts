@@ -10,14 +10,14 @@ import { inside } from './paths.js';
 export { inside } from './paths.js';
 import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, liveRunStates, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
-import { acceptanceDigest, candidateSnapshot, integrationManifest, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
+import { acceptanceDigest, candidateSnapshot, integrationManifest, qaChecksPending, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding, normalizeLegacyAttempt, submissionEntries } from './git.js';
 import { workspaceView,issueView,runsView } from './web-views.js';
 import { currentPlan, isAggregate, planChildren, planCoverage, planScope, validateDependencyGraph } from './planning.js';
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
 import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSettings } from './inbox.js';
 import { rejectionContext } from './rejection-context.js';
-import { blockerDetail, briefDefect, briefIssue, briefRun, briefText, issueStatus, waitingParty, type IssueAction } from './issue-brief.js';
+import { blockerDetail, briefDefect, briefIssue, briefRun, briefText, isPlanningBlocker, issueStatus, waitingParty, type IssueAction } from './issue-brief.js';
 
 const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
@@ -245,20 +245,26 @@ export class Workflow {
     const executionRecovery = { required: this.unmanagedWork(issue), fence: issue.fence, candidateId: issue.candidate?.id ?? null };
     const activeRun = s.list<Run>('run', workspace.id).find(run =>
       run.issueId === issue.id && (liveRunStates as readonly string[]).includes(run.state));
+    const qaChecks = activeRun?.kind === 'qa' && issue.state === 'QA_TEST'
+      ? s.list<CheckRun>('check', workspace.id).filter(check => check.runId === activeRun.id) : [];
     const codes = atAcceptance
       ? closureBlocked
       : ['DONE','ABANDONED'].includes(issue.state) ? [] : readiness.blocking;
-    const blockers = codes.map(code => {
+    const blockers = (qaChecksPending(qaChecks) ? ['CHECKS_PENDING', ...codes] : codes).map(code => {
       const designBlocker = ['DESIGN_APPROVAL_REQUIRED','DESIGN_SCOPE_STALE','DESIGN_BINDING_STALE','SCOPE_REVISION_REQUIRED'].includes(code);
-      const detail = blockerDetail(code, designBlocker ? root.id : issue.id,
+      const detail = blockerDetail(code, designBlocker || isPlanningBlocker(code) ? root.id : issue.id,
         submission?.errorCode === code && ['FAILED','UNAVAILABLE'].includes(submission.state));
+      if (code === 'ANCESTOR_BLOCKED' && issue.parentId) return { ...detail, subjects: [root.id] };
+      if (code === 'ON_HOLD' && issue.parentId && root.state === 'ON_HOLD') {
+        return { ...detail, subjects: issue.state === 'ON_HOLD' ? [issue.id, root.id] : [root.id] };
+      }
       if (code !== 'DESIGN_APPROVAL_REQUIRED' || design?.status === 'IN_REVIEW') return detail;
       return { ...detail, message: 'Prepare the current design for human review.', remedy: {
         role: 'lead' as const, operation: design ? 'design_submit' as const : 'design_set' as const
       } };
     });
     const nextActions = this.nextActions(actor, issue, workspace, design, activeRun,
-      readiness.ready, deliveryDigest, closureBlocked, submission);
+      readiness.ready, deliveryDigest, closureBlocked, submission, qaChecks);
     const waitingOn = waitingParty(issue, design, activeRun, blockers, nextActions.length > 0);
     if (permitsOperation(actor.role, 'defect_propose')) {
       nextActions.push({ operation: 'defect_propose', args: { workspaceId: workspace.id, issueId: issue.id, expectedVersion: issue.version } });
@@ -312,7 +318,7 @@ export class Workflow {
       ...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {})
     };
   }
-  private nextActions(actor: Actor, issue: Issue, workspace: Workspace, design: Design | null, activeRun: Run | undefined, ready: boolean, digest: string | null, closureBlocked: string[], submission: GitSubmission | null) {
+  private nextActions(actor: Actor, issue: Issue, workspace: Workspace, design: Design | null, activeRun: Run | undefined, ready: boolean, digest: string | null, closureBlocked: string[], submission: GitSubmission | null, qaChecks: CheckRun[]) {
     const actions: IssueAction[] = [];
     const { workspaceId, id: issueId, version: expectedVersion, scopeRevision, fence, candidate } = issue;
     const target = { workspaceId, issueId, expectedVersion };
@@ -354,14 +360,13 @@ export class Workflow {
     if (issue.state === 'QA_TEST' && actor.role === 'qa' && candidate?.snapshotId && activeRun?.kind === 'qa' &&
         activeRun.state === 'RUNNING' && activeRun.id === actor.runId && activeRun.executionActorId === actor.id &&
         activeRun.snapshotId === candidate.snapshotId && activeRun.candidateId === candidate.id && issue.qaAssignee === actor.principalId) {
-      const checks = this.store.list<CheckRun>('check', workspaceId).filter(check =>
-        check.runId === activeRun.id && check.actorId === actor.id && check.snapshotId === candidate.snapshotId);
+      const checks = qaChecks.filter(check => check.actorId === actor.id && check.snapshotId === candidate.snapshotId);
       const profileId = activeRun.checkProfileIds?.find(id => !checks.some(check =>
         check.profileId === id && ['QUEUED','RUNNING','PASSED'].includes(check.state)));
       if (profileId) offer('qa_check_run', { profileId });
       const check = checks.at(-1);
       if (check) offer('qa_check_get', { checkId: check.id }, { workspaceId });
-      offer('qa_report_submit', { candidateId: candidate.id });
+      if (!qaChecksPending(qaChecks)) offer('qa_report_submit', { candidateId: candidate.id });
     }
     if (issue.state === 'USER_ACCEPTANCE' && candidate?.snapshotId) {
       if (digest) offer('delivery_decide', { candidateId: candidate.id, digest });

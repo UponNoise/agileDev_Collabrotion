@@ -93,6 +93,9 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     assert.notEqual(qa.cwd,worker.cwd); assert.equal(f.store.authenticate(qa.token).role,'qa'); assert.equal(qa.harness,'dsh');
     assert.equal(readFileSync(join(qa.cwd,'contract.txt'),'utf8'),'preserve this independent file');
     const check = await f.check(qa); assert.equal(check.state,'PASSED'); assert.equal(check.exitCode,0); assert.match(check.stdout!,/exact-content check passed/); assert.equal(check.snapshotId,snapshot.id); assert.ok(check.pid);
+    const ready = await new LocalClient(qa.endpoint, qa.token).command('issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id });
+    assert.ok(ready.nextActions.some((action: any) => action.operation === 'qa_report_submit' && action.args.candidateId === candidate.id));
+    assert.equal(ready.blockers.some((blocker: any) => blocker.code === 'CHECKS_PENDING'), false);
     await assert.rejects(new LocalClient(qa.endpoint,qa.token).command('review_submit',{ workspaceId: f.workspace.id,issueId: f.issue.id,expectedVersion: f.current(f.issue.id).version,candidateId: candidate.id,verdict: 'PASS',reason: 'Narrative shortcut',idempotencyKey: randomUUID() }),(e: any) => e.code === 'ROLE_DENIED');
     await f.report(qa,check.id); assert.equal(f.current(f.issue.id).state,'QA_TEST');
     assert.equal((await f.complete(qa)).state,'SUCCEEDED'); assert.equal(f.current(f.issue.id).stage,'FINAL');
@@ -198,6 +201,11 @@ test('interrupting QA terminates a real running check and retains failure eviden
     const actor = f.store.authenticate(qa.token); const client = new LocalClient(qa.endpoint,qa.token);
     const result = await client.command('qa_check_run',{ workspaceId: f.workspace.id,issueId: f.issue.id,expectedVersion: f.current(f.issue.id).version,profileId: f.store.get<Run>('run',actor.runId!).checkProfileIds![0],testFiles: ['.qa/check.mjs'],idempotencyKey: randomUUID() });
     await until(() => f.store.get<CheckRun>('check',result.check.id).state === 'RUNNING');
+    const blocked = await client.command('issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id });
+    assert.equal(blocked.blockers[0].code, 'CHECKS_PENDING');
+    assert.equal(blocked.waitingOn.role, 'coordinator');
+    assert.equal(blocked.nextActions.some((action: any) => action.operation === 'qa_report_submit'), false);
+    assert.ok(blocked.nextActions.some((action: any) => action.operation === 'qa_check_get' && action.args.checkId === result.check.id));
     const pid = f.store.get<CheckRun>('check',result.check.id).pid!; const run = f.store.get<Run>('run',actor.runId!);
     f.flow.execute(f.human,'run_interrupt',{ workspaceId: f.workspace.id,runId: run.id,expectedVersion: run.version,reason: 'Cancel real check fixture',idempotencyKey: randomUUID() });
     await until(() => f.store.get<Run>('run',run.id).state === 'CANCELLED');
