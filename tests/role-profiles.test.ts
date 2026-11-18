@@ -46,6 +46,75 @@ test('published role reference is generated from the authoritative registry', ()
   assert.equal(reference, agentReference());
 });
 
+test('scoped design reads retain exact decision reasons and reject unrelated evidence', async t => {
+  const f = fixture(t);
+  const workspaceId = f.workspace.id;
+  const command = (op: string, input: object) =>
+    f.flow.execute(f.human.actor, op, { workspaceId, idempotencyKey: randomUUID(), ...input }) as any;
+  const create = (title: string, parentId?: string) => command('issue_create', {
+    title, description: 'Captured requirement content', criteria: ['AC1'],
+    ...(parentId ? { parentId, expectedParentVersion: f.store.get<any>('issue', parentId).version } : {})
+  }).issue;
+  const parent = create('Owned requirement');
+  const siblingRoot = create('Other requirement');
+  const child = create('[Feature] Scope: read design -> execute safely', parent.id);
+  const sibling = create('[Feature] Other: handle data -> no cross-task access', parent.id);
+  const change = (issueId: string, op: string, input: object = {}) =>
+    command(op, { issueId, expectedVersion: f.store.get<any>('issue', issueId).version, ...input });
+  const decide = (issueId: string, content: string, decision: string, reason: string) => {
+    change(issueId, 'design_set', { content, criteria: ['AC1'] });
+    change(issueId, 'design_submit');
+    const designId = f.store.get<any>('issue', issueId).designId;
+    change(issueId, 'design_decide', { designId, decision, reason });
+    return designId;
+  };
+  const initial = decide(parent.id, 'Initial design', 'CHANGES_REQUESTED', 'Preserve the original boundary');
+  const approved = decide(parent.id, 'Updated design', 'APPROVED', 'Exact revision meets the criterion');
+  const foreign = decide(siblingRoot.id, 'Private design', 'APPROVED', 'Different requirement');
+  change(child.id, 'issue_assign', { actorId: f.agents.worker.actor.id, harness: 'codex' });
+  const acceptance = {
+    id: randomUUID(), issueId: child.id, actorId: f.human.actor.id, candidateId: randomUUID(),
+    digest: 'fixture-digest', decision: 'REJECT', reason: 'Stored historical delivery decision'
+  };
+  f.store.put('delivery_approval', acceptance, workspaceId);
+
+  const server = createServer(f.store);
+  t.after(() => server.close());
+  const read = async (operation: string, payload: object) => server.inject({
+    method: 'POST', url: `/api/command/${operation}`,
+    headers: { host: '127.0.0.1', authorization: `Bearer ${f.agents.worker.token}` },
+    payload: { workspaceId, ...payload }
+  });
+  const before = f.unchanged();
+  const first = (await read('design_get', { issueId: child.id, limit: 1 })).json().result;
+  assert.equal(first.requirementId, parent.id);
+  assert.equal(first.design.id, approved);
+  assert.equal(first.design.content, 'Updated design');
+  assert.equal(first.design.requirementDescription, 'Captured requirement content');
+  assert.deepEqual(first.design.criteria, ['AC1']);
+  assert.equal(first.current, true);
+  assert.equal(first.nextOffset, 1);
+  assert.equal(first.decisions[0].reason, 'Exact revision meets the criterion');
+  const older = (await read('design_get', { issueId: child.id, designId: initial, limit: 1, offset: first.nextOffset })).json().result;
+  assert.equal(older.current, false);
+  assert.equal(older.design.id, initial);
+  assert.equal(older.nextOffset, null);
+  assert.equal(older.decisions[0].reason, 'Preserve the original boundary');
+
+  const expanded = await read('evidence_get', { issueId: parent.id, kind: 'design_decision', evidenceId: older.decisions[0].id });
+  assert.deepEqual(expanded.json().result.evidence, older.decisions[0]);
+  const delivered = await read('evidence_get', { issueId: child.id, kind: 'delivery_decision', evidenceId: acceptance.id });
+  assert.deepEqual(delivered.json().result.evidence, acceptance);
+  for (const request of [
+    read('design_get', { issueId: child.id, designId: foreign }),
+    read('design_get', { issueId: sibling.id }),
+    read('design_get', { issueId: siblingRoot.id }),
+    read('evidence_get', { issueId: parent.id, kind: 'delivery_decision', evidenceId: acceptance.id }),
+    read('evidence_get', { issueId: child.id, kind: 'design_decision', evidenceId: older.decisions[0].id })
+  ]) assert.equal((await request).json().error.code, 'SCOPE_DENIED');
+  assert.equal(f.unchanged(), before);
+});
+
 test('HTTP profiles deny before preconditions and preserve assigned issue/workspace read scope', async t => {
   const f = fixture(t); const server = createServer(f.store); t.after(() => server.close());
   const issue = (title: string) => (f.flow.execute(f.human.actor, 'issue_create', { workspaceId: f.workspace.id, title, idempotencyKey: randomUUID() }) as any).issue;
@@ -77,7 +146,7 @@ test('real stdio MCP advertises complete described role profiles and rejects for
     try {
       await client.connect(transport); const tools = (await client.listTools()).tools; const names = tools.map(tool => tool.name);
       assert.deepEqual(new Set(names), new Set(toolsForRole(role))); assert.ok(client.getInstructions()?.includes(role === 'worker' ? 'coordinator' : role === 'qa' ? 'Independently' : role === 'pm' ? 'Plan scope' : 'initial/final'));
-      for (const name of ['defect_get', 'defect_list', 'defect_propose', 'workspace_list', 'issue_get']) assert.ok(names.includes(name));
+      for (const name of ['defect_get', 'defect_list', 'defect_propose', 'workspace_list', 'issue_get', 'design_get']) assert.ok(names.includes(name));
       for (const name of ['delivery_decide', 'defect_triage', 'work_claim', 'inbox_list']) assert.equal(names.includes(name), false);
       if (role === 'worker' || role === 'qa') for (const name of ['iteration_get', 'iteration_list', 'issue_create', 'review_submit']) assert.equal(names.includes(name), false);
       if (role === 'pm') assert.equal(names.includes('design_set'), false);

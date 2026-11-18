@@ -17,7 +17,7 @@ import { currentPlan, isAggregate, planChildren, planCoverage, planScope, valida
 import { inScopeChildren, scopeBinding, scopeState, taskScopeHash } from './scope.js';
 import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSettings } from './inbox.js';
 
-const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get']);
+const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -134,6 +134,41 @@ export class Workflow {
     if (op === 'connection_list') {
       requireRole(actor, 'human', 'lead', 'pm');
       return { connections: s.list('connection', a.workspaceId) };
+    }
+    if (op === 'design_get') {
+      const issue = s.issue(actor, workspace.id, a.issueId);
+      const root = issue.parentId ? s.issue(actor, workspace.id, issue.parentId) : issue;
+      const designId = a.designId ?? root.designId;
+      const design = designId ? s.get<Design>('design', designId) : null;
+      if (design && design.issueId !== root.id) {
+        throw new DomainError('SCOPE_DENIED', 'Design belongs to another requirement', 403);
+      }
+      const rows = s.db.prepare(`
+        SELECT a.data FROM records a
+        JOIN records d ON d.kind = 'design' AND d.id = json_extract(a.data, '$.designId')
+          AND d.workspace_id = a.workspace_id
+        WHERE a.kind = 'approval' AND a.workspace_id = ? AND json_extract(d.data, '$.issueId') = ?
+        ORDER BY a.rowid DESC LIMIT ? OFFSET ?
+      `).all(workspace.id, root.id, a.limit + 1, a.offset) as { data: string }[];
+      return {
+        issueId: issue.id,
+        requirementId: root.id,
+        design,
+        current: !!design && design.id === root.designId,
+        decisions: rows.slice(0, a.limit).map(row => JSON.parse(row.data)),
+        nextOffset: rows.length > a.limit ? a.offset + a.limit : null
+      };
+    }
+    if (op === 'evidence_get' && ['design_decision','delivery_decision'].includes(a.kind)) {
+      const issue = s.issue(actor, workspace.id, a.issueId);
+      const kind = a.kind === 'design_decision' ? 'approval' : 'delivery_approval';
+      const row = s.db.prepare('SELECT data FROM records WHERE kind = ? AND id = ? AND workspace_id = ?')
+        .get(kind, a.evidenceId, workspace.id) as { data: string } | undefined;
+      if (!row) throw new DomainError('NOT_FOUND', 'Decision evidence not found', 404);
+      const evidence = JSON.parse(row.data);
+      const issueId = kind === 'approval' ? s.get<Design>('design', evidence.designId).issueId : evidence.issueId;
+      if (issueId !== issue.id) throw new DomainError('SCOPE_DENIED', 'Decision belongs to another issue', 403);
+      return { evidence };
     }
     const issues = s.list<Issue>('issue', a.workspaceId).filter(i => !['worker','qa'].includes(actor.role) || ((actor.role === 'worker' ? i.assignee : i.qaAssignee) === (actor.principalId ?? actor.id) && (!actor.runId || s.get<Run>('run', actor.runId).issueId === i.id)));
     if (op === 'issue_get') {

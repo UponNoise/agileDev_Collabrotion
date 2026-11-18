@@ -16,6 +16,7 @@ const entries = {
   defect_get: all,
   workspace_list: all,
   issue_get: all,
+  design_get: all,
   issue_list: all,
   integration_get: all,
   artifact_read: all,
@@ -84,6 +85,7 @@ const purposes: Record<string, string> = {
   iteration_close: 'Explicitly close an iteration with complete member versions and unfinished carry-over/backlog dispositions; seal historical summary without changing issue lifecycle.',
   workspace_list: 'List only workspaces authorized for this agent. Select an explicit workspace for all subsequent commands.',
   issue_get: 'Read the assigned issue, current versions, readiness blockers, and legal next actions.',
+  design_get: 'Expand the current or named historical design, captured requirement scope and criteria. A readable child resolves to its requirement. Decision history is paginated and preserves the recorded reasons.',
   issue_list: 'List scoped issues with pagination. Creation never starts work.',
   issue_create: 'Create an unstarted requirement or task. Child titles use [Type] Area: action -> outcome.',
   plan_get: 'Read current or historical decomposition, criterion coverage, overlap reasons and blockers. Default coverage is paginated; full explicitly expands task scope and versions.',
@@ -110,7 +112,7 @@ const purposes: Record<string, string> = {
 };
 
 const extraPurposes: Record<string, string> = {
-  evidence_get: 'Expand one existing evidence record for this issue and kind; returns captured provenance without creating approvals.',
+  evidence_get: 'Expand one existing evidence record for this issue and kind, including recorded human design_decision and delivery_decision reasons.',
   iteration_create: 'Create an optional planning iteration with explicit dates and time zone; never starts work.',
   iteration_update: 'Update current iteration metadata using its version; preserves approval and issue lifecycle.',
   iteration_start: 'Explicitly start a planned iteration; no issue starts or gate transitions follow.',
@@ -134,7 +136,7 @@ export function toolsForRole(role: Role): Operation[] {
   return role === 'human' ? [] : (Object.keys(entries) as Operation[]).filter(operation => permitsOperation(role, operation));
 }
 export const advertisedOperations = (Object.keys(entries) as Operation[]).filter(operation => entries[operation].some(role => role !== 'human'));
-const readOperations = new Set<Operation>('workspace_list connection_list issue_get issue_list run_get run_list gap_list event_list check_profile_list qa_check_get evidence_get grant_list plan_get integration_get artifact_read scope_get iteration_list iteration_get defect_list defect_get'.split(' ') as Operation[]);
+const readOperations = new Set<Operation>('workspace_list connection_list issue_get design_get issue_list run_get run_list gap_list event_list check_profile_list qa_check_get evidence_get grant_list plan_get integration_get artifact_read scope_get iteration_list iteration_get defect_list defect_get'.split(' ') as Operation[]);
 export const isReadOperation = (operation: Operation) => readOperations.has(operation);
 export function toolDescription(operation: Operation) {
   const purpose = purposes[operation] ?? extraPurposes[operation];
@@ -149,7 +151,7 @@ export function roleInstructions(role: Role) {
     worker: 'Read your assigned issue and approved scope. Only the coordinator claims managed work. Renew your exact lease and submit actual files; ask PM to dispatch or reconcile missing ownership.',
     qa: 'Independently check your assigned sealed delivery using approved profiles. Submit criterion-level results and captured evidence. Never implement, approve or accept the worker delivery.'
   }[role];
-  return `${task} Read current versions before mutations. Every operation remains subject to service authorization. Queued is not running, a model exit is not QA evidence, and no agent message or prose is human approval. Resolve blockers or wait for their accountable owner. Future design/message/consult tools are unavailable until implemented.`;
+  return `${task} Use design_get to expand the design and its recorded decisions. Read current versions before mutations. Every operation remains subject to service authorization. Queued is not running, a model exit is not QA evidence, and no agent message or prose is human approval. Resolve blockers or wait for their accountable owner.`;
 }
 
 const fieldDescriptions: Record<string, string> = {
@@ -161,7 +163,7 @@ const fieldDescriptions: Record<string, string> = {
   "expectedVersion": "Current target version from its latest read; stale writes must reload.",
   "idempotencyKey": "Fresh unique key for one mutation intent; reuse only for an unchanged retry.",
   "candidateId": "Exact sealed candidate ID from the current issue packet.",
-  "designId": "Exact design revision ID from the current issue packet.",
+  "designId": "Exact design revision ID from the issue or its authorized design history.",
   "scopeRevision": "Approved scope revision from the current issue packet.",
   "fence": "Current ownership fence returned by the managed claim; never invent or reuse an expired fence.",
   "actorId": "Enrolled actor ID from an authorized assignment or enrollment record.",

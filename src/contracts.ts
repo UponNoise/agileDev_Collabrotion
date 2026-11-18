@@ -94,6 +94,12 @@ export const schemas = {
   actor_enroll: z.object({ ...scoped, ...mutation, role: z.enum(['lead', 'pm', 'worker', 'qa']), name: z.string().min(1).max(120) }).strict(),
   issue_create: z.object({ ...scoped, ...mutation, parentId: id.optional(), expectedParentVersion: z.number().int().positive().optional(), title: z.string().min(1).max(300), description: z.string().max(65536).default(''), criteria: z.array(id).max(100).default([]), artifactMode: z.enum(['git', 'artifact']).optional(), artifactReason: text.optional() }).strict(),
   issue_get: z.object(target).strict(),
+  design_get: z.object({
+    ...target,
+    designId: id.optional(),
+    offset: z.number().int().nonnegative().default(0),
+    limit: z.number().int().min(1).max(100).default(20)
+  }).strict(),
   issue_list: z.object({ ...scoped, state: z.enum(states).optional(), limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().min(0).default(0) }).strict(),
   issue_update: z.object({ ...change, title: z.string().min(1).max(300).optional(), description: z.string().max(65536).optional(), criteria: z.array(id).max(100).optional(),...schedule,memberships: z.array(iterationMembershipPreconditionSchema).max(100).default([]) },retiredIterationError).strict(),
   plan_apply: z.object({ ...change,memberships: z.array(iterationMembershipPreconditionSchema).max(100).default([]),expectedPlanId: id.nullable().default(null),designId: id.nullable(),mode: z.enum(['DRAFT','READY']),tasks: z.array(planTask).max(100),integrationCriteria: z.array(id).max(100).default([]),overlapReasons: z.record(id,text).refine(value => Object.keys(value).length <= 100).default({}),reason: text }).strict(),
@@ -128,7 +134,7 @@ export const schemas = {
   qa_check_run: z.object({ ...change, profileId: id, testFiles: z.array(z.string().min(1).max(500)).min(1).max(20) }).strict(),
   qa_check_get: z.object({ ...scoped, checkId: id }).strict(),
   qa_report_submit: z.object({ ...change, candidateId: id, verdict: z.enum(['PASS','FAIL','BLOCKED']), summary: text, results: z.array(z.object({ criterionId: id, result: z.enum(['PASS','FAIL','BLOCKED','NOT_RUN']), evidenceIds: z.array(id).max(100), reason: text }).strict()).min(1).max(100), findings: z.array(z.object({ criterionId: id, severity: z.enum(['BLOCKER','MAJOR','MINOR','INFO']), expected: text, actual: text, reproduce: text }).strict()).max(100).default([]) }).strict(),
-  evidence_get: z.object({ ...target, kind: z.enum(['snapshot','qa_report','review','git_submission','git_attempt','git_binding','defect','scope_decision']), evidenceId: id }).strict(),
+  evidence_get: z.object({ ...target, kind: z.enum(['snapshot','qa_report','review','git_submission','git_attempt','git_binding','defect','scope_decision','design_decision','delivery_decision']), evidenceId: id }).strict(),
   delivery_decide: deliveryDecisionSchema,
   git_submit: z.object({ ...change, candidateId: id, commitUrl: z.string().min(1).max(1000), additionalCommits: z.array(z.object({ repository: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/), commitUrl: z.string().min(1).max(1000) }).strict()).max(20).default([]) }).strict(),
   git_retry: z.object({ ...change, submissionId: id }).strict(),
