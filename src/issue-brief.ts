@@ -43,6 +43,32 @@ const remedies: Record<string, [message: string, role: Party, operation?: Operat
   MULTI_REPOSITORY_CLOSURE_UNSUPPORTED: ['Inspect the repository references before closing.', 'lead', 'evidence_get']
 };
 
+const commandRemedies: Record<string, [action: string, role: Party | 'caller', operation?: Operation]> = {
+  VERSION_CONFLICT: ['Reload the issue, run, defect or iteration before retrying with its current version.', 'caller'],
+  IDEMPOTENCY_CONFLICT: ['Replay with the original arguments or use a fresh key for a new intent.', 'caller'],
+  INVALID_INPUT: ['Correct the arguments using the command input schema.', 'caller'],
+  UNKNOWN_OPERATION: ['Use an operation from the current tool catalog.', 'caller'],
+  ROLE_DENIED: ['Use an operation in this role profile or ask the responsible role to act.', 'caller'],
+  SCOPE_DENIED: ['Select a target in your assigned scope or ask the owner to inspect access.', 'caller'],
+  UNAUTHENTICATED: ['Ask the owner to verify the credential and reconnect.', 'human'],
+  NOT_FOUND: ['Refresh the scoped target list before retrying.', 'caller'],
+  NOT_READY: ['Read the current brief and resolve its blockers before retrying.', 'caller', 'issue_get'],
+  STALE_FENCE: ['Read the current lease and ask PM to reconcile if ownership changed.', 'caller', 'issue_get'],
+  RUN_UNCERTAIN: ['Confirm the previous execution stopped before reconciling.', 'human', 'run_reconcile'],
+  EXECUTION_BINDING_REQUIRED: ['Queue a managed assignment at the approved scope.', 'pm', 'work_dispatch'],
+  REVIEW_INDEPENDENCE_REQUIRED: ['Check the current independent QA assignment and its sealed snapshot.', 'qa', 'issue_get'],
+  APPROVAL_STALE: ['Refresh the reviewed issue and present the current evidence for a new decision.', 'caller', 'issue_get'],
+  SERVICE_UNAVAILABLE: ['Ask the owner to inspect the local service and reconnect when available.', 'human'],
+  INTERNAL_ERROR: ['Ask the owner to inspect the local service before retrying.', 'human']
+};
+
+export function commandFailure(code: string, message: string, details?: unknown) {
+  const rule = Object.hasOwn(commandRemedies, code) ? commandRemedies[code] : undefined;
+  const blocker = Object.hasOwn(remedies, code) ? remedies[code] : undefined;
+  const [action, role, operation] = rule ?? blocker ?? ['Inspect the current evidence before retrying.', 'caller'];
+  return { code, message, details: details ?? null, remedy: { role, action, ...(operation ? { operation } : {}) } };
+}
+
 export function blockerDetail(code: string, issueId: string, retryGit: boolean) {
   const rule = Object.hasOwn(remedies, code) ? remedies[code] : undefined;
   const [message, role, operation] = rule ?? (

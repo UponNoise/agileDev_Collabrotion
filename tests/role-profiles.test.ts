@@ -124,7 +124,11 @@ test('HTTP profiles deny before preconditions and preserve assigned issue/worksp
     for (const operation of ['delivery_decide', 'design_decide', 'actor_enroll', 'work_claim']) {
       const before = f.unchanged();
       const response = await server.inject({ method: 'POST', url: `/api/command/${operation}`, headers: { host: '127.0.0.1', authorization: `Bearer ${agent.token}` }, payload: { expectedVersion: -1 } });
-      assert.equal(response.statusCode, 403, `${role}: ${operation}`); assert.equal(response.json().error.code, 'ROLE_DENIED'); assert.equal(f.unchanged(), before);
+      assert.equal(response.statusCode, 403, `${role}: ${operation}`);
+      assert.equal(response.json().error.code, 'ROLE_DENIED');
+      assert.equal(response.json().error.details, null);
+      assert.match(response.json().error.remedy.action, /role profile/);
+      assert.equal(f.unchanged(), before);
     }
   }
   const read = async (operation: string, input: object) => server.inject({ method: 'POST', url: `/api/command/${operation}`, headers: { host: '127.0.0.1', authorization: `Bearer ${f.agents.worker.token}` }, payload: input });
@@ -158,7 +162,11 @@ test('real stdio MCP advertises complete described role profiles and rejects for
       for (const tool of tools) { assert.ok(tool.description?.includes('Preconditions:')); assert.ok(tool.description?.includes('Rejections:')); described(tool.inputSchema); }
       for (const name of ['delivery_decide', 'work_claim', ...(role === 'worker' || role === 'qa' ? ['iteration_get'] : [])]) {
         const result = await client.callTool({ name, arguments: { expectedVersion: -1, iteration: 'legacy' } });
-        assert.equal(result.isError, true); assert.equal(JSON.parse((result.content as any)[0].text).error.code, 'ROLE_DENIED');
+        assert.equal(result.isError, true);
+        const failure = JSON.parse((result.content as any)[0].text).error;
+        assert.equal(failure.code, 'ROLE_DENIED');
+        assert.equal(failure.details, null);
+        assert.match(failure.remedy.action, /role profile/);
       }
       const result = await client.callTool({ name: 'workspace_list', arguments: {} }); assert.equal(result.isError, undefined);
       assert.equal((result.structuredContent as any).workspaces[0].id, f.workspace.id);

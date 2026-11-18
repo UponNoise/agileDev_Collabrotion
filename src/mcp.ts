@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { DomainError, schemas, type Operation } from './contracts.js';
 import { describedInput, isReadOperation, roleInstructions, toolDescription, toolsForRole } from './agent-profiles.js';
+import { commandFailure } from './issue-brief.js';
 import { LocalClient } from './client.js';
 
 export async function connectMcp(client: LocalClient) {
@@ -27,7 +28,10 @@ export async function connectMcp(client: LocalClient) {
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result };
     } catch (error) {
       const code = error instanceof DomainError ? error.code : 'SERVICE_UNAVAILABLE';
-      return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: { code, message: error instanceof DomainError ? error.message : 'The local service is unavailable', details: error instanceof DomainError ? error.details : undefined } }) }] };
+      const failure = error instanceof DomainError
+        ? commandFailure(code, error.message, error.details)
+        : commandFailure(code, 'The local service is unavailable');
+      return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: failure }) }] };
     }
   });
   await server.connect(new StdioServerTransport());

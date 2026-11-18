@@ -326,6 +326,10 @@ This stacked implementation awaits publication of accepted R2. The following tab
 
 `design_get` reads the current design for a scoped issue's requirement, including the captured requirement and criteria. A readable child resolves to its parent requirement. Pass `designId` for an older revision of that requirement. Decision history is newest first, with a default page of 20 and an optional `nextOffset`. Expand one decision with `evidence_get` and kind `design_decision` or `delivery_decision`, using the issue that owns the record.
 
+Agent `issue_get` defaults to a summary with the issue identity and state, responsible parties for blockers, design and rejection references, and suggested `nextActions`. Each action contains the operation and the known arguments for the current target. Fill in the other required inputs from the tool schema and use a unique idempotency key for each new mutation. A role may still wait for a workflow step while it can propose a defect. If `blockerCount` exceeds the visible blockers or the brief lacks a needed field, use `view: "full"` for the full authorized packet. The human web view uses full detail.
+
+Agent `issue_list`, `run_list` and `defect_list` default to compact pages of up to 20. Expand a specific record with its read tool, or request `view: "full"` with the existing scope and page limits. Command errors include `code`, `message`, `details` and a `remedy` naming the responsible party and any applicable operation.
+
 <!-- B23_PROFILE_REFERENCE_START -->
 | Role | Advertised operations |
 | --- | --- |
