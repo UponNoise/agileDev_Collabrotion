@@ -60,7 +60,7 @@ export interface IssueData {
     blocking: string[];
     children: Coverage['children'];
   } | null;
-  nextActions: string[];
+  nextActions: { operation: string; args: Record<string, unknown> }[];
   history: {
     sequence: number;
     actorId: string;

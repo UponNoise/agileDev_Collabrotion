@@ -120,6 +120,49 @@ test('draft creation, immutable IDs and rendered parent-title lineage', () => {
   assert.match(brief.issue.title, /^Reliable workspace binding——/);
 });
 
+test('issue brief reports the responsible party and binds a dispatchable action to the approved scope', () => {
+  const f = setup();
+  const task = f.task();
+  f.assign(task);
+  const blocked = f.run(f.worker.actor, 'issue_get', { issueId: task.id });
+  const approval = blocked.blockers.find((item: any) => item.code === 'DESIGN_APPROVAL_REQUIRED');
+  assert.equal(approval.remedy.role, 'lead');
+  assert.equal(approval.remedy.operation, 'design_set');
+  assert.deepEqual(approval.subjects, [f.parent.id]);
+  assert.equal(blocked.waitingOn.role, 'lead');
+  assert.equal(blocked.nextActions.some((item: any) => item.operation === 'work_claim'), false);
+
+  f.approve();
+  const planned = f.run(f.pm.actor, 'issue_get', { issueId: task.id });
+  const dispatch = planned.nextActions.find((item: any) => item.operation === 'work_dispatch');
+  assert.equal(dispatch.args.designId, planned.design.id);
+  assert.equal(dispatch.args.scopeRevision, planned.issue.scopeRevision);
+  assert.equal(dispatch.args.expectedVersion, planned.issue.version);
+  assert.equal(planned.design.decision.reason, 'Approve this exact test design');
+  assert.equal(planned.waitingOn, null);
+  const result = f.run(f.pm.actor, dispatch.operation, dispatch.args);
+  assert.equal(result.run.state, 'QUEUED');
+  assert.equal(result.run.issueId, task.id);
+});
+
+test('agent issue and list defaults omit unbounded content and allow scoped expansion', () => {
+  const f = setup();
+  const task = f.task();
+  f.assign(task);
+  const description = 'Long acceptance requirement 窗口自适应🚀\r\n'.repeat(800);
+  f.change(f.lead.actor, 'issue_update', task.id, { description });
+  const brief = f.run(f.worker.actor, 'issue_get', { issueId: task.id });
+  const expanded = f.run(f.worker.actor, 'issue_get', { issueId: task.id, view: 'full' });
+  const page = f.run(f.worker.actor, 'issue_list');
+  assert.equal(brief.view, 'summary');
+  assert.ok(Buffer.byteLength(JSON.stringify(brief)) <= 2000);
+  assert.equal(Object.hasOwn(brief.issue, 'description'), false);
+  assert.equal(page.issues[0].id, task.id);
+  assert.equal(Object.hasOwn(page.issues[0], 'description'), false);
+  assert.equal(expanded.issue.description, description);
+  assert.equal(f.run(f.human.actor, 'issue_get', { issueId: task.id }).issue.description, description);
+});
+
 test('schema and role boundaries prevent injected state, human decisions and enrollment', () => {
   const f = setup();
   assert.throws(() => f.run(f.lead.actor, 'issue_create', { title: 'Injected', state: 'DONE' }), rejects('INVALID_INPUT'));

@@ -100,7 +100,11 @@ test('logical workers cannot claim and every heartbeat/submission binds the exac
     const job = f.jobs[0]!; const principal = f.store.get<Actor>('actor',job.actorId);
     const change = (actor: Actor,op: string,extra: object = {}) => { const issue = f.store.get<Issue>('issue',job.issueId); return f.flow.execute(actor,op,{ workspaceId: f.workspace.id,issueId: issue.id,expectedVersion: issue.version,designId: job.designId,scopeRevision: job.scopeRevision,...extra,idempotencyKey: randomUUID() }); };
     assert.throws(() => change(principal,'work_claim'),(e: any) => e.code === 'ROLE_DENIED');
-    assert.deepEqual((f.flow.execute(principal,'issue_get',{ workspaceId: f.workspace.id,issueId: job.issueId }) as any).nextActions,['defect_propose']);
+    const brief = f.flow.execute(principal,'issue_get',{ workspaceId: f.workspace.id, issueId: job.issueId }) as any;
+    assert.deepEqual(brief.nextActions, [{ operation: 'defect_propose', args: {
+      workspaceId: f.workspace.id, issueId: job.issueId, expectedVersion: brief.issue.version
+    } }]);
+    assert.equal(brief.waitingOn.role, 'coordinator');
     await f.coordinator.tick(); await waitFor(() => adapter.contexts.length === 1);
     const context = adapter.contexts[0]!; const actor = f.store.authenticate(context.token);
     const baseline = f.store.get<Run>('run',job.id);
