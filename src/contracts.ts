@@ -1,3 +1,4 @@
+import { advertisedOperations } from './agent-profiles.js';
 import { defectCoreSchemas, defectFindingSchema } from './defect-contracts.js';
 import { iterationSchemas, iterationMembershipPreconditionSchema } from './iteration-contracts.js';
 import { z } from 'zod';
@@ -136,4 +137,4 @@ export const schemas = {
   event_list: z.object({ ...scoped, after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }).strict(),
 } as const;
 export type Operation = keyof typeof schemas;
-export const agentOperations = Object.keys(schemas).filter(k => !k.startsWith('ui_') && !['actor_enroll', 'design_decide', 'workspace_register', 'workspace_git_bind', 'check_profile_create', 'delivery_decide', 'grant_create', 'grant_revoke','scope_decide','work_reconcile','inbox_list','inbox_settings_get','inbox_settings_update','defect_report','defect_triage','defect_withdraw'].includes(k)) as Operation[];
+export const agentOperations = advertisedOperations;

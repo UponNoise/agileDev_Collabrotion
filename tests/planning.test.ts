@@ -21,7 +21,7 @@ function fixture(criteria = ['A', 'B', 'ASSEMBLY']) {
   cleanup.push(() => rmSync(source,{ recursive: true,force: true }));
   const human = store.bootstrap().actor;
   const call = (actor: Actor, op: string, input: object) =>
-    flow.execute(actor, op, {
+    (op === 'work_claim' ? flow.claimReservedWork.bind(flow,actor) : flow.execute.bind(flow,actor,op))({
       ...input,
       ...(['plan_get', 'issue_get'].includes(op) ? {} : { idempotencyKey: randomUUID() })
     }) as any;

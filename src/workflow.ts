@@ -1,3 +1,4 @@
+import { permitsOperation } from './agent-profiles.js';
 import { DefectRegistry } from './defects.js';
 import { IterationService, iterationIssueView, rejectLegacyIterationWrite } from './iterations.js';
 import { isIterationOperation, iterationReadOperations } from './iteration-contracts.js';
@@ -28,8 +29,16 @@ export class Workflow {
     store.db.transaction(() => store.list<Workspace>('workspace').forEach(workspace => this.defects().migrate(workspace.id))).immediate();
   }
   execute(actor: Actor, operation: string, input: unknown): unknown {
-    if (!(operation in schemas)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
+    if (!Object.hasOwn(schemas, operation)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
     const op = operation as Operation;
+    if (!permitsOperation(actor.role, op)) throw new DomainError('ROLE_DENIED', 'Operation is outside this role profile', 403);
+    return this.executeAuthorized(actor, op, input);
+  }
+  claimReservedWork(actor: Actor, input: unknown): unknown {
+    requireRole(actor, 'worker');
+    return this.executeAuthorized(actor, 'work_claim', input);
+  }
+  private executeAuthorized(actor: Actor, op: Operation, input: unknown): unknown {
     if (input && typeof input === 'object') {
       if (op === 'issue_update') rejectLegacyIterationWrite(input as Record<string, unknown>);
       if (op === 'plan_apply' && Array.isArray((input as any).tasks)) for (const task of (input as any).tasks) if (task && typeof task === 'object') rejectLegacyIterationWrite(task);

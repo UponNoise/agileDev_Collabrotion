@@ -93,7 +93,7 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     assert.notEqual(qa.cwd,worker.cwd); assert.equal(f.store.authenticate(qa.token).role,'qa'); assert.equal(qa.harness,'dsh');
     assert.equal(readFileSync(join(qa.cwd,'contract.txt'),'utf8'),'preserve this independent file');
     const check = await f.check(qa); assert.equal(check.state,'PASSED'); assert.equal(check.exitCode,0); assert.match(check.stdout!,/exact-content check passed/); assert.equal(check.snapshotId,snapshot.id); assert.ok(check.pid);
-    await assert.rejects(new LocalClient(qa.endpoint,qa.token).command('review_submit',{ workspaceId: f.workspace.id,issueId: f.issue.id,expectedVersion: f.current(f.issue.id).version,candidateId: candidate.id,verdict: 'PASS',reason: 'Narrative shortcut',idempotencyKey: randomUUID() }),(e: any) => e.code === 'EVIDENCE_MISSING');
+    await assert.rejects(new LocalClient(qa.endpoint,qa.token).command('review_submit',{ workspaceId: f.workspace.id,issueId: f.issue.id,expectedVersion: f.current(f.issue.id).version,candidateId: candidate.id,verdict: 'PASS',reason: 'Narrative shortcut',idempotencyKey: randomUUID() }),(e: any) => e.code === 'ROLE_DENIED');
     await f.report(qa,check.id); assert.equal(f.current(f.issue.id).state,'QA_TEST');
     assert.equal((await f.complete(qa)).state,'SUCCEEDED'); assert.equal(f.current(f.issue.id).stage,'FINAL');
     f.finalReview(); assert.throws(() => f.delivery('ACCEPT','old-digest'),(e: any) => e.code === 'APPROVAL_STALE');
