@@ -34,17 +34,21 @@ export interface CheckProfile { id: string; workspaceId: string; name: string; c
 export interface CheckRun { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; profileId: string; profileHash: string; state: 'QUEUED' | 'RUNNING' | 'PASSED' | 'FAILED' | 'UNCERTAIN'; criteria: string[]; testFiles: { path: string; hash: string }[]; createdAt: string; startedAt?: string; finishedAt?: string; command?: string; args?: string[]; pid?: number; exitCode?: number | null; stdout?: string; stderr?: string; errorCode?: string }
 export interface QaReport { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; verdict: 'PASS' | 'FAIL' | 'BLOCKED'; results: { criterionId: string; result: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_RUN'; evidenceIds: string[]; reason: string }[]; findings: { criterionId: string; severity: 'BLOCKER' | 'MAJOR' | 'MINOR' | 'INFO'; expected: string; actual: string; reproduce: string }[]; summary: string; messageIds?: string[] }
 export const liveRunStates = ['QUEUED', 'STARTING', 'RUNNING', 'STOPPING', 'UNCERTAIN'] as const;
-export interface Run {
+interface RunFields {
   id: string; issueId: string; workspaceId: string; actorId: string; harness: Harness;
   state: typeof liveRunStates[number] | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
-  version: number; createdAt: string; designId: string; scopeRevision: number;
+  version: number; createdAt: string; scopeRevision: number;
   coordinatorId?: string; executionActorId?: string; executionRoot?: string; baseSha?: string;
   providerSessionId?: string; pid?: number; startedAt?: string; finishedAt?: string;
   budgetMs?: number; coordinatorConcurrency?: number;
-  kind?: 'implementation' | 'qa'; candidateId?: string; snapshotId?: string; reportId?: string; checkProfileIds?: string[];
+  candidateId?: string; snapshotId?: string; reportId?: string; checkProfileIds?: string[];
   messageIds?: string[];
   lastHeartbeatAt?: string; summary?: string; errorCode?: string; stopReason?: string;
 }
+export type Run = RunFields & (
+  | { kind?: 'implementation' | 'qa'; designId: string }
+  | { kind: 'consult'; designId: string | null; consult: { questionId: string; mode: 'fresh' } }
+);
 export interface Issue {
   id: string; workspaceId: string; key: string; parentId: string | null; title: string; description: string;
   state: State; stage: 'PRE_QA' | 'FINAL' | null; version: number; scopeRevision: number;

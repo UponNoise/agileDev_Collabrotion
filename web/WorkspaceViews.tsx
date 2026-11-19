@@ -476,7 +476,7 @@ export function Runs({
               <tr key={run.id}>
                 <td>
                   <button className="text-button" onClick={() => setSelected(run)}>
-                    {run.kind === 'qa' ? t('QA') : t('Worker')} · {run.id.slice(0, 8)}
+                    {run.kind === 'consult' ? t('Consult') : run.kind === 'qa' ? t('QA') : t('Worker')} · {run.id.slice(0, 8)}
                   </button>
                 </td>
                 <td>{harnessName(run.harness)}</td>

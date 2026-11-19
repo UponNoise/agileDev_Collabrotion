@@ -3,6 +3,7 @@ import { z, ZodError } from 'zod';
 import { Actor, DomainError } from './contracts.js';
 import { Store } from './store.js';
 import { Workflow } from './workflow.js';
+import type { ConsultAvailability } from './consult.js';
 import { WebSessions,browserCookie } from './web-session.js';
 import { commandFailure } from './issue-brief.js';
 import fastifyStatic from '@fastify/static';
@@ -11,11 +12,11 @@ import { dirname,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 declare module 'fastify' { interface FastifyRequest { actor: Actor; browserSession?: string } }
-export function createServer(store: Store, lifecycle?: { instance: string; stop(): Promise<void> }) {
+export function createServer(store: Store, lifecycle?: { instance: string; stop(): Promise<void> }, consultAvailable?: ConsultAvailability) {
   const app = Fastify({ logger: false, bodyLimit: 262144, requestTimeout: 15000 });
   const shutdown = new AbortController();
   app.addHook('preClose', async () => { shutdown.abort(); });
-  const workflow = new Workflow(store);
+  const workflow = new Workflow(store, Date.now, consultAvailable);
   const sessions = new WebSessions(store);
   app.addHook('onRequest', async (request,reply) => {
     reply.headers({ 'cache-control': 'no-store','referrer-policy': 'no-referrer','x-content-type-options': 'nosniff','x-frame-options': 'DENY','content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" });
@@ -53,7 +54,9 @@ export function createServer(store: Store, lifecycle?: { instance: string; stop(
     reply.raw.once('finish', () => { void lifecycle.stop(); });
     return { ok: true };
   });
-  app.get('/api/session', request => ({ actor: request.actor,...(request.browserSession ? { csrf: sessions.csrf(request.browserSession) } : {}) }));
+  app.get('/api/session', request => ({ actor: request.actor,
+    ...(workflow.consultRun(request.actor) ? { profile: 'consult' } : {}),
+    ...(request.browserSession ? { csrf: sessions.csrf(request.browserSession) } : {}) }));
   app.get('/api/ui/status',request => {
     const cookie = sessions.cookie(request.headers.cookie);
     if (cookie) { try { return { authenticated: true,actor: sessions.authenticate(cookie),csrf: sessions.csrf(cookie) }; } catch {} }
@@ -78,6 +81,7 @@ export function createServer(store: Store, lifecycle?: { instance: string; stop(
   app.post('/api/connection', request => {
     if (request.actor.role === 'human') throw new DomainError('HUMAN_CREDENTIAL_DENIED', 'MCP transport metadata requires an agent credential', 403);
     const client = z.object({ name: z.string().max(200), version: z.string().max(100) }).strict().parse(request.body);
+    if (workflow.consultRun(request.actor)) return { ok: true };
     const connection = { id: request.actor.sessionId, actorId: request.actor.id, client, initializedAt: new Date().toISOString(), verification: 'client_reported_metadata' };
     store.put('connection', connection, request.actor.workspaceIds[0]);
     if (request.actor.workspaceIds[0]) store.event(request.actor.workspaceIds[0],request.actor,'connection_initialized',connection.id,{ client });

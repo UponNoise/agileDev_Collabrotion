@@ -4,7 +4,7 @@ import { DomainError, type Actor, type Issue, type QaReport, type Role, type Run
 import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import type { Store } from './store.js';
 import { briefText } from './issue-brief.js';
-import { wakeSettings } from './consult.js';
+import { admitConsult, consultDelivery, type ConsultAvailability } from './consult.js';
 
 type AgentRole = Exclude<Role, 'human'>;
 type Reader = Pick<Actor, 'id' | 'principalId' | 'role'>;
@@ -26,7 +26,7 @@ function oversightRole(role: Role) {
 }
 
 export class IssueMessages {
-  constructor(private store: Store, private now = Date.now) {}
+  constructor(private store: Store, private now = Date.now, private consultAvailable?: ConsultAvailability) {}
 
   private logicalAgent(issue: Issue, id: string): Actor {
     const unavailable = () => new DomainError('MESSAGE_RECIPIENT_UNAVAILABLE', 'Select an enrolled agent with access to this issue');
@@ -41,9 +41,9 @@ export class IssueMessages {
     }
   }
 
-  private resolveRecipient(issue: Issue, sender: Actor, input: MessageSend['recipient']): Recipient {
+  private resolveRecipient(issue: Issue, sender: Actor, input: MessageSend['recipient'], ownerReply: boolean): Recipient {
     if (input.kind === 'owner') {
-      if (sender.role !== 'lead' && sender.role !== 'pm') throw new DomainError('MESSAGE_OWNER_DENIED', 'Only an issue lead or PM can address the owner', 403);
+      if (!ownerReply && sender.role !== 'lead' && sender.role !== 'pm') throw new DomainError('MESSAGE_OWNER_DENIED', 'Only an issue lead or PM can initiate a message to the owner', 403);
       return { kind: 'owner' };
     }
     let id: string | null | undefined;
@@ -64,7 +64,7 @@ export class IssueMessages {
     return { kind: 'actor', actorId: actor.id, role: actor.role as AgentRole };
   }
 
-  private visible(actor: Reader, issue: Issue, limit: number, after = 0, id: string | null = null) {
+  private visible(actor: Reader, issue: Issue, limit: number, after = 0, id: string | null = null, newest = false) {
     const principal = actor.principalId ?? actor.id;
     const rows = this.store.db.prepare(`
       SELECT rowid, data FROM records
@@ -72,9 +72,29 @@ export class IssueMessages {
         AND json_extract(data, '$.issueId') = ?
         AND (? OR json_extract(data, '$.sender.principalId') = ? OR json_extract(data, '$.recipient.actorId') = ?)
         AND rowid > ? AND (? IS NULL OR id = ?)
-      ORDER BY rowid LIMIT ?
+      ORDER BY rowid ${newest ? 'DESC' : 'ASC'} LIMIT ?
     `).all(issue.workspaceId, issue.id, Number(oversightRole(actor.role)), principal, principal, after, id, id, limit) as { rowid: number; data: string }[];
     return rows.map(row => ({ rowid: row.rowid, message: JSON.parse(row.data) as IssueMessage }));
+  }
+
+  consultContext(actor: Actor, issue: Issue) {
+    this.store.issue(actor, issue.workspaceId, issue.id);
+    this.requireActiveRun(actor);
+    return this.visible(actor, issue, 6, 0, null, true).reverse().map(({ message }) => ({ ...message, body: briefText(message.body, 200) }));
+  }
+
+  answeredQuestion(question: IssueMessage, executionActorId?: string) {
+    const recipient = question.recipient;
+    if (recipient.kind !== 'actor') return false;
+    return !!this.store.db.prepare(`
+      SELECT 1 FROM records WHERE kind = 'issue_message' AND workspace_id = ?
+        AND json_extract(data, '$.issueId') = ? AND json_extract(data, '$.kind') = 'REPLY'
+        AND json_extract(data, '$.replyTo') = ? AND json_extract(data, '$.sender.principalId') = ?
+        AND (? IS NULL OR json_extract(data, '$.sender.actorId') = ?)
+        AND (json_extract(data, '$.recipient.actorId') = ? OR (? AND json_extract(data, '$.recipient.kind') = 'owner'))
+      LIMIT 1
+    `).get(question.workspaceId, question.issueId, question.id, recipient.actorId, executionActorId ?? null, executionActorId ?? null,
+      question.sender.principalId, Number(question.sender.role === 'human'));
   }
 
   private visibleReference(actor: Reader, issue: Issue, id: string) {
@@ -96,11 +116,21 @@ export class IssueMessages {
     const visible = this.visible(actor, issue, input.limit + 1, cursor);
     const full = actor.role === 'human' || input.view === 'full';
     const messages = visible.slice(0, input.limit).map(({ message }) => {
-      if (full) return message;
+      const delivery = message.kind === 'QUESTION' ? this.delivery(message) : undefined;
+      const row = delivery ? { ...message, delivery } : message;
+      if (full) return row;
       const body = briefText(message.body, 160);
-      return { ...message, body, bodyTruncated: body !== message.body };
+      return { ...row, body, bodyTruncated: body !== message.body };
     });
     return { messages, nextCursor: visible.length > input.limit ? messages.at(-1)!.id : null };
+  }
+
+  private delivery(question: IssueMessage) {
+    const row = this.store.db.prepare(`
+      SELECT data FROM records WHERE kind = 'run' AND workspace_id = ?
+        AND json_extract(data, '$.kind') = 'consult' AND json_extract(data, '$.consult.questionId') = ?
+    `).get(question.workspaceId, question.id) as { data: string } | undefined;
+    return row ? consultDelivery(JSON.parse(row.data) as Extract<Run, { kind: 'consult' }>) : undefined;
   }
 
   private pendingQuestions(workspaceId: string, issueId: string | null, actorId: string | null, limit: number) {
@@ -165,8 +195,12 @@ export class IssueMessages {
         question.recipient.kind === 'actor' ? question.recipient.actorId : null, Number(question.recipient.kind === 'owner'),
         question.sender.principalId, Number(question.sender.role === 'human')) as { data: string } | undefined;
       if (reply) return { status: 'REPLIED', reply: JSON.parse(reply.data) as IssueMessage };
+      const delivery = this.delivery(question);
+      if (delivery && ['FAILED', 'CANCELLED', 'UNCERTAIN'].includes(delivery.state)) {
+        return { status: 'UNANSWERED', reply: null, delivery };
+      }
       const remaining = deadline - performance.now();
-      if (remaining <= 0) return { status: 'TIMED_OUT', reply: null };
+      if (remaining <= 0) return { status: 'TIMED_OUT', reply: null, ...(delivery ? { delivery } : {}) };
       try {
         await waitFor(Math.min(250, remaining), undefined, { signal });
       } catch (error) {
@@ -225,9 +259,13 @@ export class IssueMessages {
   send(actor: Actor, input: MessageSend) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
     this.requireActiveRun(actor);
-    const recipient = this.resolveRecipient(issue, actor, input.recipient);
+    const run = actor.runId ? this.store.get<Run>('run', actor.runId) : null;
+    if (run?.kind === 'consult' && run.issueId !== issue.id) throw new DomainError('SCOPE_DENIED', 'Consult messages belong to the question thread', 403);
+    const reference = input.replyTo ? this.visibleReference(actor, issue, input.replyTo).message : undefined;
+    const ownerReply = input.kind === 'REPLY' && reference?.kind === 'QUESTION' && reference.sender.role === 'human' &&
+      reference.recipient.kind === 'actor' && reference.recipient.actorId === (actor.principalId ?? actor.id);
+    const recipient = this.resolveRecipient(issue, actor, input.recipient, ownerReply);
     if (input.replyTo) {
-      this.visibleReference(actor, issue, input.replyTo);
       if (recipient.kind === 'actor') this.visibleReference({ id: recipient.actorId, role: recipient.role }, issue, input.replyTo);
     }
     const message: IssueMessage = {
@@ -239,8 +277,12 @@ export class IssueMessages {
     this.store.put('issue_message', message, issue.workspaceId);
     this.recordQaDelivery(actor, issue, message);
     this.store.event(issue.workspaceId, actor, 'message_sent', message.id, { issueId: issue.id, kind: message.kind, replyTo: message.replyTo });
-    let reason = 'WAKE_NOT_REQUESTED';
-    if (input.wake) reason = wakeSettings(this.store, issue.workspaceId).enabled ? 'WAKE_UNAVAILABLE' : 'WAKE_DISABLED';
-    return { message, delivery: { state: 'STORED', reason } };
+    const delivery = input.wake
+      ? admitConsult(this.store, actor, issue, message, this.now(), this.consultAvailable)
+      : { state: 'STORED', reason: 'WAKE_NOT_REQUESTED' };
+    if (input.wake && delivery.state === 'STORED') {
+      this.store.event(issue.workspaceId, actor, 'consult_declined', message.id, { issueId: issue.id, reason: delivery.reason });
+    }
+    return { message, delivery };
   }
 }

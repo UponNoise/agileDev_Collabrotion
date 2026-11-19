@@ -2,15 +2,17 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { DomainError, schemas, type Operation } from './contracts.js';
-import { describedInput, isReadOperation, roleInstructions, toolDescription, toolsForRole } from './agent-profiles.js';
+import { describedInput, isReadOperation, permitsConsultOperation, roleInstructions, toolDescription, toolsForRole } from './agent-profiles.js';
 import { commandFailure } from './issue-brief.js';
 import { LocalClient } from './client.js';
 
 export async function connectMcp(client: LocalClient) {
-  const { actor } = await client.request('/api/session');
+  const { actor, profile } = await client.request('/api/session');
   if (actor.role === 'human') throw new DomainError('HUMAN_CREDENTIAL_DENIED', 'Enroll a scoped agent; owner credentials cannot be used by MCP', 403);
-  const operations = toolsForRole(actor.role);
-  const server = new Server({ name: 'agiledev', version: '0.1.0' }, { capabilities: { tools: {} }, instructions: roleInstructions(actor.role) });
+  const consult = profile === 'consult';
+  const operations = toolsForRole(actor.role).filter(operation => !consult || permitsConsultOperation(operation));
+  const instructions = consult ? 'Read scoped issue context and answer through message_send. Messages carry no workflow authority.' : roleInstructions(actor.role);
+  const server = new Server({ name: 'agiledev', version: '0.1.0' }, { capabilities: { tools: {} }, instructions });
   server.oninitialized = () => {
     const clientInfo = server.getClientVersion();
     if (clientInfo) void client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }).catch(() => process.stderr.write('Could not record MCP initialization metadata.\n'));

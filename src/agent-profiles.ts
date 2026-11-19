@@ -143,6 +143,11 @@ export function permitsOperation(role: Role, operation: Operation): boolean {
 export function toolsForRole(role: Role): Operation[] {
   return role === 'human' ? [] : (Object.keys(entries) as Operation[]).filter(operation => permitsOperation(role, operation));
 }
+const consultOperations = new Set<Operation>([
+  'issue_get', 'design_get', 'integration_get', 'artifact_read', 'evidence_get', 'defect_get',
+  'message_list', 'message_wait', 'message_send'
+]);
+export const permitsConsultOperation = (operation: Operation) => consultOperations.has(operation);
 export const advertisedOperations = (Object.keys(entries) as Operation[]).filter(operation => entries[operation].some(role => role !== 'human'));
 const readOperations = new Set<Operation>('workspace_list connection_list issue_get design_get issue_list run_get run_list gap_list event_list check_profile_list qa_check_get evidence_get grant_list plan_get integration_get artifact_read scope_get iteration_list iteration_get defect_list defect_get message_list message_wait'.split(' ') as Operation[]);
 export const isReadOperation = (operation: Operation) => readOperations.has(operation);

@@ -46,7 +46,7 @@ export async function serve(dataDir: string) {
     process.exit(0);
   };
   let app: ReturnType<typeof createServer>;
-  try { store = new Store(join(dataDir, 'workflow.sqlite')); app = createServer(store, { instance, stop }); }
+  try { store = new Store(join(dataDir, 'workflow.sqlite')); app = createServer(store, { instance, stop }, harness => coordinator?.canConsult(harness) === true); }
   catch (error) { store?.close(); release(); throw error; }
   try {
     const endpoint = await app.listen({ host: '127.0.0.1', port: Number(process.env.AGILEDEV_PORT ?? 43170) });

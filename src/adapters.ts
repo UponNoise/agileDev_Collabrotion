@@ -11,10 +11,14 @@ import { terminateTree } from './execution.js';
 export interface AdapterResult { outcome: 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; errorCode?: string; summary?: string }
 export interface AdapterContext {
   harness: Harness; cwd: string; directory: string; prompt: string; endpoint: string; token: string; bridgeScript: string;
+  kind?: 'consult';
   onPid(pid: number): void; onProvider(id: string): void; onOutput(text: string): void;
 }
 export interface RunningSession { result: Promise<AdapterResult>; interrupt(): Promise<boolean> }
-export interface ExecutionAdapter { start(context: AdapterContext): Promise<RunningSession> }
+export interface ExecutionAdapter {
+  start(context: AdapterContext): Promise<RunningSession>;
+  supportsConsult?(harness: Harness): boolean;
+}
 export function declaredDshRoute(profile: string): { provider: string; model: string } | null {
   const lines = profile.split(/\r?\n/); const start = lines.findIndex(line => line === '- id: agent-default-model');
   if (start < 0) return null;
@@ -41,10 +45,17 @@ export function decodeNativeEvent(harness: Harness, event: any) {
     if (event.type === 'system' && event.subtype === 'init') return { sessionId: event.session_id as string };
     if (event.type === 'result') return { sessionId: event.session_id as string, terminal: event.is_error || event.subtype !== 'success' ? 'failed' as const : 'succeeded' as const, text: String(event.result ?? event.errors?.join('\n') ?? '') };
   }
-  if (harness === 'dsh' && event.method === 'session.event') {
-    const item = event.params?.event;
-    if (item?.type === 'turn/end') return { terminal: item.data?.reason?.kind === 'completed' ? 'succeeded' as const : 'failed' as const };
-    if (item?.type === 'assistant/message' && Array.isArray(item.data?.message?.content)) return { text: item.data.message.content.filter((block: any) => block.type === 'text' && typeof block.text === 'string').map((block: any) => block.text).join('') as string };
+  if (harness === 'dsh') {
+    if (event.type === 'session') return { sessionId: event.sessionId as string };
+    if (event.type === 'final') return {
+      sessionId: event.sessionId as string, terminal: event.reason?.kind === 'completed' ? 'succeeded' as const : 'failed' as const,
+      text: typeof event.text === 'string' ? event.text : ''
+    };
+    if (event.method === 'session.event') {
+      const item = event.params?.event;
+      if (item?.type === 'turn/end') return { terminal: item.data?.reason?.kind === 'completed' ? 'succeeded' as const : 'failed' as const };
+      if (item?.type === 'assistant/message' && Array.isArray(item.data?.message?.content)) return { text: item.data.message.content.filter((block: any) => block.type === 'text' && typeof block.text === 'string').map((block: any) => block.text).join('') as string };
+    }
   }
   return {};
 }
@@ -65,8 +76,13 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
     if (line.length > 1024 * 1024) { malformed = true; return; }
     let event: any;
     try { event = JSON.parse(line); } catch { return; }
+    if (!event || typeof event !== 'object') return;
     const decoded = decodeNativeEvent(entry.id, event);
-    if (decoded.sessionId && typeof decoded.sessionId === 'string') { sessionId = decoded.sessionId; context.onProvider(sessionId); }
+    if (decoded.sessionId && typeof decoded.sessionId === 'string') {
+      if (context.kind === 'consult' && sessionId && sessionId !== decoded.sessionId) { malformed = true; return; }
+      sessionId = decoded.sessionId;
+      context.onProvider(sessionId);
+    }
     if (decoded.terminal) terminal = decoded.terminal;
     if (decoded.text) { summary = redact(decoded.text).slice(-16000); context.onOutput(summary); }
     listener?.(event);
@@ -95,6 +111,11 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
 function harnessEnvironment(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries({ ...process.env,...extra }).filter(([key]) => key.toUpperCase() !== 'AGILEDEV_GITHUB_TOKEN'));
 }
+function writeDshMcpPatch(c: AdapterContext) {
+  const patch = join(c.directory, 'dsh.patch.yml');
+  writeFileSync(patch, `- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`, { mode: 0o600 });
+  return patch;
+}
 async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSession> {
   let provider = process.env.AGILEDEV_DSH_PROVIDER; let model = process.env.AGILEDEV_DSH_MODEL;
   if (!provider && !model) {
@@ -102,8 +123,7 @@ async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSe
     const declared = declaredDshRoute(stdout); provider = declared?.provider; model = declared?.model;
   }
   if (!provider || !model) throw new DomainError('PROVIDER_CONFIGURATION_REQUIRED', 'SDK profile has no readable static default route. Set both AGILEDEV_DSH_PROVIDER and AGILEDEV_DSH_MODEL; no substitute route is selected.');
-  const patch = join(c.directory, 'dsh.patch.yml');
-  writeFileSync(patch, `- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`);
+  const patch = writeDshMcpPatch(c);
   const p = processSession(entry, ['--profile', 'sdk', '--patch', patch], c);
   const pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
   let sequence = 0;
@@ -137,19 +157,32 @@ async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSe
   return p;
 }
 export class NativeAdapter implements ExecutionAdapter {
-  constructor(private entries: () => HarnessEntry[] = discoverHarnesses) {}
+  constructor(
+    private entries: () => HarnessEntry[] = discoverHarnesses,
+    private verifiedFresh: ReadonlySet<Harness> = new Set()
+  ) {}
+  supportsConsult(harness: Harness) {
+    return this.verifiedFresh.has(harness) && this.entries().some(entry => entry.id === harness);
+  }
   async start(c: AdapterContext): Promise<RunningSession> {
+    const consult = c.kind === 'consult';
+    if (consult && !this.verifiedFresh.has(c.harness)) throw new DomainError('HARNESS_UNAVAILABLE', 'Native fresh consult support has not been verified');
     const entry = this.entries().find(e => e.id === c.harness);
     if (!entry) throw new DomainError('HARNESS_UNAVAILABLE', 'Selected harness executable was not found');
     mkdirSync(c.directory, { recursive: true });
-    if (c.harness === 'dsh') return dshSdk(entry, c);
+    if (c.harness === 'dsh' && !consult) return dshSdk(entry, c);
     let args: string[];
-    if (c.harness === 'codex') {
-      args = ['exec', '--json', '--sandbox', 'workspace-write', '--cd', c.cwd, '--skip-git-repo-check', '-c', `mcp_servers.agiledev.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.agiledev.args=${JSON.stringify([c.bridgeScript, 'mcp'])}`, '-c', 'mcp_servers.agiledev.env_vars=["AGILEDEV_TOKEN","AGILEDEV_ENDPOINT"]', '-c', 'mcp_servers.agiledev.required=true', '-c', 'mcp_servers.agiledev.default_tools_approval_mode="approve"', '-'];
+    if (c.harness === 'dsh') {
+      args = ['--profile', 'headless', '--patch', writeDshMcpPatch(c), '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
+    } else if (c.harness === 'codex') {
+      args = ['exec', '--json', '--sandbox', consult ? 'read-only' : 'workspace-write', '--cd', c.cwd, '--skip-git-repo-check', '-c', `mcp_servers.agiledev.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.agiledev.args=${JSON.stringify([c.bridgeScript, 'mcp'])}`, '-c', 'mcp_servers.agiledev.env_vars=["AGILEDEV_TOKEN","AGILEDEV_ENDPOINT"]', '-c', 'mcp_servers.agiledev.required=true', '-c', 'mcp_servers.agiledev.default_tools_approval_mode="approve"'];
+      if (consult) args.push('-c', 'approval_policy="never"');
+      args.push('-');
     } else {
       const config = join(c.directory, 'mcp.json');
       writeFileSync(config, JSON.stringify({ mcpServers: { agiledev: { type: 'stdio', command: process.execPath, args: [c.bridgeScript, 'mcp'], env: { AGILEDEV_ENDPOINT: c.endpoint, AGILEDEV_TOKEN: '${AGILEDEV_TOKEN}' } } } }), { mode: 0o600 });
-      args = ['--print', '--verbose', '--output-format', 'stream-json', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', config, '--session-id', randomUUID(), '--allowedTools', 'mcp__agiledev__*'];
+      args = ['--print', '--verbose', '--output-format', 'stream-json', '--permission-mode', consult ? 'dontAsk' : 'acceptEdits', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', config, '--session-id', randomUUID(), '--allowedTools', 'mcp__agiledev__*'];
+      if (consult) args.push('--tools', '', '--disable-slash-commands');
     }
     const p = processSession(entry, args, c); p.child.stdin.end(c.prompt);
     return p;
