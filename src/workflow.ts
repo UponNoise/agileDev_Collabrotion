@@ -401,12 +401,10 @@ export class Workflow {
   private inboxPolicy(): InboxPolicy {
     return {
       delivery: issue => {
-        let digest: string | null = null;
-        try { digest = acceptanceDigest(this.store,issue); } catch {}
         try {
-          const blockers = this.closureBlockers(issue);
+          const { digest, blockers, unacknowledgedMinors } = this.closureAssessment(issue);
           return { digest, accepted: !!digest && !blockers.some(code =>
-            code === 'HUMAN_ACCEPTANCE_REQUIRED' || code === 'MINOR_ACKNOWLEDGEMENT_REQUIRED'), blockers };
+            code === 'HUMAN_ACCEPTANCE_REQUIRED' || code === 'MINOR_ACKNOWLEDGEMENT_REQUIRED'), blockers, unacknowledgedMinors };
         }
         catch (error) { return { digest: null,accepted: false,blockers: [error instanceof DomainError ? error.code : 'EVIDENCE_STALE'] }; }
       },
@@ -665,6 +663,9 @@ export class Workflow {
     return this.save(actor,'qa_review_completed',issue,{ reviewId: review.id, reportId: report.id, verdict: report.verdict });
   }
   closureBlockers(issue: Issue) {
+    return this.closureAssessment(issue).blockers;
+  }
+  private closureAssessment(issue: Issue) {
     const s = this.store; const blockers: string[] = [];
     let digest: string | undefined;
     try { digest = acceptanceDigest(s,issue); } catch (error) { blockers.push(error instanceof DomainError ? error.code : 'EVIDENCE_STALE'); }
@@ -679,8 +680,9 @@ export class Workflow {
     if (s.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && (liveRunStates as readonly string[]).includes(r.state))) blockers.push('RUN_STILL_LIVE');
     const openDefects = s.list<any>('defect',issue.workspaceId).filter(d => d.issueId === issue.id && d.state === 'OPEN');
     if (openDefects.some(d => d.severity === 'BLOCKER' || d.severity === 'MAJOR')) blockers.push('UNRESOLVED_DEFECTS');
-    if (openDefects.some(d => d.severity === 'MINOR' && !approved?.acknowledgedMinors?.some((risk: { id: string; version: number }) =>
-      risk.id === d.id && risk.version === d.version))) blockers.push('MINOR_ACKNOWLEDGEMENT_REQUIRED');
+    const missingMinors = openDefects.filter(d => d.severity === 'MINOR' && !approved?.acknowledgedMinors?.some((risk: { id: string; version: number }) =>
+      risk.id === d.id && risk.version === d.version)).map(({ id, version }) => ({ id, version }));
+    if (missingMinors.length) blockers.push('MINOR_ACKNOWLEDGEMENT_REQUIRED');
     const workspace = s.get<Workspace>('workspace',issue.workspaceId);
     if ((issue.artifactMode ?? (workspace.commonDir ? 'git' : 'artifact')) === 'git') {
       if (!issue.gitSubmissionId) blockers.push('GIT_VERIFICATION_REQUIRED');
@@ -702,7 +704,7 @@ export class Workflow {
         }
       }
     }
-    return [...new Set(blockers)];
+    return { digest: digest ?? null, blockers: [...new Set(blockers)], unacknowledgedMinors: approved ? missingMinors : [] };
   }
   completeGit(attempt: GitAttempt) {
     return this.store.db.transaction(() => {

@@ -309,6 +309,16 @@ test('a minor defect confirmed after acceptance blocks closure until explicitly 
       expectedIssueVersion: f.current(f.issue.id).version, action: 'CONFIRM', severity: 'MINOR',
       observation: packet().defects.observation, reason: 'Confirm this test observation', idempotencyKey: randomUUID()
     }) as any;
+    const aged = new Workflow(f.store, () => Date.now() + 48 * 3600000);
+    const inbox = () => (aged.execute(f.human, 'inbox_list', { workspaceId: f.workspace.id }) as any).entries.find((entry: any) => entry.issueId === f.issue.id);
+    const triageEvent = f.store.db.prepare("SELECT sequence, at FROM events WHERE target_id = ? AND operation = 'defect_triaged'").get(proposal.id) as { sequence: number; at: string };
+    assert.equal(inbox().kind, 'DELIVERY_ACCEPTANCE');
+    assert.equal(inbox().pendingSequence, triageEvent.sequence);
+    assert.equal(inbox().pendingSince, triageEvent.at);
+    assert.ok((aged.execute(f.human, 'gap_list', { workspaceId: f.workspace.id }) as any).gaps.some((gap: any) =>
+      gap.issueId === f.issue.id && gap.code === 'HUMAN_DECISION_AGING'));
+    f.change('issue_update', f.issue.id, { dueDate: '2026-12-01' });
+    assert.equal(inbox().pendingSequence, triageEvent.sequence);
     const close = f.change('delivery_complete', f.issue.id, {}, f.lead);
     assert.deepEqual(close.closureBlocked, ['MINOR_ACKNOWLEDGEMENT_REQUIRED']);
     assert.equal(f.current(f.issue.id).state, 'USER_ACCEPTANCE');
@@ -316,6 +326,7 @@ test('a minor defect confirmed after acceptance blocks closure until explicitly 
     const renewed = f.delivery();
     assert.deepEqual(renewed.approval.acknowledgedMinors, [{ id: proposal.id, version: open.defect.version }]);
     assert.equal(renewed.issue.state, 'DONE');
+    assert.equal(inbox(), undefined);
     assert.equal(packet().defects.observation.snapshotHash, snapshot.hash);
   } finally { await verifier.close(); await f.close(); }
 });

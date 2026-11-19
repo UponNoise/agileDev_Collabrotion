@@ -1,4 +1,4 @@
-import { Actor, Design, DomainError, InboxKind, Issue, Run, Workspace, inboxKinds } from './contracts.js';
+import { Actor, Design, DomainError, InboxKind, Issue, Run, Workspace, inboxKinds, type AcknowledgedMinor } from './contracts.js';
 import { scopeState, taskScopeHash } from './scope.js';
 import { canonical, hash, Store } from './store.js';
 
@@ -13,7 +13,7 @@ interface AuditEvent {
 }
 interface Epoch { sequence: number; at: string | null }
 export interface InboxPolicy {
-  delivery(issue: Issue): { digest: string | null; accepted: boolean; blockers: string[] };
+  delivery(issue: Issue): { digest: string | null; accepted: boolean; blockers: string[]; unacknowledgedMinors?: AcknowledgedMinor[] };
   unmanaged(issue: Issue): boolean;
 }
 export interface InboxEntry {
@@ -99,6 +99,13 @@ class History {
       if (!matches(shadow)) return this.epoch(event);
     }
     return null;
+  }
+  minorAcknowledgement(issue: Issue, risks: AcknowledgedMinor[], accepted: Epoch | null) {
+    const triggers = risks.map(({ id, version }) => this.for(id).findLast(event =>
+      ['defect_created', 'defect_triaged'].includes(event.operation) && event.data?.issueId === issue.id && event.data.version === version));
+    if (triggers.some(event => !event)) return null;
+    const first = triggers.filter(event => event !== undefined).sort((a, b) => a.sequence - b.sequence)[0];
+    return first && accepted && accepted.sequence > first.sequence ? accepted : this.epoch(first);
   }
   run(run: Run) {
     let state: string | null = null; let pending: AuditEvent | null = null;
@@ -204,10 +211,14 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
       const delivery = policy.delivery(issue); const fingerprint = issueFingerprint(issue);
       const accepted = !!delivery.digest && delivery.accepted;
       const kind = accepted ? 'CLOSURE_BLOCKED' : 'DELIVERY_ACCEPTANCE';
-      const epoch = history().own(issue, value => acceptanceState(value) === 'USER_ACCEPTANCE' && issueFingerprint(value) === fingerprint && (accepted ? value.acceptedDigest === delivery.digest : value.acceptedDigest !== delivery.digest || delivery.digest === null));
+      const reacknowledge = delivery.unacknowledgedMinors ?? [];
+      const epoch = history().own(issue, value => acceptanceState(value) === 'USER_ACCEPTANCE' && issueFingerprint(value) === fingerprint &&
+        (accepted || reacknowledge.length ? value.acceptedDigest === delivery.digest : value.acceptedDigest !== delivery.digest || delivery.digest === null));
       const blockers = delivery.blockers.filter(code => accepted || code !== 'HUMAN_ACCEPTANCE_REQUIRED');
       if (!delivery.digest && !blockers.length) blockers.push('EVIDENCE_DIGEST_UNAVAILABLE');
-      append(issue, kind, { issueVersion: issue.version, revisionHash: delivery.digest, candidateId: issue.candidate?.id ?? null, digest: delivery.digest }, epoch, !accepted, accepted ? blockers.length ? 'inspect_closure' : 'delivery_complete' : delivery.digest ? 'delivery_decide' : 'inspect_delivery', blockers, accepted ? blockers.length ? 'BLOCKED' : 'READY_TO_COMPLETE' : blockers.length ? 'BLOCKED' : 'WAITING');
+      append(issue, kind, { issueVersion: issue.version, revisionHash: delivery.digest, candidateId: issue.candidate?.id ?? null, digest: delivery.digest },
+        reacknowledge.length ? history().minorAcknowledgement(issue, reacknowledge, epoch) : epoch,
+        !accepted, accepted ? blockers.length ? 'inspect_closure' : 'delivery_complete' : delivery.digest ? 'delivery_decide' : 'inspect_delivery', blockers, accepted ? blockers.length ? 'BLOCKED' : 'READY_TO_COMPLETE' : blockers.length ? 'BLOCKED' : 'WAITING');
     }
     const scope = issue.parentId && (issue.state === 'ABANDONED' || issue.scopeDecisionId) ? scopeState(store, issue) : null;
     if (issue.parentId && scope && (scope.status === 'STALE' || issue.state === 'ABANDONED' && scope.status === 'INCLUDED') && history().scopePending(store, issue)) {
