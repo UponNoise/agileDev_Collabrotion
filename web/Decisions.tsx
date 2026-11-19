@@ -10,9 +10,10 @@ export const decisionKinds: Record<InboxKind, string> = {
   DELIVERY_ACCEPTANCE: 'Delivery acceptance',
   SCOPE_DECISION: 'Scope decision',
   RUN_RECONCILE: 'Execution reconciliation',
-  CLOSURE_BLOCKED: 'Accepted delivery'
+  CLOSURE_BLOCKED: 'Accepted delivery',
+  AGENT_QUESTION: 'Agent question'
 };
-interface Counts { total: number; blocking: number; byKind: Record<InboxKind, number> }
+interface Counts { total: number; blocking: number; attention: number; byKind: Record<InboxKind, number> }
 export interface InboxData {
   entries: InboxEntry[];
   total: number;

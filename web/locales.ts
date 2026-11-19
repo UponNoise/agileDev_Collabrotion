@@ -1,5 +1,6 @@
 const pairs: [string, string][] = [
   ['Decisions', '待我决策'],
+  ['Agent question', 'Agent 提问'],
   ['Risks included in this decision', '本次决策包含的风险'],
   ['PROPOSED', '待确认'],
   ['OPEN', '待解决'],
@@ -61,7 +62,7 @@ const pairs: [string, string][] = [
   ['Historical labels are read-only and do not create iteration records.', '历史标签仅供查看，不会自动创建迭代记录。'],
   ['Human decisions', '人工决策'],
   ['Only human decisions. Inspect the current revision, delivery, scope, or execution before deciding.', '仅列出需要人工处理的事项。请先查看当前修订、交付、范围或执行记录。'],
-  ['Blocking decisions across all readable workspaces', '所有可读工作区的阻塞决策数'],
+  ['Items awaiting your attention across all workspaces', '所有工作区的待办数'],
   ['Decision workspace', '决策工作区'],
   ['All readable workspaces', '所有可读工作区'],
   ['Decision kind', '决策类型'],

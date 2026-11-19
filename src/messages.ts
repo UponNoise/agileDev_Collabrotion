@@ -89,6 +89,44 @@ export class IssueMessages {
     return { messages, nextCursor: visible.length > input.limit ? messages.at(-1)!.id : null };
   }
 
+  private pendingQuestions(workspaceId: string, issueId: string | null, actorId: string | null, limit: number) {
+    const rows = this.store.db.prepare(`
+      SELECT q.data, count(*) OVER () AS pendingCount FROM records q
+      WHERE q.kind = 'issue_message' AND q.workspace_id = @workspaceId
+        AND (@issueId IS NULL OR json_extract(q.data, '$.issueId') = @issueId)
+        AND json_extract(q.data, '$.kind') = 'QUESTION'
+        AND ((@actorId IS NULL AND json_extract(q.data, '$.recipient.kind') = 'owner')
+          OR json_extract(q.data, '$.recipient.actorId') = @actorId)
+        AND NOT EXISTS (
+          SELECT 1 FROM records r
+          WHERE r.kind = 'issue_message' AND r.workspace_id = q.workspace_id
+            AND json_extract(r.data, '$.issueId') = json_extract(q.data, '$.issueId')
+            AND json_extract(r.data, '$.kind') = 'REPLY' AND json_extract(r.data, '$.replyTo') = q.id
+            AND ((@actorId IS NULL AND json_extract(r.data, '$.sender.role') = 'human')
+              OR json_extract(r.data, '$.sender.principalId') = @actorId)
+            AND (json_extract(r.data, '$.recipient.actorId') = json_extract(q.data, '$.sender.principalId')
+              OR (json_extract(r.data, '$.recipient.kind') = 'owner' AND json_extract(q.data, '$.sender.role') = 'human'))
+        )
+      ORDER BY q.rowid LIMIT @limit
+    `).all({ workspaceId, issueId, actorId, limit }) as { data: string; pendingCount: number }[];
+    return { pendingCount: rows[0]?.pendingCount ?? 0, questions: rows.map(row => JSON.parse(row.data) as IssueMessage) };
+  }
+
+  ownerQuestions(workspaceId: string) {
+    return this.pendingQuestions(workspaceId, null, null, -1).questions;
+  }
+
+  summary(actor: Actor, issue: Issue) {
+    const principal = actor.principalId ?? actor.id;
+    const { visibleCount } = this.store.db.prepare(`
+      SELECT count(*) AS visibleCount FROM records
+      WHERE kind = 'issue_message' AND workspace_id = ? AND json_extract(data, '$.issueId') = ?
+        AND (? OR json_extract(data, '$.sender.principalId') = ? OR json_extract(data, '$.recipient.actorId') = ?)
+    `).get(issue.workspaceId, issue.id, Number(oversightRole(actor.role)), principal, principal) as { visibleCount: number };
+    if (!visibleCount) return null;
+    return { visibleCount, ...this.pendingQuestions(issue.workspaceId, issue.id, actor.role === 'human' ? null : principal, 2) };
+  }
+
   async wait(actor: Actor, input: MessageWait, signal?: AbortSignal) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
     const question = this.visibleReference(actor, issue, input.questionId).message;

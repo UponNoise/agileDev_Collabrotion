@@ -285,6 +285,15 @@ export class Workflow {
     } : null;
     const status = issue.state === 'NOT_STARTED' && activeRun?.state === 'QUEUED'
       ? 'Managed dispatch is queued.' : issueStatus(issue, readiness.ready && !activeRun);
+    const messages = new IssueMessages(s).summary(actor, issue);
+    const discussion = messages ? {
+      visibleCount: messages.visibleCount,
+      pendingCount: messages.pendingCount,
+      questions: messages.questions.map(question => ({
+        id: question.id, senderId: question.sender.principalId, senderRole: question.sender.role,
+        preview: briefText(question.body, 90)
+      }))
+    } : null;
     if (!full) {
       const defectCounts = s.db.prepare(`
         SELECT
@@ -301,6 +310,7 @@ export class Workflow {
           : designBrief,
         lastRejection: lastRejection ? { ...lastRejection, reason: shorten(lastRejection.reason) } : null,
         defects: defectCounts,
+        ...(discussion ? { discussion } : {}),
         view: 'summary' as const
       };
       while (brief.blockers.length > 1 && Buffer.byteLength(JSON.stringify(brief)) > 1990) brief.blockers.pop();
@@ -322,6 +332,7 @@ export class Workflow {
       defects: { observation: registry.observe(issue), decisionSet: registry.confirmedSet(actor, workspace.id, issue.id) },
       executionRecovery,
       deliveryDigest, git, closureBlocked, view: 'full' as const,
+      ...(discussion ? { discussion } : {}),
       ...(decisionRisks ? { decisionRisks } : {}),
       ...(designRisks ? { designRisks } : {}),
       planning: coverage ? { planId: root.planId ?? null, ready: coverage.ready, status: coverage.status, blocking: coverage.blocking, children: coverage.children } : null,

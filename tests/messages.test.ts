@@ -77,6 +77,11 @@ test('thread pages, references and direct addressing preserve worker and QA inde
   assert.throws(() => f.send(f.qa.actor, actorTarget(f.worker.actor.id)), failure('MESSAGE_INDEPENDENCE_REQUIRED'));
   const workerNote = f.send(f.worker.actor, role('lead')).message;
   const question = f.send(f.lead.actor, role('qa'), { kind: 'QUESTION' }).message;
+  const qaBrief = f.flow.execute(f.qa.actor, 'issue_get', f.thread) as any;
+  assert.equal(qaBrief.discussion.visibleCount, 1);
+  assert.equal(qaBrief.discussion.pendingCount, 1);
+  assert.equal(qaBrief.discussion.questions[0].id, question.id);
+  assert.ok(!JSON.stringify(qaBrief).includes(workerNote.id));
   const qaReply = f.send(f.qa.actor, role('lead'), { kind: 'REPLY', replyTo: question.id }).message;
   const workerReply = f.send(f.lead.actor, role('worker'), { kind: 'REPLY', replyTo: workerNote.id }).message;
   const ids = (page: { messages: { id: string }[] }) => page.messages.map(message => message.id);
@@ -85,6 +90,8 @@ test('thread pages, references and direct addressing preserve worker and QA inde
   assert.equal(first.nextCursor, workerNote.id);
   assert.deepEqual(ids(f.list(f.worker.actor, { cursor: first.nextCursor })), [workerReply.id]);
   assert.deepEqual(ids(f.list(f.qa.actor)), [question.id, qaReply.id]);
+  assert.equal((f.flow.execute(f.qa.actor, 'issue_get', f.thread) as any).discussion.pendingCount, 0);
+  assert.equal((f.flow.execute(f.worker.actor, 'issue_get', f.thread) as any).discussion.visibleCount, 2);
   assert.deepEqual(ids(f.list(f.pm.actor)), [workerNote.id, question.id, qaReply.id, workerReply.id]);
   assert.throws(() => f.list(f.worker.actor, { cursor: qaReply.id }), failure('MESSAGE_NOT_VISIBLE'));
   assert.throws(() => f.send(f.qa.actor, role('lead'), { kind: 'REPLY', replyTo: workerNote.id }), failure('MESSAGE_NOT_VISIBLE'));
@@ -154,4 +161,34 @@ test('bounded wait only returns a reply from the addressed recipient and never w
   assert.equal(canonical(f.store.db.prepare('SELECT * FROM receipts ORDER BY rowid').all()), before);
   const answer = f.send(f.lead.actor, role('worker'), { kind: 'REPLY', replyTo: question.id }).message;
   assert.deepEqual(await wait(f.worker.actor, 0), { status: 'REPLIED', reply: answer });
+});
+
+test('the owner inbox derives one card per unanswered lead or PM question', async t => {
+  const f = fixture(t);
+  const { workspaceId } = f.thread;
+  const before = canonical(f.current());
+  const input = { kind: 'QUESTION', body: 'Should the fixture scope stay unchanged?', idempotencyKey: randomUUID() };
+  const question = f.send(f.lead.actor, { kind: 'owner' }, input).message;
+  assert.equal(f.send(f.lead.actor, { kind: 'owner' }, input).replayed, true);
+  const inbox = () => f.flow.execute(f.owner.actor, 'inbox_list', { workspaceId, kind: 'AGENT_QUESTION' }) as any;
+  const first = inbox();
+  assert.equal(first.summary.byKind.AGENT_QUESTION, 1);
+  assert.equal(first.summary.attention, 1);
+  assert.equal(first.summary.blocking, 0);
+  assert.equal(first.entries[0].target.messageId, question.id);
+  assert.equal(first.entries[0].question.body, input.body);
+  assert.equal(first.entries[0].question.senderId, f.lead.actor.id);
+  assert.equal(first.entries[0].ageProvenance, 'AUDIT_EVENT');
+  assert.throws(() => f.flow.execute(f.lead.actor, 'inbox_list', { workspaceId }), failure('ROLE_DENIED'));
+  assert.equal((f.flow.execute(f.worker.actor, 'issue_get', f.thread) as any).discussion, undefined);
+  assert.equal((f.flow.execute(f.owner.actor, 'issue_get', f.thread) as any).discussion.pendingCount, 1);
+
+  f.send(f.owner.actor, actorTarget(f.pm.actor.id), { kind: 'REPLY', replyTo: question.id });
+  assert.equal(inbox().entries[0].id, first.entries[0].id);
+  const answer = f.send(f.owner.actor, actorTarget(f.lead.actor.id), { kind: 'REPLY', replyTo: question.id, body: 'Yes, keep the fixture scope.' }).message;
+  assert.equal(inbox().summary.byKind.AGENT_QUESTION, 0);
+  assert.equal(inbox().summary.attention, 0);
+  assert.equal(inbox().total, 0);
+  assert.equal(canonical(f.current()), before);
+  assert.deepEqual(await f.flow.execute(f.lead.actor, 'message_wait', { ...f.thread, questionId: question.id, timeoutMs: 0 }), { status: 'REPLIED', reply: answer });
 });

@@ -1,6 +1,7 @@
 import { Actor, Design, DomainError, InboxKind, Issue, Run, Workspace, inboxKinds, type AcknowledgedMinor } from './contracts.js';
 import { scopeState, taskScopeHash } from './scope.js';
 import { canonical, hash, Store } from './store.js';
+import { IssueMessages } from './messages.js';
 
 export { inboxKinds } from './contracts.js';
 export type { InboxKind } from './contracts.js';
@@ -18,7 +19,8 @@ export interface InboxPolicy {
 }
 export interface InboxEntry {
   id: string; kind: InboxKind; workspaceId: string; workspaceName: string; issueId: string; key: string; title: string; url: string;
-  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null };
+  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string };
+  question?: { body: string; senderId: string; senderName: string };
   blocking: boolean; status: 'WAITING' | 'BLOCKED' | 'READY_TO_COMPLETE'; blockers: string[]; nextAction: string;
   pendingSince: string | null; pendingSequence: number | null; ageMs: number | null; ageProvenance: 'AUDIT_EVENT' | 'UNAVAILABLE'; clockSkew: boolean;
 }
@@ -192,7 +194,7 @@ export function updateInboxSettings(store: Store, actor: Actor, input: { workspa
   return { settings: result };
 }
 
-function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: number, allowedIssueIds?: ReadonlySet<string>): InboxEntry[] {
+function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: number, includeOwnerQuestions: boolean, allowedIssueIds?: ReadonlySet<string>): InboxEntry[] {
   const issues = store.list<Issue>('issue', workspace.id).filter(issue => !allowedIssueIds || allowedIssueIds.has(issue.id));
   let loadedHistory: History | undefined;
   const history = () => loadedHistory ??= new History(store, workspace);
@@ -200,7 +202,9 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
   const append = (issue: Issue, kind: InboxKind, target: InboxEntry['target'], epoch: Epoch | null, blocking: boolean, nextAction: string, blockers: string[] = [], status: InboxEntry['status'] = 'WAITING') => {
     const since = epoch?.at ?? null; const clockSkew = since !== null && Date.parse(since) > now;
     const title = issue.parentId ? `${store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
-    entries.push({ id: hash(canonical({ workspaceId: workspace.id, issueId: issue.id, kind, identity: target.runId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue.id, key: issue.key, title, url: `/w/${workspace.id}/issues/${issue.id}`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew });
+    const entry: InboxEntry = { id: hash(canonical({ workspaceId: workspace.id, issueId: issue.id, kind, identity: target.runId ?? target.messageId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue.id, key: issue.key, title, url: `/w/${workspace.id}/issues/${issue.id}`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew };
+    entries.push(entry);
+    return entry;
   };
   for (const issue of issues) {
     if (!issue.parentId && issue.designId) {
@@ -230,6 +234,16 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
     if (issue.state !== 'DONE' && policy.unmanaged(issue)) append(issue, 'RUN_RECONCILE', { issueVersion: issue.version, revisionHash: null, candidateId: issue.candidate?.id ?? null, fence: issue.fence }, history().own(issue, value => value.state !== 'DONE' && policy.unmanaged(value)), true, 'work_reconcile', ['UNMANAGED_EXECUTION']);
   }
   const byId = new Map(issues.map(issue => [issue.id, issue]));
+  if (includeOwnerQuestions) {
+    for (const question of new IssueMessages(store).ownerQuestions(workspace.id)) {
+      const issue = byId.get(question.issueId);
+      if (!issue) continue;
+      const audit = history().for(question.id).find(event => event.operation === 'message_sent' && event.data?.issueId === issue.id);
+      const entry = append(issue, 'AGENT_QUESTION', { issueVersion: issue.version, revisionHash: null, messageId: question.id }, history().epoch(audit), false, 'message_send');
+      const sender = store.get<Actor>('actor', question.sender.principalId);
+      entry.question = { body: question.body, senderId: sender.id, senderName: sender.name };
+    }
+  }
   for (const run of store.list<Run>('run', workspace.id)) {
     const issue = byId.get(run.issueId);
     if (run.state === 'UNCERTAIN' && issue) append(issue, 'RUN_RECONCILE', { issueVersion: issue.version, revisionHash: null, runId: run.id, runVersion: run.version }, history().run(run), true, 'run_reconcile', ['RUN_UNCERTAIN']);
@@ -242,8 +256,13 @@ export function inboxList(store: Store, actor: Actor, query: InboxQuery, policy:
   const offset = query.offset ?? 0; const limit = query.limit ?? 20;
   if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100 || query.kind !== undefined && !inboxKinds.includes(query.kind)) throw new DomainError('INVALID_INPUT', 'Invalid inbox filters or page bounds', 400);
   const workspaces = query.workspaceId ? [store.workspace(actor, query.workspaceId)] : store.list<Workspace>('workspace');
-  const all = workspaces.flatMap(workspace => collect(store, workspace, policy, now));
-  const counts = (entries: InboxEntry[]) => ({ total: entries.length, blocking: entries.filter(entry => entry.blocking).length, byKind: Object.fromEntries(inboxKinds.map(kind => [kind, entries.filter(entry => entry.kind === kind).length])) });
+  const all = workspaces.flatMap(workspace => collect(store, workspace, policy, now, true));
+  const counts = (entries: InboxEntry[]) => ({
+    total: entries.length,
+    blocking: entries.filter(entry => entry.blocking).length,
+    attention: entries.filter(entry => entry.blocking || entry.kind === 'AGENT_QUESTION').length,
+    byKind: Object.fromEntries(inboxKinds.map(kind => [kind, entries.filter(entry => entry.kind === kind).length]))
+  });
   const filtered = all.filter(entry => query.kind === undefined || entry.kind === query.kind).sort((a, b) => Number(b.blocking) - Number(a.blocking) || Number(a.pendingSince !== null) - Number(b.pendingSince !== null) || (a.pendingSince !== null && b.pendingSince !== null ? Date.parse(a.pendingSince) - Date.parse(b.pendingSince) : 0) || a.workspaceId.localeCompare(b.workspaceId) || a.id.localeCompare(b.id));
   return { entries: filtered.slice(offset, offset + limit), total: filtered.length, nextOffset: offset + limit < filtered.length ? offset + limit : null, summary: counts(all), workspaces: workspaces.map(workspace => ({ workspaceId: workspace.id, name: workspace.name, ...counts(all.filter(entry => entry.workspaceId === workspace.id)), settings: inboxSettings(store, actor, workspace.id) })), generatedAt: new Date(now).toISOString() };
 }
@@ -251,5 +270,5 @@ export function inboxList(store: Store, actor: Actor, query: InboxQuery, policy:
 export function inboxAgingGaps(store: Store, actor: Actor, workspaceId: string, policy: InboxPolicy, now: number, allowedIssueIds: ReadonlySet<string>): InboxGap[] {
   const workspace = store.workspace(actor, workspaceId);
   const threshold = workspaceSettings(store, workspace.id).agingThresholdHours;
-  return collect(store, workspace, policy, now, allowedIssueIds).filter(entry => entry.pendingSince !== null && entry.ageMs !== null && entry.ageMs > threshold * 3600000).map(entry => ({ issueId: entry.issueId, key: entry.key, code: 'HUMAN_DECISION_AGING', severity: 'advisory', kind: entry.kind, targetId: entry.id, pendingSince: entry.pendingSince!, ageMs: entry.ageMs!, agingThresholdHours: threshold }));
+  return collect(store, workspace, policy, now, actor.role === 'human', allowedIssueIds).filter(entry => entry.pendingSince !== null && entry.ageMs !== null && entry.ageMs > threshold * 3600000).map(entry => ({ issueId: entry.issueId, key: entry.key, code: 'HUMAN_DECISION_AGING', severity: 'advisory', kind: entry.kind, targetId: entry.id, pendingSince: entry.pendingSince!, ageMs: entry.ageMs!, agingThresholdHours: threshold }));
 }

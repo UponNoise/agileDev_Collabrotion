@@ -129,16 +129,16 @@ export function App() {
       setActor(null);
     }
   }, [inbox.error]);
-  const blockingDecisions = actor ? inbox.global?.summary.blocking : undefined;
+  const attentionCount = actor ? inbox.global?.summary.attention : undefined;
   const desktopAttention = useDesktopAttention({
     authenticated: !!actor,
-    blockingCount: blockingDecisions,
+    blockingCount: attentionCount,
     stale: inbox.loading || !!inbox.error,
     openDecisions: () => { navigate(workspaceId, null, 'decisions'); saved(); }
   });
   useEffect(() => {
-    document.title = `${blockingDecisions === undefined ? '' : `(${blockingDecisions}) `}${t('AgileDev — local workspace')}`;
-  }, [blockingDecisions, t]);
+    document.title = `${attentionCount === undefined ? '' : `(${attentionCount}) `}${t('AgileDev — local workspace')}`;
+  }, [attentionCount, t]);
   function openDecision(entry: InboxEntry) {
     navigate(entry.workspaceId, entry.target.runId ? null : entry.issueId, entry.target.runId ? 'runs' : 'reviews', entry.target.runId);
   }
@@ -331,7 +331,7 @@ export function App() {
               >
                 <Icon name={name === 'decisions' ? 'reviews' : name} />
                 {t(labels[name])}
-                {name === 'decisions' ? <span className="decision-count" aria-live="polite" aria-atomic="true" aria-label={`${t('Blocking decisions across all readable workspaces')}: ${blockingDecisions ?? t('Loading…')}${inbox.error ? ' !' : ''}`}>{blockingDecisions ?? '…'}{inbox.error ? ' !' : ''}</span> : null}
+                {name === 'decisions' ? <span className="decision-count" aria-live="polite" aria-atomic="true" aria-label={`${t('Items awaiting your attention across all workspaces')}: ${attentionCount ?? t('Loading…')}${inbox.error ? ' !' : ''}`}>{attentionCount ?? '…'}{inbox.error ? ' !' : ''}</span> : null}
               </button>
             ))}
           </nav>

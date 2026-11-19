@@ -10,7 +10,7 @@ export const harnesses = ['codex', 'claude-code', 'dsh'] as const;
 export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];
-export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED'] as const;
+export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED', 'AGENT_QUESTION'] as const;
 export type InboxKind = typeof inboxKinds[number];
 export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string }
 export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null; gitBindingId?: string }
