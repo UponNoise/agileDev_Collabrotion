@@ -45,7 +45,7 @@ function fixture(t: TestContext) {
     assert.ok(basename(root).startsWith('agiledev-messages-'));
     rmSync(root, { recursive: true, force: true });
   });
-  return { owner, lead, pm, worker, qa, otherWorkspace, enroll, thread, current, send, list, store };
+  return { owner, lead, pm, worker, qa, otherWorkspace, enroll, thread, current, send, list, store, flow };
 }
 
 const role = (name: string) => ({ kind: 'role', role: name });
@@ -113,6 +113,7 @@ test('real stdio sends to an enrolled issue role and receives only its visible H
     await client.connect(transport);
     const { tools } = await client.listTools();
     assert.equal(tools.find(tool => tool.name === 'message_list')?.annotations?.readOnlyHint, true);
+    assert.equal(tools.find(tool => tool.name === 'message_wait')?.annotations?.readOnlyHint, true);
     assert.equal(tools.find(tool => tool.name === 'message_send')?.annotations?.readOnlyHint, false);
     const sent = await client.callTool({ name: 'message_send', arguments: {
       ...f.thread, recipient: role('lead'), kind: 'QUESTION', body: 'Inspect a test issue', idempotencyKey: randomUUID()
@@ -122,7 +123,9 @@ test('real stdio sends to an enrolled issue role and receives only its visible H
     const lead = new LocalClient(endpoint, f.lead.token);
     const visible = await lead.command('message_list', f.thread);
     assert.deepEqual(visible.messages.map((message: any) => message.id), [question.id]);
+    const pending = client.callTool({ name: 'message_wait', arguments: { ...f.thread, questionId: question.id, timeoutMs: 5000 } });
     const reply = await lead.command('message_send', { ...f.thread, recipient: role('worker'), kind: 'REPLY', replyTo: question.id, body: 'Check the sealed evidence', idempotencyKey: randomUUID() });
+    assert.deepEqual((await pending).structuredContent, { status: 'REPLIED', reply: reply.message });
     const page = await client.callTool({ name: 'message_list', arguments: f.thread });
     assert.deepEqual((page.structuredContent as any).messages.map((message: any) => message.id), [question.id, reply.message.id]);
     assert.deepEqual(f.list(f.qa.actor).messages, []);
@@ -130,4 +133,25 @@ test('real stdio sends to an enrolled issue role and receives only its visible H
     await client.close();
     await app.close();
   }
+});
+
+test('bounded wait only returns a reply from the addressed recipient and never writes receipts', async t => {
+  const f = fixture(t);
+  const question = f.send(f.worker.actor, role('lead'), { kind: 'QUESTION' }).message;
+  f.send(f.pm.actor, role('worker'), { kind: 'REPLY', replyTo: question.id });
+  const input = { ...f.thread, questionId: question.id, timeoutMs: 0 };
+  const before = canonical(f.store.db.prepare('SELECT * FROM receipts ORDER BY rowid').all());
+  const wait = (actor: Actor, timeoutMs: number, signal?: AbortSignal) =>
+    f.flow.execute(actor, 'message_wait', { ...input, timeoutMs }, signal);
+  assert.deepEqual(await wait(f.worker.actor, 0), { status: 'TIMED_OUT', reply: null });
+  await assert.rejects(async () => wait(f.pm.actor, 0), failure('MESSAGE_NOT_VISIBLE'));
+  await assert.rejects(async () => wait(f.qa.actor, 0), failure('MESSAGE_NOT_VISIBLE'));
+  await assert.rejects(async () => wait(f.worker.actor, 50001), failure('INVALID_INPUT'));
+  const cancelled = new AbortController();
+  const pending = wait(f.worker.actor, 50000, cancelled.signal);
+  cancelled.abort();
+  assert.deepEqual(await pending, { status: 'CANCELLED', reply: null });
+  assert.equal(canonical(f.store.db.prepare('SELECT * FROM receipts ORDER BY rowid').all()), before);
+  const answer = f.send(f.lead.actor, role('worker'), { kind: 'REPLY', replyTo: question.id }).message;
+  assert.deepEqual(await wait(f.worker.actor, 0), { status: 'REPLIED', reply: answer });
 });

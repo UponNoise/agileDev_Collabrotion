@@ -24,8 +24,14 @@ export const messageSchemas = {
     ...thread,
     cursor: id.optional(),
     limit: z.number().int().min(1).max(20).default(20)
+  }).strict(),
+  message_wait: z.object({
+    ...thread,
+    questionId: id,
+    timeoutMs: z.number().int().min(0).max(50000).default(30000)
   }).strict()
 };
 
 export type MessageSend = z.infer<typeof messageSchemas.message_send>;
 export type MessageList = z.infer<typeof messageSchemas.message_list>;
+export type MessageWait = z.infer<typeof messageSchemas.message_wait>;

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as waitFor } from 'node:timers/promises';
 import { DomainError, type Actor, type Issue, type Role, type Run } from './contracts.js';
-import type { MessageList, MessageSend } from './message-contracts.js';
+import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import type { Store } from './store.js';
 
 type AgentRole = Exclude<Role, 'human'>;
@@ -86,6 +87,39 @@ export class IssueMessages {
     const visible = this.visible(actor, issue, input.limit + 1, cursor);
     const messages = visible.slice(0, input.limit).map(row => row.message);
     return { messages, nextCursor: visible.length > input.limit ? messages.at(-1)!.id : null };
+  }
+
+  async wait(actor: Actor, input: MessageWait, signal?: AbortSignal) {
+    const issue = this.store.issue(actor, input.workspaceId, input.issueId);
+    const question = this.visibleReference(actor, issue, input.questionId).message;
+    if (question.kind !== 'QUESTION' || question.sender.principalId !== (actor.principalId ?? actor.id)) {
+      throw new DomainError('MESSAGE_NOT_VISIBLE', 'Wait on a question you sent in this issue', 404);
+    }
+    const replies = this.store.db.prepare(`
+      SELECT data FROM records
+      WHERE kind = 'issue_message' AND workspace_id = ?
+        AND json_extract(data, '$.issueId') = ? AND json_extract(data, '$.kind') = 'REPLY'
+        AND json_extract(data, '$.replyTo') = ?
+        AND (json_extract(data, '$.sender.principalId') = ? OR (? AND json_extract(data, '$.sender.role') = 'human'))
+        AND (json_extract(data, '$.recipient.actorId') = ? OR (? AND json_extract(data, '$.recipient.kind') = 'owner'))
+      ORDER BY rowid LIMIT 1
+    `);
+    const deadline = performance.now() + input.timeoutMs;
+    while (!signal?.aborted) {
+      this.store.issue(actor, input.workspaceId, input.issueId);
+      const reply = replies.get(issue.workspaceId, issue.id, question.id,
+        question.recipient.kind === 'actor' ? question.recipient.actorId : null, Number(question.recipient.kind === 'owner'),
+        question.sender.principalId, Number(question.sender.role === 'human')) as { data: string } | undefined;
+      if (reply) return { status: 'REPLIED', reply: JSON.parse(reply.data) as IssueMessage };
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) return { status: 'TIMED_OUT', reply: null };
+      try {
+        await waitFor(Math.min(250, remaining), undefined, { signal });
+      } catch (error) {
+        if (!signal?.aborted) throw error;
+      }
+    }
+    return { status: 'CANCELLED', reply: null };
   }
 
   send(actor: Actor, input: MessageSend) {

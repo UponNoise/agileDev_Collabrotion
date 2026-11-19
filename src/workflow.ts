@@ -1,7 +1,7 @@
 import { permitsOperation } from './agent-profiles.js';
 import { DefectRegistry } from './defects.js';
 import { IssueMessages } from './messages.js';
-import type { MessageList, MessageSend } from './message-contracts.js';
+import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import { IterationService, iterationIssueView, rejectLegacyIterationWrite } from './iterations.js';
 import { isIterationOperation, iterationReadOperations } from './iteration-contracts.js';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +21,7 @@ import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSetti
 import { rejectionContext } from './rejection-context.js';
 import { blockerDetail, briefDefect, briefIssue, briefRun, briefText, isPlanningBlocker, issueStatus, waitingParty, type IssueAction } from './issue-brief.js';
 
-const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get','message_list']);
+const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get','message_list','message_wait']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -32,17 +32,17 @@ export class Workflow {
   constructor(readonly store: Store, readonly now = () => Date.now()) {
     store.db.transaction(() => store.list<Workspace>('workspace').forEach(workspace => this.defects().migrate(workspace.id))).immediate();
   }
-  execute(actor: Actor, operation: string, input: unknown): unknown {
+  execute(actor: Actor, operation: string, input: unknown, signal?: AbortSignal): unknown {
     if (!Object.hasOwn(schemas, operation)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
     const op = operation as Operation;
     if (!permitsOperation(actor.role, op)) throw new DomainError('ROLE_DENIED', 'Operation is outside this role profile', 403);
-    return this.executeAuthorized(actor, op, input);
+    return this.executeAuthorized(actor, op, input, signal);
   }
   claimReservedWork(actor: Actor, input: unknown): unknown {
     requireRole(actor, 'worker');
     return this.executeAuthorized(actor, 'work_claim', input);
   }
-  private executeAuthorized(actor: Actor, op: Operation, input: unknown): unknown {
+  private executeAuthorized(actor: Actor, op: Operation, input: unknown, signal?: AbortSignal): unknown {
     if (input && typeof input === 'object') {
       if (op === 'issue_update') rejectLegacyIterationWrite(input as Record<string, unknown>);
       if (op === 'plan_apply' && Array.isArray((input as any).tasks)) for (const task of (input as any).tasks) if (task && typeof task === 'object') rejectLegacyIterationWrite(task);
@@ -50,7 +50,7 @@ export class Workflow {
     const parsed = schemas[op].safeParse(input);
     if (!parsed.success) throw new DomainError('INVALID_INPUT', 'Command failed schema validation', 400, parsed.error.flatten());
     const args = parsed.data as Record<string, any>;
-    if (readOps.has(op)) return this.read(actor, op, args);
+    if (readOps.has(op)) return this.read(actor, op, args, signal);
     const digest = hash(canonical({ op, args }));
     return this.store.db.transaction(() => {
       const existing = this.store.db.prepare('SELECT digest,result FROM receipts WHERE actor_id=? AND key=?').get(actor.id, args.idempotencyKey) as { digest: string; result: string } | undefined;
@@ -66,10 +66,11 @@ export class Workflow {
       return result;
     }).immediate();
   }
-  private read(actor: Actor, op: Operation, a: Record<string, any>): unknown {
+  private read(actor: Actor, op: Operation, a: Record<string, any>, signal?: AbortSignal): unknown {
     const s = this.store;
     if (isIterationOperation(op)) return this.iterations().read(actor, op, a);
     if (op === 'message_list') return new IssueMessages(s, this.now).list(actor, a as MessageList);
+    if (op === 'message_wait') return new IssueMessages(s, this.now).wait(actor, a as MessageWait, signal);
     if (op === 'workspace_list') return { workspaces: s.list<Workspace>('workspace').filter(w => actor.role === 'human' || actor.workspaceIds.includes(w.id)) };
     if (op === 'inbox_list') return inboxList(s, actor, a, this.inboxPolicy(), this.now());
     if (op === 'defect_list') {

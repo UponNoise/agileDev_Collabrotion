@@ -81,7 +81,18 @@ export function createServer(store: Store, lifecycle?: { instance: string; stop(
     if (request.actor.workspaceIds[0]) store.event(request.actor.workspaceIds[0],request.actor,'connection_initialized',connection.id,{ client });
     return { ok: true };
   });
-  app.post<{ Params: { operation: string } }>('/api/command/:operation', request => ({ ok: true, result: workflow.execute(request.actor, request.params.operation, request.body ?? {}) }));
+  app.post<{ Params: { operation: string } }>('/api/command/:operation', async (request, reply) => {
+    const { operation } = request.params;
+    if (operation !== 'message_wait') return { ok: true, result: workflow.execute(request.actor, operation, request.body ?? {}) };
+    const controller = new AbortController();
+    const disconnect = () => controller.abort();
+    reply.raw.once('close', disconnect);
+    try {
+      return { ok: true, result: await workflow.execute(request.actor, operation, request.body ?? {}, controller.signal) };
+    } finally {
+      reply.raw.off('close', disconnect);
+    }
+  });
   const webRoot = resolve(dirname(fileURLToPath(import.meta.url)),'../dist/web');
   if (existsSync(resolve(webRoot,'index.html'))) {
     app.register(fastifyStatic,{ root: webRoot,prefix: '/',index: false,cacheControl: false,dotfiles: 'deny',allowedPath: path => path === 'index.html' || path === '/index.html' || /^\/?assets\/[A-Za-z0-9_-]+\.(js|css|woff2)$/.test(path) });
