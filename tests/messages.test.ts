@@ -192,3 +192,38 @@ test('the owner inbox derives one card per unanswered lead or PM question', asyn
   assert.equal(canonical(f.current()), before);
   assert.deepEqual(await f.flow.execute(f.lead.actor, 'message_wait', { ...f.thread, questionId: question.id, timeoutMs: 0 }), { status: 'REPLIED', reply: answer });
 });
+
+test('default agent message pages and unanswered question previews stay compact', t => {
+  const f = fixture(t);
+  const body = '测试🧪'.repeat(1600);
+  for (let index = 0; index < 21; index++) f.send(f.lead.actor, role('worker'), { kind: 'QUESTION', body });
+  const page = f.list(f.worker.actor);
+  assert.equal(page.messages.length, 20);
+  assert.ok(page.nextCursor);
+  assert.ok(page.messages.every((message: any) => message.bodyTruncated && Buffer.byteLength(JSON.stringify(message.body)) - 2 <= 160));
+  const full = f.list(f.worker.actor, { view: 'full', limit: 1 });
+  assert.equal(full.messages[0].id, page.messages[0].id);
+  assert.equal(full.messages[0].body, body);
+  const brief = f.flow.execute(f.worker.actor, 'issue_get', f.thread) as any;
+  assert.equal(brief.discussion.visibleCount, 21);
+  assert.equal(brief.discussion.pendingCount, 21);
+  assert.equal(brief.discussion.questions.length, 2);
+  assert.ok(brief.discussion.questions.every((question: any) => Buffer.byteLength(JSON.stringify(question.preview)) - 2 <= 90));
+});
+
+test('service shutdown cancels an outstanding logical actor HTTP wait', { timeout: 10000 }, async t => {
+  const f = fixture(t);
+  const question = f.send(f.lead.actor, role('worker'), { kind: 'QUESTION' }).message;
+  const app = createServer(f.store);
+  let entered!: () => void;
+  const requestReceived = new Promise<void>(resolve => { entered = resolve; });
+  app.addHook('preHandler', async request => {
+    if (request.url === '/api/command/message_wait') entered();
+  });
+  const endpoint = await app.listen({ host: '127.0.0.1', port: 0 });
+  const client = new LocalClient(endpoint, f.lead.token);
+  const pending = client.command('message_wait', { ...f.thread, questionId: question.id, timeoutMs: 5000 });
+  await requestReceived;
+  const [result] = await Promise.all([pending, app.close()]);
+  assert.deepEqual(result, { status: 'CANCELLED', reply: null });
+});

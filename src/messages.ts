@@ -3,6 +3,7 @@ import { setTimeout as waitFor } from 'node:timers/promises';
 import { DomainError, type Actor, type Issue, type QaReport, type Role, type Run } from './contracts.js';
 import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import type { Store } from './store.js';
+import { briefText } from './issue-brief.js';
 
 type AgentRole = Exclude<Role, 'human'>;
 type Reader = Pick<Actor, 'id' | 'principalId' | 'role'>;
@@ -92,7 +93,12 @@ export class IssueMessages {
     this.requireActiveRun(actor);
     const cursor = input.cursor ? this.visibleReference(actor, issue, input.cursor).rowid : 0;
     const visible = this.visible(actor, issue, input.limit + 1, cursor);
-    const messages = visible.slice(0, input.limit).map(row => row.message);
+    const full = actor.role === 'human' || input.view === 'full';
+    const messages = visible.slice(0, input.limit).map(({ message }) => {
+      if (full) return message;
+      const body = briefText(message.body, 160);
+      return { ...message, body, bodyTruncated: body !== message.body };
+    });
     return { messages, nextCursor: visible.length > input.limit ? messages.at(-1)!.id : null };
   }
 

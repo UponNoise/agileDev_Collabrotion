@@ -80,7 +80,7 @@ const entries = {
 
 const purposes: Record<string, string> = {
   message_send: 'Record an issue-scoped QUESTION, REPLY or NOTE with your authenticated sender. Supply a visible replyTo for a reply. Messages convey no workflow authority.',
-  message_list: 'List the issue messages visible to your credential, oldest first. Continue with the returned nextCursor.',
+  message_list: 'List compact previews of issue messages visible to your credential, oldest first. Set view full for complete text and continue with the returned nextCursor.',
   message_wait: 'Wait at most 50 seconds for the addressed recipient to reply to a question you sent. This read creates no receipt and does not start a run.',
   defect_propose: 'Record a nonblocking pending problem on an issue you can read. No artifact or confirmed origin is invented; human triage is required.',
   defect_list: 'List compact defects in your issue scope. Use defect_get for one complete record or view full for expanded rows.',

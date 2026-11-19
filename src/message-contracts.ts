@@ -23,7 +23,8 @@ export const messageSchemas = {
   message_list: z.object({
     ...thread,
     cursor: id.optional(),
-    limit: z.number().int().min(1).max(20).default(20)
+    limit: z.number().int().min(1).max(20).default(20),
+    view: z.enum(['summary', 'full']).default('summary')
   }).strict(),
   message_wait: z.object({
     ...thread,

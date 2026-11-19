@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 declare module 'fastify' { interface FastifyRequest { actor: Actor; browserSession?: string } }
 export function createServer(store: Store, lifecycle?: { instance: string; stop(): Promise<void> }) {
   const app = Fastify({ logger: false, bodyLimit: 262144, requestTimeout: 15000 });
+  const shutdown = new AbortController();
+  app.addHook('preClose', async () => { shutdown.abort(); });
   const workflow = new Workflow(store);
   const sessions = new WebSessions(store);
   app.addHook('onRequest', async (request,reply) => {
@@ -88,7 +90,8 @@ export function createServer(store: Store, lifecycle?: { instance: string; stop(
     const disconnect = () => controller.abort();
     reply.raw.once('close', disconnect);
     try {
-      return { ok: true, result: await workflow.execute(request.actor, operation, request.body ?? {}, controller.signal) };
+      const signal = AbortSignal.any([controller.signal, shutdown.signal]);
+      return { ok: true, result: await workflow.execute(request.actor, operation, request.body ?? {}, signal) };
     } finally {
       reply.raw.off('close', disconnect);
     }
