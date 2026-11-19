@@ -314,6 +314,8 @@ export class Workflow {
       defects: { observation: registry.observe(issue), decisionSet: registry.confirmedSet(actor, workspace.id, issue.id) },
       executionRecovery,
       deliveryDigest, git, closureBlocked, view: 'full' as const,
+      ...(actor.role === 'human' && (atAcceptance || (!issue.parentId && design?.status === 'IN_REVIEW'))
+        ? { decisionRisks: registry.visibleDecisionRisks(issue) } : {}),
       planning: coverage ? { planId: root.planId ?? null, ready: coverage.ready, status: coverage.status, blocking: coverage.blocking, children: coverage.children } : null,
       ...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {})
     };

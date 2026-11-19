@@ -405,4 +405,28 @@ export class DefectRegistry {
     const value = maybe<SetRevision>(this.store, 'defect_set', issueId);
     return { revision: value?.[kind].revision ?? 0, ...current };
   }
+
+  visibleDecisionRisks(issue: Issue) {
+    const defects = this.all(issue.workspaceId, new Set([issue.id]))
+      .filter(record => record.state === 'OPEN' || record.state === 'PROPOSED')
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map(({ id, key, version, state, origin, severity, criterionIds, reproduce, expected, actual, source }) =>
+        ({ id, key, version, state, origin, severity, criterionIds, reproduce, expected, actual, source }));
+    const review = issue.qaReview ? maybe<{
+      issueId: string; stage: string; candidateId: string; snapshotId: string; reportId?: string
+    }>(this.store, 'review', issue.qaReview) : null;
+    const report = issue.candidate?.snapshotId && review?.stage === 'QA' && review.issueId === issue.id &&
+      review.candidateId === issue.candidate.id && review.snapshotId === issue.candidate.snapshotId && review.reportId
+      ? maybe<QaReport>(this.store, 'qa_report', review.reportId) : null;
+    const currentReport = report && report.workspaceId === issue.workspaceId && report.issueId === issue.id &&
+      report.snapshotId === issue.candidate?.snapshotId ? report : null;
+    const qaReport = currentReport ? {
+      id: currentReport.id,
+      findings: (currentReport.findings ?? []).map((finding, index) => ({
+        ...finding, id: `${currentReport.id}:${index}`, version: 1
+      }))
+    } : null;
+    const digest = hash(canonical({ policy: 'visible-decision-risks/v1', issueId: issue.id, defects, qaReport }));
+    return { hash: digest, defects, qaReport };
+  }
 }

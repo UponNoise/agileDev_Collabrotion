@@ -70,6 +70,46 @@ test('proposal validation and stale versions roll back counters, sources, events
   assert.throws(() => f.propose(issue.id,f.human),fails('ROLE_DENIED')); assert.equal(f.db(),before);
 });
 
+test('human decision risk reads bind visible defect versions and current QA findings to the issue', t => {
+  const f = fixture(t);
+  const issue = f.issue();
+  const unrelated = f.issue();
+  f.reviewed(issue.id);
+  const { reportId } = f.store.get<{ reportId: string }>('review', f.current(issue.id).qaReview!);
+  const report = f.store.get<{ id: string }>('qa_report', reportId);
+  f.store.put('qa_report', { ...report, findings: [{
+    criterionId: 'C1', severity: 'MINOR', expected: 'Exact expected output',
+    actual: 'Whitespace warning', reproduce: 'Run the captured comparison'
+  }] }, f.workspace.id);
+  const packet = () => f.cmd('issue_get', { issueId: issue.id }).decisionRisks;
+  const start = packet();
+  assert.match(start.hash, /^[a-f0-9]{64}$/);
+  assert.equal(start.qaReport.id, reportId);
+  assert.equal(start.qaReport.findings[0].id, `${reportId}:0`);
+  assert.equal(start.qaReport.findings[0].actual, 'Whitespace warning');
+  assert.deepEqual(start.defects, []);
+  f.propose(unrelated.id);
+  assert.equal(packet().hash, start.hash);
+
+  const proposal = f.propose(issue.id);
+  const pending = packet();
+  assert.notEqual(pending.hash, start.hash);
+  assert.equal(pending.defects[0].id, proposal.id);
+  assert.equal(pending.defects[0].version, proposal.version);
+  assert.equal(pending.defects[0].state, 'PROPOSED');
+  const observed = f.observation(issue.id);
+  f.triage(proposal, 'CONFIRM', { observation: observed, severity: 'MINOR' });
+  const confirmed = packet();
+  assert.notEqual(confirmed.hash, pending.hash);
+  assert.equal(confirmed.defects[0].state, 'OPEN');
+  assert.equal(confirmed.defects[0].severity, 'MINOR');
+  assert.equal(confirmed.defects[0].version, proposal.version + 1);
+  assert.equal(Object.hasOwn(f.cmd('issue_get', { issueId: issue.id, view: 'full' }, f.lead.actor), 'decisionRisks'), false);
+  const beforeRead = f.db();
+  assert.deepEqual(packet(), confirmed);
+  assert.equal(f.db(), beforeRead);
+});
+
 test('worker and run-scoped defect reads and proposals cannot escape assigned issue context', t => {
   const f = fixture(t); const parent = f.issue(); const mine = f.issue(parent.id); const hidden = f.issue(parent.id);
   f.change('issue_assign',mine.id,{ actorId: f.worker.actor.id,harness: 'codex' }); f.change('issue_assign',hidden.id,{ actorId: f.worker.actor.id,harness: 'codex' });
