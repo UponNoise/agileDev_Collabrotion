@@ -56,7 +56,7 @@ W2b private core checkpoint, 2026-11-11: the defect helper and pure feature cont
 
 B24 brief projection work in `.agents/worktrees/r2-briefs` claims the issue, defect and run read views in the service and their schemas, the shared brief projection, the `nextActions` web API type and focused tests. Agent defaults use compact projections with explicit authorized expansion. The existing human evidence views remain available through the full packets. Acceptance uses blocked, dispatchable parent, rework and large-record fixtures under the recorded NF05 tokenizer.
 
-The B24 decision snapshot slice claims the scoped defect projection, human issue read, and focused tests. Its snapshot identity follows accepted R2 §13.2. Later writes and the existing form adaptation will enforce that identity at the design, delivery and completion-grant gates.
+The B24 decision snapshot read is committed at `ea66169`. The next B24 slice extends the service lease to design, delivery and completion-grant writes and the QA severity rule. It claims the existing decision form, its types and translations to display and submit the exact risk packet. Clause 13 records the human binding and the optional-reason and finding rules.
 
 B23 is independently reviewed at `5d8483154800c0fa374ac5d4e1d0a597ee95591c` in stacked draft PR #16. Both author and reviewer passed type checks, production build and 199/199 tests. Separate reviewer controls include real stdio catalogs for four roles, 156 HTTP role-denial checks, scoped reads and the coordinator's managed claim through sealed submission. Native three-host execution and full AC43 remain pending.
 
