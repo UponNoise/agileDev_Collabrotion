@@ -80,6 +80,7 @@ export function consultQuestion(store: Store, run: Extract<Run, { kind: 'consult
   if (question.kind !== 'QUESTION' || question.workspaceId !== run.workspaceId || question.issueId !== issue.id ||
       question.recipient.kind !== 'actor' || question.recipient.actorId !== run.actorId ||
       recipientHarness(store, issue, question.recipient) !== run.harness ||
+      ['ON_HOLD', 'ABANDONED'].includes(issue.state) || ['ON_HOLD', 'ABANDONED'].includes(root.state) ||
       issue.scopeRevision !== run.scopeRevision || root.designId !== run.designId) {
     throw new DomainError('CONSULT_STALE', 'The consult target changed before it could answer');
   }

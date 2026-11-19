@@ -14,6 +14,7 @@ import { createServer } from '../src/http.js';
 import { Coordinator } from '../src/runner.js';
 import { canonical, Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
+import { verifyConsult } from '../src/verify-consult.js';
 
 class ConsultAdapter implements ExecutionAdapter {
   supported = new Set<Harness>(['codex', 'dsh', 'claude-code']);
@@ -247,4 +248,63 @@ test('an uncertain consult remains auditable and is never started again', async 
   assert.equal(f.runs().length, 1);
   assert.equal(f.adapter.calls.length, 1);
   assert.equal(f.current().state, 'NOT_STARTED');
+});
+
+test('already answered consults cancel before launch and leave no live coordinator entry', async t => {
+  const f = await fixture(t);
+  f.setting(true);
+  const asked = f.send(f.lead.actor, role('worker'));
+  f.send(f.worker.actor, actorTarget(f.lead.actor), { kind: 'REPLY', replyTo: asked.message.id, wake: false });
+  await f.coordinator.tick();
+  assert.equal(f.run(asked.delivery.runId).state, 'CANCELLED');
+  assert.equal(f.run(asked.delivery.runId).errorCode, 'QUESTION_ALREADY_ANSWERED');
+  assert.equal(f.adapter.calls.length, 0);
+  assert.equal(f.coordinator['live'].size, 0);
+});
+
+test('an admitted consult wait ends when its issue scope changes', async t => {
+  const f = await fixture(t);
+  f.setting(true);
+  const asked = f.send(f.lead.actor, role('worker'));
+  await f.coordinator.tick();
+  const actor = f.store.authenticate(f.adapter.calls[0]!.context.token);
+  const followup = f.send(actor, role('lead'), { wake: false });
+  const pending = f.flow.execute(actor, 'message_wait', { ...f.thread, questionId: followup.message.id, timeoutMs: 2000 }) as Promise<unknown>;
+  const denied = assert.rejects(pending, fails('CONSULT_STALE'));
+  f.write(f.owner.actor, 'issue_update', {
+    ...f.thread, expectedVersion: f.current().version, description: 'A changed fixture scope'
+  });
+  await denied;
+  assert.equal(f.run(asked.delivery.runId).state, 'RUNNING');
+});
+
+test('the disposable consult probe labels controlled proof separately from native verification', { timeout: 10000 }, async () => {
+  let launches = 0;
+  const adapter: ExecutionAdapter = {
+    supportsConsult: harness => harness === 'dsh',
+    async start(context) {
+      launches++;
+      context.onProvider('controlled-probe-session');
+      const line = context.prompt.split('\n').find(value => value.startsWith('Reply arguments: '));
+      assert.ok(line);
+      const args = JSON.parse(line.slice('Reply arguments: '.length, -'. Add your answer as body.'.length));
+      const result = new LocalClient(context.endpoint, context.token).command('message_send', {
+        ...args, body: 'AGILEDEV_CONSULT_PROBE_OK'
+      }).then(() => ({ outcome: 'succeeded' as const }));
+      return { result, interrupt: async () => true };
+    }
+  };
+  const observed = await verifyConsult('dsh', resolve('dist/cli.js'), adapter);
+  try {
+    assert.equal(observed.status, 'CONTROLLED_PASS');
+    assert.equal(observed.version, null);
+    assert.equal(observed.workflowUnchanged, true);
+    assert.ok(observed.replyId);
+    assert.equal(launches, 1);
+  } finally {
+    const root = observed.retainedEvidenceDirectory;
+    assert.equal(dirname(root), resolve(tmpdir()));
+    assert.ok(basename(root).startsWith('agiledev-consult-probe-'));
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -92,7 +92,10 @@ export class Coordinator {
       for (const queued of this.store.list<Run>('run').filter(r => r.state === 'QUEUED')) {
         if (slots-- <= 0) break;
         const owned = this.reserve(queued.id);
-        if (owned) { owned.promise = this.execute(queued.id, owned); this.live.set(queued.id, owned); }
+        if (owned) {
+          this.live.set(queued.id, owned);
+          owned.promise = this.execute(queued.id, owned);
+        }
       }
     } finally { this.ticking = false; }
   }
@@ -135,10 +138,6 @@ export class Coordinator {
       if (run.kind === 'consult') {
         if (!wakeSettings(this.store, run.workspaceId).enabled) throw new DomainError('WAKE_DISABLED', 'Workspace wake was disabled before launch');
         if (!this.canConsult(run.harness)) throw new DomainError('HARNESS_UNAVAILABLE', 'Fresh consult capability is unavailable');
-        const parent = issue.parentId ? this.store.get<Issue>('issue', issue.parentId) : null;
-        if (['ON_HOLD', 'ABANDONED'].includes(issue.state) || (parent && ['ON_HOLD', 'ABANDONED'].includes(parent.state))) {
-          throw new DomainError('CONSULT_STALE', 'The question thread is paused or abandoned');
-        }
         const question = consultQuestion(this.store, run, issue);
         const messages = new IssueMessages(this.store);
         if (messages.answeredQuestion(question)) {

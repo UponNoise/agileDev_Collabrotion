@@ -338,6 +338,8 @@ Agent `issue_list`, `run_list` and `defect_list` default to compact pages of up 
 
 The owner can read the workspace's wake setting and per-harness mode availability with `wake_settings_get`. Update the setting with `wake_settings_update`, using `workspaceId`, current `expectedVersion`, `enabled` and `idempotencyKey`. Each workspace starts disabled. A wake request can queue one fresh consult when the workspace and adapter allow it. Up to three queued wakes count per issue per UTC day, including those that later fail. Each consult counts toward the shared active-run cap and has a ten-minute maximum. It has read access to its issue context and can use `message_send`; its messages do not carry workflow authority. The question's `message_list` row shows the current run outcome. `message_wait` returns `UNANSWERED` with delivery details if a queued consult fails, becomes uncertain or is cancelled without a reply. Native modes remain unverified and unavailable in this checkpoint.
 
+`node dist/cli.js verify-consult <codex|claude-code|dsh>` starts one real target model run through a temporary service and disposable workspace, with a 90-second execution budget. Run it only with explicit approval for that model call. The source is a stdio MCP test driver. A pass requires a provider session, an exact tool reply from the bound consult run and unchanged fixture issue state. Results retain a private fixture directory and do not enable any production native mode.
+
 <!-- B23_PROFILE_REFERENCE_START -->
 | Role | Advertised operations |
 | --- | --- |

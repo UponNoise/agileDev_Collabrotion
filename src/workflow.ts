@@ -11,7 +11,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
-import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, harnesses, liveRunStates, schemas } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, harnesses, liveRunStates, ownsIssueExecution, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, integrationManifest, qaChecksPending, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding, normalizeLegacyAttempt, submissionEntries } from './git.js';
@@ -28,9 +28,6 @@ function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
 }
 function version(issue: Issue, expected: number) {
   if (issue.version !== expected) throw new DomainError('VERSION_CONFLICT', 'Issue changed; reload before retrying', 409, { currentVersion: issue.version });
-}
-function ownsIssueExecution(run: Run) {
-  return run.kind !== 'consult' && (liveRunStates as readonly string[]).includes(run.state);
 }
 export class Workflow {
   constructor(readonly store: Store, readonly now = () => Date.now(), private consultAvailable?: ConsultAvailability) {

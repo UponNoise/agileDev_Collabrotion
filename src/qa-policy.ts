@@ -1,4 +1,4 @@
-import { Actor, CheckProfile, CheckRun, DomainError, GitSubmission, IntegrationManifest, Issue, QaReport, Run, Snapshot, Workspace } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, DomainError, GitSubmission, IntegrationManifest, Issue, QaReport, Run, Snapshot, Workspace, ownsIssueExecution } from './contracts.js';
 import { Store, canonical, hash } from './store.js';
 import { verifySnapshot } from './snapshots.js';
 import { submissionEntries } from './git.js';
@@ -45,7 +45,7 @@ export function queueQa(store: Store, issue: Issue) {
   if (!issue.qaAssignee || !issue.qaHarness || !issue.checkProfileIds?.length) return null;
   const snapshot = candidateSnapshot(store,issue);
   validateIntegration(store,issue);
-  if (store.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && ['QUEUED','STARTING','RUNNING','STOPPING','UNCERTAIN'].includes(r.state))) throw new DomainError('RUN_EXISTS','Reconcile live execution before QA dispatch');
+  if (store.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && ownsIssueExecution(r))) throw new DomainError('RUN_EXISTS','Reconcile live execution before QA dispatch');
   const profiles = issue.checkProfileIds.map(id => store.get<CheckProfile>('check_profile',id));
   if (profiles.some(p => p.workspaceId !== issue.workspaceId) || issue.criteria.some(c => !profiles.some(p => p.criteria.includes(c)))) throw new DomainError('QA_COVERAGE_REQUIRED','Approved checks must cover every assigned criterion');
   const run: Run = { id: randomUUID(), issueId: issue.id, workspaceId: issue.workspaceId, actorId: issue.qaAssignee, harness: issue.qaHarness, kind: 'qa', candidateId: issue.candidate!.id, snapshotId: snapshot.id, state: 'QUEUED', version: 1, createdAt: new Date().toISOString(), designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, checkProfileIds: [...issue.checkProfileIds] };

@@ -49,6 +49,9 @@ export type Run = RunFields & (
   | { kind?: 'implementation' | 'qa'; designId: string }
   | { kind: 'consult'; designId: string | null; consult: { questionId: string; mode: 'fresh' } }
 );
+export function ownsIssueExecution(run: Run) {
+  return run.kind !== 'consult' && (liveRunStates as readonly string[]).includes(run.state);
+}
 export interface Issue {
   id: string; workspaceId: string; key: string; parentId: string | null; title: string; description: string;
   state: State; stage: 'PRE_QA' | 'FINAL' | null; version: number; scopeRevision: number;

@@ -4,7 +4,7 @@ import { DomainError, type Actor, type Issue, type QaReport, type Role, type Run
 import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import type { Store } from './store.js';
 import { briefText } from './issue-brief.js';
-import { admitConsult, consultDelivery, type ConsultAvailability } from './consult.js';
+import { admitConsult, consultDelivery, consultQuestion, type ConsultAvailability } from './consult.js';
 
 type AgentRole = Exclude<Role, 'human'>;
 type Reader = Pick<Actor, 'id' | 'principalId' | 'role'>;
@@ -104,9 +104,13 @@ export class IssueMessages {
   }
 
   private requireActiveRun(actor: Actor) {
-    if (actor.runId && this.store.get<Run>('run', actor.runId).state !== 'RUNNING') {
+    if (!actor.runId) return null;
+    const run = this.store.get<Run>('run', actor.runId);
+    if (run.state !== 'RUNNING') {
       throw new DomainError('MESSAGE_RUN_INACTIVE', 'The scoped execution is no longer active', 403);
     }
+    if (run.kind === 'consult') consultQuestion(this.store, run, this.store.get<Issue>('issue', run.issueId));
+    return run;
   }
 
   list(actor: Actor, input: MessageList) {
@@ -258,8 +262,7 @@ export class IssueMessages {
 
   send(actor: Actor, input: MessageSend) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
-    this.requireActiveRun(actor);
-    const run = actor.runId ? this.store.get<Run>('run', actor.runId) : null;
+    const run = this.requireActiveRun(actor);
     if (run?.kind === 'consult' && run.issueId !== issue.id) throw new DomainError('SCOPE_DENIED', 'Consult messages belong to the question thread', 403);
     const reference = input.replyTo ? this.visibleReference(actor, issue, input.replyTo).message : undefined;
     const ownerReply = input.kind === 'REPLY' && reference?.kind === 'QUESTION' && reference.sender.role === 'human' &&
