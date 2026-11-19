@@ -1,6 +1,7 @@
 import { advertisedOperations } from './agent-profiles.js';
 import { defectCoreSchemas, defectFindingSchema } from './defect-contracts.js';
 import { iterationSchemas, iterationMembershipPreconditionSchema } from './iteration-contracts.js';
+import { messageSchemas } from './message-contracts.js';
 import { z } from 'zod';
 
 export const roles = ['human', 'lead', 'pm', 'worker', 'qa'] as const;
@@ -77,6 +78,7 @@ const deliveryDecisionSchema = z.union([
 ]);
 export const schemas = {
   ...iterationSchemas,
+  ...messageSchemas,
   defect_propose: defectCoreSchemas.propose.extend(mutation),
   defect_report: defectCoreSchemas.report.extend(mutation),
   defect_triage: defectCoreSchemas.triage.extend(mutation),
