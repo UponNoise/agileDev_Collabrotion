@@ -1,6 +1,7 @@
 import { permitsOperation } from './agent-profiles.js';
 import { DefectRegistry } from './defects.js';
 import { IssueMessages } from './messages.js';
+import { updateWakeSettings, wakeSettings } from './consult.js';
 import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import { IterationService, iterationIssueView, rejectLegacyIterationWrite } from './iterations.js';
 import { isIterationOperation, iterationReadOperations } from './iteration-contracts.js';
@@ -21,7 +22,7 @@ import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSetti
 import { rejectionContext } from './rejection-context.js';
 import { blockerDetail, briefDefect, briefIssue, briefRun, briefText, isPlanningBlocker, issueStatus, waitingParty, type IssueAction } from './issue-brief.js';
 
-const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','defect_list','defect_get','message_list','message_wait']);
+const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','wake_settings_get','defect_list','defect_get','message_list','message_wait']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -80,6 +81,7 @@ export class Workflow {
     if (op === 'defect_get') return { defect: this.defects().get(actor,a.workspaceId,a.defectId) };
     const workspace = s.workspace(actor, a.workspaceId);
     if (op === 'inbox_settings_get') return { settings: inboxSettings(s,actor,workspace.id) };
+    if (op === 'wake_settings_get') return { settings: wakeSettings(s, workspace.id) };
     if (op.startsWith('ui_')) {
       requireRole(actor,'human');
       if (op === 'ui_workspace') return workspaceView(s,workspace,a,issue => this.display(issue));
@@ -774,6 +776,7 @@ export class Workflow {
       return { defect: this.defects().withdraw(actor,input as any) };
     }
     if (op === 'inbox_settings_update') return updateInboxSettings(s,actor,{ workspaceId: w.id,expectedVersion: a.expectedVersion,agingThresholdHours: a.agingThresholdHours },this.now());
+    if (op === 'wake_settings_update') return updateWakeSettings(s, actor, w.id, a.expectedVersion, a.enabled);
     if (op === 'workspace_git_bind') {
       requireRole(actor,'human');
       if ((w.gitBindingId ?? null) !== a.expectedBindingId) throw new DomainError('VERSION_CONFLICT','Workspace Git binding changed; reload it before retrying');

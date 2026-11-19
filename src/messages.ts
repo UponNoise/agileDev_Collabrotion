@@ -4,6 +4,7 @@ import { DomainError, type Actor, type Issue, type QaReport, type Role, type Run
 import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import type { Store } from './store.js';
 import { briefText } from './issue-brief.js';
+import { wakeSettings } from './consult.js';
 
 type AgentRole = Exclude<Role, 'human'>;
 type Reader = Pick<Actor, 'id' | 'principalId' | 'role'>;
@@ -238,6 +239,8 @@ export class IssueMessages {
     this.store.put('issue_message', message, issue.workspaceId);
     this.recordQaDelivery(actor, issue, message);
     this.store.event(issue.workspaceId, actor, 'message_sent', message.id, { issueId: issue.id, kind: message.kind, replyTo: message.replyTo });
-    return { message, delivery: { state: 'STORED', reason: input.wake ? 'WAKE_DISABLED' : 'WAKE_NOT_REQUESTED' } };
+    let reason = 'WAKE_NOT_REQUESTED';
+    if (input.wake) reason = wakeSettings(this.store, issue.workspaceId).enabled ? 'WAKE_UNAVAILABLE' : 'WAKE_DISABLED';
+    return { message, delivery: { state: 'STORED', reason } };
   }
 }

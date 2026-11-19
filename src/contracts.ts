@@ -91,6 +91,8 @@ export const schemas = {
   inbox_list: z.object({ workspaceId: id.optional(),kind: z.enum(inboxKinds).optional(),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
   inbox_settings_get: z.object(scoped).strict(),
   inbox_settings_update: z.object({ ...scoped,...mutation,expectedVersion: z.number().int().nonnegative(),agingThresholdHours: z.number().int().min(1).max(168) }).strict(),
+  wake_settings_get: z.object(scoped).strict(),
+  wake_settings_update: z.object({ ...scoped, ...mutation, expectedVersion: z.number().int().nonnegative(), enabled: z.boolean() }).strict(),
   ui_workspace: z.object({ ...scoped,search: z.string().max(300).default(''),state: z.enum(states).optional(),view: z.enum(['backlog','reviews']).default('backlog'),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20),afterCursor: z.number().int().nonnegative().optional() }).strict(),
   ui_issue: z.object({ ...target,after: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(30) }).strict(),
   ui_runs: z.object({ ...scoped,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),

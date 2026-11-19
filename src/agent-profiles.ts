@@ -36,6 +36,8 @@ const entries = {
   inbox_list: humans,
   inbox_settings_get: humans,
   inbox_settings_update: humans,
+  wake_settings_get: humans,
+  wake_settings_update: humans,
   ui_workspace: humans,
   ui_issue: humans,
   ui_runs: humans,

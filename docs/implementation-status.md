@@ -56,6 +56,8 @@ W2b private core checkpoint, 2026-11-11: the defect helper and pure feature cont
 
 ## Current evidence
 
+B26 begins with versioned per-workspace wake settings, disabled by default and writable only by the authenticated owner. The service persists questions under both disabled and unavailable settings without creating a run. Check/build and 13 message/profile tests pass on the settings slice. Consult admission, run capability enforcement and native validation still follow.
+
 The first B25 slice stores immutable issue messages with authenticated sender identity, scoped recipient resolution, byte limits and existing idempotency receipts. The service enforces the worker–QA wall for direct sends, paging, cursors and reply references. Check/build and eight focused message/profile tests pass, including real loopback HTTP and stdio transport. This slice has no wake integration.
 
 B25 bounded waiting waits on a question the caller sent and returns a reply from its addressed recipient. The 50-second service bound, cancellation, no-write timeout, wrong-responder handling and real HTTP/stdio round trip pass nine focused tests with check/build. Briefs, owner cards, QA evidence and wake remain separate checkpoints.
