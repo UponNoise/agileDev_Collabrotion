@@ -101,7 +101,7 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     const hidden = leadNote('worker', 'Test-only worker note');
     const qaClient = new LocalClient(qa.endpoint, qa.token);
     const outbound = await qaClient.command('message_send', {
-      ...thread, recipient: { kind: 'role', role: 'lead' }, kind: 'NOTE', body: 'Test-only QA observation', idempotencyKey: randomUUID()
+      ...thread, recipient: { kind: 'role', role: 'lead' }, kind: 'QUESTION', body: 'Test-only QA question', idempotencyKey: randomUUID()
     });
     const qaThread = await qaClient.command('message_list', thread);
     assert.deepEqual(qaThread.messages.map((message: any) => message.id), [earlier.message.id, inbound.message.id, outbound.message.id]);
@@ -119,7 +119,10 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     assert.deepEqual(report.report.messageIds, [inbound.message.id, outbound.message.id]);
     const late = leadNote('qa', 'Test-only message after submission and before QA stops');
     assert.equal(f.current(f.issue.id).state,'QA_TEST');
+    const pending = f.flow.execute(f.store.authenticate(qa.token), 'message_wait', { ...thread, questionId: outbound.message.id, timeoutMs: 5000 }) as Promise<unknown>;
+    const waitStopped = assert.rejects(pending, (error: any) => error.code === 'MESSAGE_RUN_INACTIVE');
     const stopped = await f.complete(qa);
+    await waitStopped;
     assert.equal(stopped.state,'SUCCEEDED'); assert.equal(f.current(f.issue.id).stage,'FINAL');
     assert.deepEqual(stopped.messageIds, [inbound.message.id, outbound.message.id, late.message.id]);
     const evidence = { ...thread, kind: 'qa_report', evidenceId: report.report.id };
@@ -135,6 +138,41 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     assert.deepEqual(decision.approval.acknowledgedMinors, [{ id: minor.id, version: minor.version }]);
     assert.equal(decision.issue.state, 'DONE'); assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
     assert.equal(readFileSync(join(f.source,'source.txt'),'utf8'),'original');
+  } finally { await f.close(); }
+});
+
+test('recovery retains captured QA message evidence without advancing the gate', { timeout: 20000 }, async () => {
+  const f = await fixture();
+  try {
+    await f.submit(await f.context(0), 'delivered');
+    f.initialReview();
+    const qa = await f.context(1);
+    const qaRunId = f.store.authenticate(qa.token).runId!;
+    const check = await f.check(qa);
+    const { report } = await f.report(qa, check.id);
+    assert.deepEqual(report.messageIds, []);
+    const thread = { workspaceId: f.workspace.id, issueId: f.issue.id };
+    const { message } = f.flow.execute(f.lead, 'message_send', {
+      ...thread, kind: 'NOTE', recipient: { kind: 'role', role: 'qa' }, body: 'Test-only QA evidence recorded after submission', idempotencyKey: randomUUID()
+    }) as any;
+    const recovery = new Coordinator(f.store, { endpoint: qa.endpoint, directory: join(f.root, 'recovery'), bridgeScript: resolve('dist/cli.js'), adapter: f.adapter });
+    try { recovery.recover(); } finally { await recovery.close(); }
+    const uncertain = f.store.get<Run>('run', qaRunId);
+    assert.equal(uncertain.state, 'UNCERTAIN');
+    assert.deepEqual(uncertain.messageIds, [message.id]);
+    const evidence = { ...thread, kind: 'qa_report', evidenceId: report.id };
+    assert.deepEqual((f.flow.execute(f.lead, 'evidence_get', evidence) as any).evidence.messageIds, [message.id]);
+    assert.equal(f.current(f.issue.id).state, 'QA_TEST');
+    assert.equal(f.current(f.issue.id).qaReview, null);
+    assert.throws(() => f.store.authenticate(qa.token), (error: any) => error.code === 'UNAUTHENTICATED');
+    f.adapter.finish.get(qa.cwd)!({ outcome: 'cancelled' });
+    const reconciled = f.flow.execute(f.human, 'run_reconcile', {
+      workspaceId: f.workspace.id, runId: qaRunId, expectedVersion: uncertain.version, confirmStopped: true,
+      reason: 'Test fixture confirms the controlled adapter stopped', idempotencyKey: randomUUID()
+    }) as any;
+    assert.equal(reconciled.run.state, 'CANCELLED');
+    assert.deepEqual(reconciled.run.messageIds, [message.id]);
+    assert.equal(f.current(f.issue.id).state, 'QA_TEST');
   } finally { await f.close(); }
 });
 

@@ -81,8 +81,15 @@ export class IssueMessages {
     return record;
   }
 
+  private requireActiveRun(actor: Actor) {
+    if (actor.runId && this.store.get<Run>('run', actor.runId).state !== 'RUNNING') {
+      throw new DomainError('MESSAGE_RUN_INACTIVE', 'The scoped execution is no longer active', 403);
+    }
+  }
+
   list(actor: Actor, input: MessageList) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
+    this.requireActiveRun(actor);
     const cursor = input.cursor ? this.visibleReference(actor, issue, input.cursor).rowid : 0;
     const visible = this.visible(actor, issue, input.limit + 1, cursor);
     const messages = visible.slice(0, input.limit).map(row => row.message);
@@ -129,6 +136,7 @@ export class IssueMessages {
 
   async wait(actor: Actor, input: MessageWait, signal?: AbortSignal) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
+    this.requireActiveRun(actor);
     const question = this.visibleReference(actor, issue, input.questionId).message;
     if (question.kind !== 'QUESTION' || question.sender.principalId !== (actor.principalId ?? actor.id)) {
       throw new DomainError('MESSAGE_NOT_VISIBLE', 'Wait on a question you sent in this issue', 404);
@@ -144,6 +152,7 @@ export class IssueMessages {
     `);
     const deadline = performance.now() + input.timeoutMs;
     while (!signal?.aborted) {
+      this.requireActiveRun(actor);
       this.store.issue(actor, input.workspaceId, input.issueId);
       const reply = replies.get(issue.workspaceId, issue.id, question.id,
         question.recipient.kind === 'actor' ? question.recipient.actorId : null, Number(question.recipient.kind === 'owner'),
@@ -184,6 +193,18 @@ export class IssueMessages {
     `).all(run.workspaceId, run.id) as { messageId: string }[]).map(record => record.messageId);
   }
 
+  captureQaEvidence(run: Run) {
+    if (run.kind !== 'qa') return;
+    run.messageIds = this.qaEvidence(run);
+    if (!run.reportId) return;
+    const row = this.store.db.prepare("SELECT data FROM records WHERE kind = 'qa_report' AND id = ? AND workspace_id = ?")
+      .get(run.reportId, run.workspaceId) as { data: string } | undefined;
+    const report = row ? JSON.parse(row.data) as QaReport : null;
+    if (report?.runId === run.id && report.workspaceId === run.workspaceId && report.issueId === run.issueId) {
+      this.store.put('qa_report', { ...report, messageIds: run.messageIds }, run.workspaceId);
+    }
+  }
+
   reportView(actor: Actor, report: QaReport) {
     if (oversightRole(actor.role) || !report.messageIds) return report;
     const run = this.store.get<Run>('run', report.runId);
@@ -196,9 +217,7 @@ export class IssueMessages {
 
   send(actor: Actor, input: MessageSend) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
-    if (actor.runId && this.store.get<Run>('run', actor.runId).state !== 'RUNNING') {
-      throw new DomainError('MESSAGE_RUN_INACTIVE', 'Only active execution credentials can send run messages', 403);
-    }
+    this.requireActiveRun(actor);
     const recipient = this.resolveRecipient(issue, actor, input.recipient);
     if (input.replyTo) {
       this.visibleReference(actor, issue, input.replyTo);

@@ -43,6 +43,7 @@ export class Coordinator {
     this.store.db.transaction(() => {
       for (const run of this.store.list<Run>('run').filter(r => ['STARTING', 'RUNNING', 'STOPPING'].includes(r.state) && r.coordinatorId !== this.id)) {
         run.state = 'UNCERTAIN'; run.errorCode = 'COORDINATOR_LOST'; run.version = (run.version ?? 1) + 1;
+        new IssueMessages(this.store).captureQaEvidence(run);
         this.store.put('run', run, run.workspaceId);
         if (run.executionActorId) this.store.revokeActor(run.executionActorId);
         const actor = this.store.get<Actor>('actor', run.actorId);
@@ -212,16 +213,7 @@ export class Coordinator {
           catch { result = { ...result, outcome: 'failed', errorCode: 'SNAPSHOT_REQUIRED' }; }
         }
       }
-      if (run.kind === 'qa') {
-        run.messageIds = new IssueMessages(this.store).qaEvidence(run);
-        if (run.reportId) {
-          const row = this.store.db.prepare("SELECT data FROM records WHERE kind = 'qa_report' AND id = ? AND workspace_id = ?").get(run.reportId, run.workspaceId) as { data: string } | undefined;
-          const report = row ? JSON.parse(row.data) as QaReport : null;
-          if (report?.runId === run.id && report.workspaceId === run.workspaceId && report.issueId === run.issueId) {
-            this.store.put('qa_report', { ...report, messageIds: run.messageIds }, run.workspaceId);
-          }
-        }
-      }
+      new IssueMessages(this.store).captureQaEvidence(run);
       run.state = result.outcome === 'succeeded' ? 'SUCCEEDED' : result.outcome === 'cancelled' ? 'CANCELLED' : result.outcome === 'uncertain' ? 'UNCERTAIN' : 'FAILED';
       run.errorCode = owned.errorCode ?? result.errorCode; run.summary = (result.summary || run.summary)?.replaceAll(owned.token, '[redacted]').slice(-16000); run.finishedAt = new Date(this.now()).toISOString(); run.version = (run.version ?? 1) + 1;
       this.store.put('run', run, run.workspaceId);

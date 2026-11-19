@@ -815,6 +815,7 @@ export class Workflow {
         }
         for (const check of checks) { check.state = 'FAILED'; check.errorCode = 'EXTERNAL_STOP_CONFIRMED'; check.finishedAt = new Date(this.now()).toISOString(); s.put('check',check,w.id); }
         run.state = 'CANCELLED'; run.finishedAt = new Date(this.now()).toISOString();
+        new IssueMessages(s).captureQaEvidence(run);
         if (run.executionActorId) s.revokeActor(run.executionActorId);
         const issue = s.get<Issue>('issue', run.issueId);
         if (run.kind !== 'qa' && issue.candidate?.runId === run.id) {
