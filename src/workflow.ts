@@ -189,7 +189,7 @@ export class Workflow {
       const bindingAllowed = a.kind === 'git_binding' && (s.get<Workspace>('workspace',a.workspaceId).gitBindingId === evidence.id || (issue.gitSubmissionId && s.get<GitSubmission>('git_submission',issue.gitSubmissionId).bindingId === evidence.id));
       const childScopeAllowed = a.kind === 'scope_decision' && evidence.childId === issue.id && evidence.issueId === issue.parentId;
       if ((!bindingAllowed && !childScopeAllowed && evidence.issueId !== a.issueId) || (evidence.workspaceId && evidence.workspaceId !== a.workspaceId)) throw new DomainError('SCOPE_DENIED','Evidence belongs to another issue',403);
-      return { evidence };
+      return { evidence: a.kind === 'qa_report' ? new IssueMessages(s).reportView(actor, evidence as QaReport) : evidence };
     }
     const issues = s.list<Issue>('issue', a.workspaceId).filter(i => !['worker','qa'].includes(actor.role) || ((actor.role === 'worker' ? i.assignee : i.qaAssignee) === (actor.principalId ?? actor.id) && (!actor.runId || s.get<Run>('run', actor.runId).issueId === i.id)));
     if (op === 'issue_list') {
@@ -966,7 +966,7 @@ export class Workflow {
         const check: CheckRun = { id: randomUUID(), workspaceId: w.id, issueId: i.id, runId: run.id, actorId: actor.id, sessionId: actor.sessionId, candidateId: i.candidate!.id, snapshotId: snapshot.id, profileId: profile.id, profileHash: profile.hash, state: 'QUEUED', criteria: profile.criteria, testFiles, createdAt: new Date(this.now()).toISOString() };
         s.put('check',check,w.id); this.save(actor,op,i,{ checkId: check.id }); return { check, issue: this.display(i) };
       }
-      const report: QaReport = { id: randomUUID(), workspaceId: w.id, issueId: i.id, runId: run.id, actorId: actor.id, sessionId: actor.sessionId, candidateId: a.candidateId, snapshotId: snapshot.id, verdict: a.verdict, results: a.results, findings: a.findings, summary: a.summary };
+      const report: QaReport = { id: randomUUID(), workspaceId: w.id, issueId: i.id, runId: run.id, actorId: actor.id, sessionId: actor.sessionId, candidateId: a.candidateId, snapshotId: snapshot.id, verdict: a.verdict, results: a.results, findings: a.findings, summary: a.summary, messageIds: new IssueMessages(s).qaEvidence(run) };
       validateQaReport(s,i,actor,report); s.put('qa_report',report,w.id); run.reportId = report.id; run.version++; s.put('run',run,w.id);
       return { ...this.save(actor,op,i,{ reportId: report.id }), report, reviewPendingStop: true };
     }

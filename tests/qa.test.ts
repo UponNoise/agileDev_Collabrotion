@@ -89,9 +89,23 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     const candidate = f.current(f.issue.id).candidate!; const snapshot = f.store.get<Snapshot>('snapshot',candidate.snapshotId!);
     assert.deepEqual(snapshot.files.map(file => file.path),['contract.txt','source.txt']);
     writeFileSync(join(worker.cwd,'contract.txt'),'producer changed after sealing');
+    const thread = { workspaceId: f.workspace.id, issueId: f.issue.id };
+    const leadNote = (recipient: 'worker' | 'qa', body: string) => f.flow.execute(f.lead, 'message_send', {
+      ...thread, recipient: { kind: 'role', role: recipient }, kind: 'NOTE', body, idempotencyKey: randomUUID()
+    }) as any;
+    const earlier = leadNote('qa', 'Test-only note before QA starts');
     f.initialReview(); const qa = await f.context(1);
     assert.notEqual(qa.cwd,worker.cwd); assert.equal(f.store.authenticate(qa.token).role,'qa'); assert.equal(qa.harness,'dsh');
     assert.equal(readFileSync(join(qa.cwd,'contract.txt'),'utf8'),'preserve this independent file');
+    const inbound = leadNote('qa', 'Test-only message during QA');
+    const hidden = leadNote('worker', 'Test-only worker note');
+    const qaClient = new LocalClient(qa.endpoint, qa.token);
+    const outbound = await qaClient.command('message_send', {
+      ...thread, recipient: { kind: 'role', role: 'lead' }, kind: 'NOTE', body: 'Test-only QA observation', idempotencyKey: randomUUID()
+    });
+    const qaThread = await qaClient.command('message_list', thread);
+    assert.deepEqual(qaThread.messages.map((message: any) => message.id), [earlier.message.id, inbound.message.id, outbound.message.id]);
+    assert.ok(!qaThread.messages.some((message: any) => message.id === hidden.message.id));
     const check = await f.check(qa); assert.equal(check.state,'PASSED'); assert.equal(check.exitCode,0); assert.match(check.stdout!,/exact-content check passed/); assert.equal(check.snapshotId,snapshot.id); assert.ok(check.pid);
     const ready = await new LocalClient(qa.endpoint, qa.token).command('issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id });
     assert.ok(ready.nextActions.some((action: any) => action.operation === 'qa_report_submit' && action.args.candidateId === candidate.id));
@@ -101,9 +115,16 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     for (const severity of ['BLOCKER', 'MAJOR'] as const) {
       await assert.rejects(f.report(qa, check.id, 'PASS', [{ ...finding, severity }]), (error: any) => error.code === 'EVIDENCE_MISSING');
     }
-    await f.report(qa, check.id, 'PASS', [{ ...finding, severity: 'MINOR' }]);
+    const report = await f.report(qa, check.id, 'PASS', [{ ...finding, severity: 'MINOR' }]);
+    assert.deepEqual(report.report.messageIds, [inbound.message.id, outbound.message.id]);
+    const late = leadNote('qa', 'Test-only message after submission and before QA stops');
     assert.equal(f.current(f.issue.id).state,'QA_TEST');
-    assert.equal((await f.complete(qa)).state,'SUCCEEDED'); assert.equal(f.current(f.issue.id).stage,'FINAL');
+    const stopped = await f.complete(qa);
+    assert.equal(stopped.state,'SUCCEEDED'); assert.equal(f.current(f.issue.id).stage,'FINAL');
+    assert.deepEqual(stopped.messageIds, [inbound.message.id, outbound.message.id, late.message.id]);
+    const evidence = { ...thread, kind: 'qa_report', evidenceId: report.report.id };
+    assert.deepEqual((f.flow.execute(f.lead, 'evidence_get', evidence) as any).evidence.messageIds, stopped.messageIds);
+    assert.equal(Object.hasOwn((f.flow.execute(f.worker, 'evidence_get', evidence) as any).evidence, 'messageIds'), false);
     f.finalReview(); assert.throws(() => f.delivery('ACCEPT','old-digest'),(e: any) => e.code === 'APPROVAL_STALE');
     const opened = f.flow.execute(f.human, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
     const minor = opened.decisionRisks.defects[0];

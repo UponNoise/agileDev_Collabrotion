@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as waitFor } from 'node:timers/promises';
-import { DomainError, type Actor, type Issue, type Role, type Run } from './contracts.js';
+import { DomainError, type Actor, type Issue, type QaReport, type Role, type Run } from './contracts.js';
 import type { MessageList, MessageSend, MessageWait } from './message-contracts.js';
 import type { Store } from './store.js';
 
@@ -122,6 +122,40 @@ export class IssueMessages {
     return { status: 'CANCELLED', reply: null };
   }
 
+  private recordQaDelivery(actor: Actor, issue: Issue, message: IssueMessage) {
+    const runs = new Set<string>();
+    if (actor.role === 'qa' && actor.runId && this.store.get<Run>('run', actor.runId).kind === 'qa') runs.add(actor.runId);
+    if (message.recipient.kind === 'actor' && message.recipient.role === 'qa') {
+      const recipient = message.recipient.actorId;
+      for (const run of this.store.list<Run>('run', issue.workspaceId)) {
+        if (run.kind !== 'qa' || run.state !== 'RUNNING' || run.actorId !== recipient || !run.executionActorId) continue;
+        const target = this.store.get<Issue>('issue', run.issueId);
+        if (target.id === issue.id || target.parentId === issue.id) runs.add(run.id);
+      }
+    }
+    for (const runId of runs) {
+      this.store.put('qa_message_delivery', { id: `${runId}:${message.id}`, workspaceId: issue.workspaceId, runId, messageId: message.id }, issue.workspaceId);
+    }
+  }
+
+  qaEvidence(run: Run): string[] {
+    return (this.store.db.prepare(`
+      SELECT json_extract(data, '$.messageId') AS messageId FROM records
+      WHERE kind = 'qa_message_delivery' AND workspace_id = ? AND json_extract(data, '$.runId') = ?
+      ORDER BY rowid
+    `).all(run.workspaceId, run.id) as { messageId: string }[]).map(record => record.messageId);
+  }
+
+  reportView(actor: Actor, report: QaReport) {
+    if (oversightRole(actor.role) || !report.messageIds) return report;
+    const run = this.store.get<Run>('run', report.runId);
+    const belongsToQa = actor.role === 'qa' && run.actorId === (actor.principalId ?? actor.id) &&
+      (!actor.runId || actor.runId === run.id);
+    if (belongsToQa) return report;
+    const { messageIds, ...permitted } = report;
+    return permitted;
+  }
+
   send(actor: Actor, input: MessageSend) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
     if (actor.runId && this.store.get<Run>('run', actor.runId).state !== 'RUNNING') {
@@ -139,6 +173,7 @@ export class IssueMessages {
       createdAt: new Date(this.now()).toISOString()
     };
     this.store.put('issue_message', message, issue.workspaceId);
+    this.recordQaDelivery(actor, issue, message);
     this.store.event(issue.workspaceId, actor, 'message_sent', message.id, { issueId: issue.id, kind: message.kind, replyTo: message.replyTo });
     return { message, delivery: { state: 'STORED', reason: input.wake ? 'WAKE_DISABLED' : 'WAKE_NOT_REQUESTED' } };
   }
