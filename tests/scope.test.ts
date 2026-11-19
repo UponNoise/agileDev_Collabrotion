@@ -7,7 +7,7 @@ import { Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { planCoverage } from '../src/planning.js';
 import { scopeState } from '../src/scope.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
@@ -15,7 +15,7 @@ const fails = (fn: () => unknown, code: string) => assert.throws(fn,(e: unknown)
 function fixture() {
   const store = new Store(':memory:'); cleanup.push(() => store.close());
   const flow = new Workflow(store); const human = store.bootstrap().actor;
-  const invoke = (actor: Actor, op: string, input: object) => flow.execute(actor,op,{ ...input,idempotencyKey: randomUUID() }) as any;
+  const invoke = (actor: Actor, op: string, input: object) => executeFixture(flow,actor,op,{ ...input,idempotencyKey: randomUUID() }) as any;
   const workspace = invoke(human,'workspace_register',{ root: tmpdir(),name: 'Scope fixture',prefix: 'SCOPE' }).workspace;
   const run = (op: string,input: object,actor = human) => invoke(actor,op,{ workspaceId: workspace.id,...input });
   const root = run('issue_create',{ title: 'Scoped delivery',description: 'Deliver both approved criteria',criteria: ['A','B'] }).issue as Issue;

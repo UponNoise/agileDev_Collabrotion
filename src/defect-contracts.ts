@@ -66,6 +66,14 @@ export interface DefectSet {
   hash: string;
   members: { id: string; version: number }[];
 }
+export interface DecisionRiskView {
+  hash: string;
+  defects: Pick<DefectRecord, 'id' | 'key' | 'version' | 'state' | 'origin' | 'severity' | 'criterionIds' | 'reproduce' | 'expected' | 'actual' | 'source'>[];
+  qaReport: {
+    id: string;
+    findings: { id: string; version: number; criterionId: string; severity: DefectSeverity; expected: string; actual: string; reproduce: string }[];
+  } | null;
+}
 export interface DefectRejectionRecord {
   id: string;
   workspaceId: string;
@@ -95,7 +103,7 @@ const finding = {
 };
 export const defectFindingSchema = z.object(finding).strict();
 export const defectRejectionSchema = z.discriminatedUnion('classification', [
-  z.object({ classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).min(1).max(20) }).strict(),
+  z.object({ classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).max(20).optional() }).strict(),
   z.object({ classification: z.literal('SCOPE_CHANGE') }).strict(),
   z.object({ classification: z.literal('CLARIFICATION') }).strict()
 ]);

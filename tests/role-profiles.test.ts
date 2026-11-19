@@ -1,3 +1,4 @@
+import { executeFixture } from './fixtures.js';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -50,7 +51,7 @@ test('scoped design reads retain exact decision reasons and reject unrelated evi
   const f = fixture(t);
   const workspaceId = f.workspace.id;
   const command = (op: string, input: object) =>
-    f.flow.execute(f.human.actor, op, { workspaceId, idempotencyKey: randomUUID(), ...input }) as any;
+    executeFixture(f.flow, f.human.actor, op, { workspaceId, idempotencyKey: randomUUID(), ...input }) as any;
   const create = (title: string, parentId?: string) => command('issue_create', {
     title, description: 'Captured requirement content', criteria: ['AC1'],
     ...(parentId ? { parentId, expectedParentVersion: f.store.get<any>('issue', parentId).version } : {})

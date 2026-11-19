@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
-import { Actor, CheckRun, Issue, Run, Snapshot } from '../src/contracts.js';
+import { Actor, CheckRun, Issue, QaReport, Run, Snapshot } from '../src/contracts.js';
 import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
 import { createServer } from '../src/http.js';
@@ -15,7 +15,7 @@ import { LocalClient } from '../src/client.js';
 import { GitHubProvider } from '../src/git.js';
 import { GitVerifier } from '../src/git-verifier.js';
 import { GitSubmission } from '../src/contracts.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 async function until(check: () => boolean, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -35,7 +35,7 @@ async function fixture(mode: 'artifact' | 'git' = 'artifact') {
   const git = (...args: string[]) => execFileSync('git',args,{ cwd: source, windowsHide: true, stdio: 'ignore' });
   git('init'); git('add','.'); git('-c','user.name=Test','-c','user.email=test@example.invalid','-c','core.hooksPath=/dev/null','commit','-m','fixture');
   const store = new Store(join(root,'workflow.sqlite')); const flow = new Workflow(store); const human = store.bootstrap().actor;
-  const call = (actor: Actor,op: string,input: object) => flow.execute(actor,op,{ idempotencyKey: randomUUID(), ...input }) as any;
+  const call = (actor: Actor,op: string,input: object) => executeFixture(flow,actor,op,{ idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(human,'workspace_register',{ root: source, name: 'Independent QA fixture',prefix: 'QA' }).workspace;
   if (mode === 'git') { git('remote','add','origin','https://github.com/fixture/delivery.git'); call(human,'workspace_git_bind',{ workspaceId: workspace.id }); }
   const run = (op: string,input: object) => call(human,op,{ workspaceId: workspace.id,...input });
@@ -75,7 +75,7 @@ async function fixture(mode: 'artifact' | 'git' = 'artifact') {
     await until(() => ['PASSED','FAILED','UNCERTAIN'].includes(store.get<CheckRun>('check',result.check.id).state));
     return (await client.command('qa_check_get',{ workspaceId: workspace.id,checkId: result.check.id })).check as CheckRun;
   };
-  const report = (ctx: AdapterContext,checkId: string,verdict: 'PASS' | 'FAIL' | 'BLOCKED' = 'PASS') => new LocalClient(endpoint,ctx.token).command('qa_report_submit',{ workspaceId: workspace.id,issueId: issue.id,expectedVersion: current(issue.id).version,candidateId: current(issue.id).candidate!.id,verdict,summary: 'Independent fixture result',results: [{ criterionId: 'FILE',result: verdict === 'BLOCKED' ? 'NOT_RUN' : verdict,evidenceIds: checkId ? [checkId] : [],reason: 'Observed exact-content behavior' }],findings: verdict === 'FAIL' ? [{ criterionId: 'FILE',severity: 'MAJOR',expected: 'source.txt contains delivered',actual: 'source.txt contains incorrect output',reproduce: 'Run the captured .qa/check.mjs command on this snapshot' }] : [],idempotencyKey: randomUUID() });
+  const report = (ctx: AdapterContext, checkId: string, verdict: QaReport['verdict'] = 'PASS', findings?: QaReport['findings']) => new LocalClient(endpoint,ctx.token).command('qa_report_submit',{ workspaceId: workspace.id,issueId: issue.id,expectedVersion: current(issue.id).version,candidateId: current(issue.id).candidate!.id,verdict,summary: 'Independent fixture result',results: [{ criterionId: 'FILE',result: verdict === 'BLOCKED' ? 'NOT_RUN' : verdict,evidenceIds: checkId ? [checkId] : [],reason: 'Observed exact-content behavior' }],findings: findings ?? (verdict === 'FAIL' ? [{ criterionId: 'FILE',severity: 'MAJOR',expected: 'source.txt contains delivered',actual: 'source.txt contains incorrect output',reproduce: 'Run the captured .qa/check.mjs command on this snapshot' }] : []),idempotencyKey: randomUUID() });
   const finalReview = () => change('review_submit',issue.id,{ candidateId: current(issue.id).candidate!.id,verdict: 'PASS',reason: 'Final requirement-fit fixture review' },lead);
   const delivery = (decision = 'ACCEPT',digest?: string) => change('delivery_decide',issue.id,{ candidateId: current(issue.id).candidate!.id,digest: digest ?? (flow.execute(human,'issue_get',{ workspaceId: workspace.id,issueId: issue.id }) as any).deliveryDigest,decision,reason: 'Automated test fixture decision, not real user delivery acceptance' });
   const close = async () => { await coordinator.close(); await app.close(); store.close(); rmSync(root,{ recursive: true,force: true }); };
@@ -97,10 +97,22 @@ test('independent QA executes a real check on a sealed full snapshot before fina
     assert.ok(ready.nextActions.some((action: any) => action.operation === 'qa_report_submit' && action.args.candidateId === candidate.id));
     assert.equal(ready.blockers.some((blocker: any) => blocker.code === 'CHECKS_PENDING'), false);
     await assert.rejects(new LocalClient(qa.endpoint,qa.token).command('review_submit',{ workspaceId: f.workspace.id,issueId: f.issue.id,expectedVersion: f.current(f.issue.id).version,candidateId: candidate.id,verdict: 'PASS',reason: 'Narrative shortcut',idempotencyKey: randomUUID() }),(e: any) => e.code === 'ROLE_DENIED');
-    await f.report(qa,check.id); assert.equal(f.current(f.issue.id).state,'QA_TEST');
+    const finding = { criterionId: 'FILE', expected: 'No cosmetic warning', actual: 'Cosmetic warning', reproduce: 'Read the captured check output' };
+    for (const severity of ['BLOCKER', 'MAJOR'] as const) {
+      await assert.rejects(f.report(qa, check.id, 'PASS', [{ ...finding, severity }]), (error: any) => error.code === 'EVIDENCE_MISSING');
+    }
+    await f.report(qa, check.id, 'PASS', [{ ...finding, severity: 'MINOR' }]);
+    assert.equal(f.current(f.issue.id).state,'QA_TEST');
     assert.equal((await f.complete(qa)).state,'SUCCEEDED'); assert.equal(f.current(f.issue.id).stage,'FINAL');
     f.finalReview(); assert.throws(() => f.delivery('ACCEPT','old-digest'),(e: any) => e.code === 'APPROVAL_STALE');
-    assert.equal(f.delivery().issue.state,'DONE'); assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
+    const opened = f.flow.execute(f.human, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
+    const minor = opened.decisionRisks.defects[0];
+    assert.equal(minor.severity, 'MINOR');
+    assert.equal(minor.state, 'OPEN');
+    assert.equal(opened.decisionRisks.qaReport.findings[0].severity, 'MINOR');
+    const decision = f.change('delivery_decide', f.issue.id, { candidateId: candidate.id, digest: opened.deliveryDigest, riskHash: opened.decisionRisks.hash, decision: 'ACCEPT' });
+    assert.deepEqual(decision.approval.acknowledgedMinors, [{ id: minor.id, version: minor.version }]);
+    assert.equal(decision.issue.state, 'DONE'); assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
     assert.equal(readFileSync(join(f.source,'source.txt'),'utf8'),'original');
   } finally { await f.close(); }
 });
@@ -112,7 +124,12 @@ test('exact completion delegation records the human grantor and executing agent 
     assert.throws(() => f.change('grant_create',f.issue.id,{ granteeId: f.lead.id,action: 'complete',candidateId: f.current(f.issue.id).candidate!.id,digest: 'invented',expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'Cannot delegate an unreviewed fixture' }),(error: any) => error.code === 'APPROVAL_STALE');
     const qa = await f.context(1); const check = await f.check(qa); await f.report(qa,check.id); await f.complete(qa); f.finalReview();
     const digest = (f.flow.execute(f.human,'issue_get',{ workspaceId: f.workspace.id,issueId: f.issue.id }) as any).deliveryDigest;
-    const grant = f.change('grant_create',f.issue.id,{ granteeId: f.lead.id,action: 'complete',candidateId: f.current(f.issue.id).candidate!.id,digest,expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'Automated fixture explicitly delegates acceptance of this exact snapshot' }).grant;
+    const grantInput = { granteeId: f.lead.id,action: 'complete',candidateId: f.current(f.issue.id).candidate!.id,digest,expiresAt: new Date(Date.now()+3600000).toISOString(),reason: 'Automated fixture explicitly delegates acceptance of this exact snapshot' };
+    const stale = f.change('grant_create', f.issue.id, grantInput).grant;
+    f.change('defect_propose', f.issue.id, { severity: 'MINOR', criterionIds: ['FILE'], reproduce: 'Inspect this fixture', expected: 'No warning', actual: 'Possible cosmetic warning' }, f.lead);
+    assert.throws(() => f.change('delivery_complete', f.issue.id, { grantId: stale.id }, f.lead), (error: any) => error.code === 'GRANT_STALE');
+    assert.equal(f.store.get<any>('grant', stale.id).uses, 0);
+    const grant = f.change('grant_create', f.issue.id, grantInput).grant;
     assert.equal(f.store.list('delivery_approval',f.workspace.id).length,0);
     assert.equal(f.change('delivery_complete',f.issue.id,{ grantId: grant.id },f.lead).issue.state,'DONE');
     const decision = f.store.list<any>('delivery_approval',f.workspace.id)[0];
@@ -267,6 +284,39 @@ test('Git recovery records readiness only; explicit completion closes the saved 
     assert.equal(f.current(f.issue.id).acceptedDigest,digest); assert.equal(f.store.get<GitSubmission>('git_submission',git.id).verifiedAt,verified.verifiedAt);
     assert.equal(f.store.list('delivery_approval',f.workspace.id).length,count); assert.equal(f.store.list('git_attempt',f.workspace.id).length,2); assert.equal(calls,2);
     assert.equal(f.current(f.parent.id).state,'IN_PROGRESS');
+  } finally { await verifier.close(); await f.close(); }
+});
+
+test('a minor defect confirmed after acceptance blocks closure until explicitly acknowledged', { timeout: 20000 }, async () => {
+  const f = await reviewedGitFixture();
+  const verifier = new GitVerifier(f.store, new GitHubProvider(async () => Response.json({ sha: f.sha, tree: { sha: f.tree } }), () => undefined));
+  try {
+    const git = f.attach();
+    const accepted = f.delivery();
+    assert.equal(accepted.issue.state, 'USER_ACCEPTANCE');
+    assert.deepEqual(accepted.approval.acknowledgedMinors, []);
+    verifier.tick();
+    await until(() => f.store.get<GitSubmission>('git_submission', git.id).state === 'VERIFIED');
+    assert.equal(lastFinish(f, git.id).readyToComplete, true);
+    assert.equal(f.current(f.issue.id).state, 'USER_ACCEPTANCE');
+    const packet = () => f.flow.execute(f.human, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
+    const snapshot = f.store.get<Snapshot>('snapshot', accepted.issue.candidate.snapshotId);
+    assert.notEqual(snapshot.hash, accepted.issue.candidate.hash);
+    assert.equal(packet().defects.observation.snapshotHash, snapshot.hash);
+    const proposal = f.change('defect_propose', f.issue.id, { severity: 'MINOR', criterionIds: ['FILE'], expected: 'No cosmetic warning', actual: 'A cosmetic warning was observed', reproduce: 'Inspect the sealed delivery output' }, f.lead).defect;
+    const open = f.flow.execute(f.human, 'defect_triage', {
+      workspaceId: f.workspace.id, defectId: proposal.id, expectedVersion: proposal.version,
+      expectedIssueVersion: f.current(f.issue.id).version, action: 'CONFIRM', severity: 'MINOR',
+      observation: packet().defects.observation, reason: 'Confirm this test observation', idempotencyKey: randomUUID()
+    }) as any;
+    const close = f.change('delivery_complete', f.issue.id, {}, f.lead);
+    assert.deepEqual(close.closureBlocked, ['MINOR_ACKNOWLEDGEMENT_REQUIRED']);
+    assert.equal(f.current(f.issue.id).state, 'USER_ACCEPTANCE');
+    assert.equal(packet().deliveryDigest, accepted.approval.digest);
+    const renewed = f.delivery();
+    assert.deepEqual(renewed.approval.acknowledgedMinors, [{ id: proposal.id, version: open.defect.version }]);
+    assert.equal(renewed.issue.state, 'DONE');
+    assert.equal(packet().defects.observation.snapshotHash, snapshot.hash);
   } finally { await verifier.close(); await f.close(); }
 });
 

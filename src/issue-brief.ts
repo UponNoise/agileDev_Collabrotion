@@ -33,6 +33,7 @@ const remedies: Record<string, [message: string, role: Party, operation?: Operat
   CHECKS_PENDING: ['Wait for the QA checks to settle before reporting.', 'coordinator', 'qa_check_get'],
   HUMAN_ACCEPTANCE_REQUIRED: ['Review and accept the current delivery.', 'human', 'delivery_decide'],
   UNRESOLVED_DEFECTS: ['Review the open defects before completion.', 'lead', 'defect_list'],
+  MINOR_ACKNOWLEDGEMENT_REQUIRED: ['Review the current MINOR findings before accepting.', 'human', 'delivery_decide'],
   GIT_VERIFICATION_REQUIRED: ['Submit the current candidate commit for verification.', 'pm', 'git_submit'],
   GIT_VERIFICATION_PENDING: ['Wait for verification of the submitted commit.', 'git_verifier'],
   GIT_EVIDENCE_STALE: ['Review the submitted commit and its candidate binding.', 'pm', 'evidence_get'],
@@ -59,6 +60,7 @@ const commandRemedies: Record<string, [action: string, role: Party | 'caller', o
   EXECUTION_BINDING_REQUIRED: ['Queue a managed assignment at the approved scope.', 'pm', 'work_dispatch'],
   REVIEW_INDEPENDENCE_REQUIRED: ['Check the current independent QA assignment and its sealed snapshot.', 'qa', 'issue_get'],
   APPROVAL_STALE: ['Refresh the reviewed issue and present the current evidence for a new decision.', 'caller', 'issue_get'],
+  DECISION_RISKS_STALE: ['Refresh the issue and present the changed risks for a new decision.', 'human', 'issue_get'],
   SERVICE_UNAVAILABLE: ['Ask the owner to inspect the local service and reconnect when available.', 'human'],
   INTERNAL_ERROR: ['Ask the owner to inspect the local service before retrying.', 'human']
 };

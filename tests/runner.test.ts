@@ -13,7 +13,7 @@ import { AdapterContext, AdapterResult, ExecutionAdapter, NativeAdapter } from '
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
 import { prepareExecution } from '../src/execution.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 async function waitFor(check: () => boolean, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -33,7 +33,7 @@ async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapte
   const git = (...args: string[]) => execFileSync('git', args, { cwd: source, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   git('init'); git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fixture');
   const store = new Store(join(root, 'service.sqlite')); const flow = new Workflow(store); const owner = store.bootstrap();
-  const call = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
+  const call = (actor: Actor, operation: string, input: object) => executeFixture(flow, actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(owner.actor, 'workspace_register', { root: source, name: 'Runner fixture', prefix: 'RUN' }).workspace;
   const run = (op: string, input: object) => call(owner.actor, op, { workspaceId: workspace.id, ...input });
   const parent = run('issue_create', { title: 'Isolated delivery', description: 'Deliver reviewed changes', criteria: ['AC-1'] }).issue;

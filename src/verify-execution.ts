@@ -51,7 +51,9 @@ export async function verifyExecution(harness: Harness, bridgeScript: string, qa
   const parent = run('issue_create', { title: 'Native execution fixture', description: 'Verify the selected native harness executes in an isolated directory and submits actual files', criteria: ['FILE-1'], ...(qaHarness ? { artifactMode: 'artifact', artifactReason: 'Disposable integration fixture for artifact acceptance; does not verify Git commit closure' } : {}) }).issue;
   const change = (operation: string, issueId: string, input: object = {}) => run(operation, { issueId, expectedVersion: store.get<Issue>('issue', issueId).version, ...input });
   change('design_set', parent.id, { content: 'Create delivery.txt containing exactly agiledev-native-ok followed by a newline. Do not change README.md. Submit delivery.txt through the workflow tool. This is a disposable integration fixture, not a user delivery acceptance.', criteria: ['FILE-1'] });
-  change('design_submit', parent.id); change('design_decide', parent.id, { designId: store.get<Issue>('issue', parent.id).designId, decision: 'APPROVED', reason: 'Automated integration fixture setup; not approval of a real product requirement' });
+  change('design_submit', parent.id);
+  const designPacket = flow.execute(owner.actor, 'issue_get', { workspaceId: workspace.id, issueId: parent.id }) as any;
+  change('design_decide', parent.id, { designId: designPacket.design.id, designHash: designPacket.design.hash, riskHash: designPacket.designRisks.hash, decision: 'APPROVED', reason: 'Automated integration fixture setup; not approval of a real product requirement' });
   const task = run('issue_create', { parentId: parent.id, expectedParentVersion: store.get<Issue>('issue', parent.id).version, title: '[Test] Execution: write delivery.txt -> authenticated submission', description: 'Write delivery.txt containing exactly agiledev-native-ok and a newline, then use the provided MCP workflow tools to submit that file for initial lead review. Preserve README.md.', criteria: ['FILE-1'] }).issue;
   const worker = run('actor_enroll', { role: 'worker', name: `${harness} fixture worker` });
   change('issue_assign', task.id, { actorId: worker.actor.id, harness });
@@ -85,7 +87,7 @@ export async function verifyExecution(harness: Harness, bridgeScript: string, qa
         call(lead!,'review_submit',{ workspaceId: workspace.id,issueId: task.id,expectedVersion: afterQa.version,candidateId: afterQa.candidate!.id,verdict: 'PASS',reason: 'Automated integration fixture final review, not real product acceptance' });
         afterQa = store.get<Issue>('issue',task.id);
         const packet = flow.execute(owner.actor,'issue_get',{ workspaceId: workspace.id,issueId: task.id }) as any;
-        change('delivery_decide',task.id,{ candidateId: afterQa.candidate!.id,digest: packet.deliveryDigest,decision: 'ACCEPT',reason: 'Automated integration fixture owner decision only; not actual user acceptance or Git closure' });
+        change('delivery_decide',task.id,{ candidateId: afterQa.candidate!.id,digest: packet.deliveryDigest,riskHash: packet.decisionRisks.hash,decision: 'ACCEPT',reason: 'Automated integration fixture owner decision only; not actual user acceptance or Git closure' });
       }
       const report = qaRun.reportId ? store.get<QaReport>('qa_report',qaRun.reportId) : null;
       const snapshot = store.get<Snapshot>('snapshot',initial.candidate!.snapshotId!);

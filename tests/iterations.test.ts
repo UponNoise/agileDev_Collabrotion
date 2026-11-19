@@ -14,7 +14,7 @@ import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
@@ -387,7 +387,7 @@ test('managed worker and independent QA receive the same bounded advisory contex
   const store = new Store(join(root, 'fixture.sqlite'));
   const flow = new Workflow(store);
   const human = store.bootstrap().actor;
-  const call = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
+  const call = (actor: Actor, operation: string, input: object) => executeFixture(flow, actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(human, 'workspace_register', { root: source, name: 'Advisory prompt fixture', prefix: 'PROMPT' }).workspace as Workspace;
   const run = (operation: string, input: object) => call(human, operation, { workspaceId: workspace.id, ...input });
   const parent = run('issue_create', { title: 'Independent prompt fixture', description: 'Capture bounded advisory context without a real model', criteria: ['A'] }).issue as Issue;

@@ -238,6 +238,10 @@ export class Workflow {
     } : null;
     const readiness = this.readiness(issue);
     const atAcceptance = issue.state === 'USER_ACCEPTANCE';
+    const registry = this.defects();
+    const decisionRisks = actor.role === 'human' && atAcceptance ? registry.visibleDecisionRisks(issue) : undefined;
+    const designRisks = actor.role === 'human' && design?.status === 'IN_REVIEW'
+      ? registry.visibleDecisionRisks(root) : undefined;
     let deliveryDigest: string | null = null;
     if (atAcceptance) { try { deliveryDigest = acceptanceDigest(s, issue); } catch {} }
     const submission = issue.gitSubmissionId ? s.get<GitSubmission>('git_submission', issue.gitSubmissionId) : null;
@@ -264,7 +268,7 @@ export class Workflow {
       } };
     });
     const nextActions = this.nextActions(actor, issue, workspace, design, activeRun,
-      readiness.ready, deliveryDigest, closureBlocked, submission, qaChecks);
+      readiness.ready, deliveryDigest, closureBlocked, submission, qaChecks, decisionRisks?.hash ?? designRisks?.hash);
     const waitingOn = waitingParty(issue, design, activeRun, blockers, nextActions.length > 0);
     if (permitsOperation(actor.role, 'defect_propose')) {
       nextActions.push({ operation: 'defect_propose', args: { workspaceId: workspace.id, issueId: issue.id, expectedVersion: issue.version } });
@@ -307,20 +311,19 @@ export class Workflow {
       })) };
     })() : null;
     const coverage = isAggregate(s, root) ? planCoverage(s, root) : null;
-    const registry = this.defects();
     return {
       issue: this.display(issue), iteration: this.iterations().packet(actor, issue), readiness,
       status, blockers, blockerCount: blockers.length, nextActions, waitingOn, design: designBrief, lastRejection,
       defects: { observation: registry.observe(issue), decisionSet: registry.confirmedSet(actor, workspace.id, issue.id) },
       executionRecovery,
       deliveryDigest, git, closureBlocked, view: 'full' as const,
-      ...(actor.role === 'human' && (atAcceptance || (!issue.parentId && design?.status === 'IN_REVIEW'))
-        ? { decisionRisks: registry.visibleDecisionRisks(issue) } : {}),
+      ...(decisionRisks ? { decisionRisks } : {}),
+      ...(designRisks ? { designRisks } : {}),
       planning: coverage ? { planId: root.planId ?? null, ready: coverage.ready, status: coverage.status, blocking: coverage.blocking, children: coverage.children } : null,
       ...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {})
     };
   }
-  private nextActions(actor: Actor, issue: Issue, workspace: Workspace, design: Design | null, activeRun: Run | undefined, ready: boolean, digest: string | null, closureBlocked: string[], submission: GitSubmission | null, qaChecks: CheckRun[]) {
+  private nextActions(actor: Actor, issue: Issue, workspace: Workspace, design: Design | null, activeRun: Run | undefined, ready: boolean, digest: string | null, closureBlocked: string[], submission: GitSubmission | null, qaChecks: CheckRun[], riskHash?: string) {
     const actions: IssueAction[] = [];
     const { workspaceId, id: issueId, version: expectedVersion, scopeRevision, fence, candidate } = issue;
     const target = { workspaceId, issueId, expectedVersion };
@@ -338,8 +341,9 @@ export class Workflow {
     if (issue.state === 'DONE' || issue.state === 'ABANDONED' || issue.state === 'ON_HOLD') return actions;
 
     if (!activeRun && !issue.parentId && design?.status !== 'APPROVED') {
-      if (design?.status === 'IN_REVIEW') offer('design_decide', { designId: design.id });
-      else {
+      if (design?.status === 'IN_REVIEW') {
+        if (riskHash) offer('design_decide', { designId: design.id, designHash: design.hash, riskHash });
+      } else {
         offer('design_set');
         if (design) offer('design_submit');
       }
@@ -371,7 +375,7 @@ export class Workflow {
       if (!qaChecksPending(qaChecks)) offer('qa_report_submit', { candidateId: candidate.id });
     }
     if (issue.state === 'USER_ACCEPTANCE' && candidate?.snapshotId) {
-      if (digest) offer('delivery_decide', { candidateId: candidate.id, digest });
+      if (digest && riskHash) offer('delivery_decide', { candidateId: candidate.id, digest, riskHash });
       const gitRequired = (issue.artifactMode ?? (workspace.commonDir ? 'git' : 'artifact')) === 'git';
       if (gitRequired && workspace.gitBindingId) {
         offer('git_submit', { candidateId: candidate.id });
@@ -382,7 +386,7 @@ export class Workflow {
       }
       if (!closureBlocked.length) offer('delivery_complete');
       else if ((actor.role === 'lead' || actor.role === 'pm') && !actor.runId &&
-          closureBlocked.length === 1 && closureBlocked[0] === 'HUMAN_ACCEPTANCE_REQUIRED') {
+          closureBlocked.every(code => code === 'HUMAN_ACCEPTANCE_REQUIRED' || code === 'MINOR_ACKNOWLEDGEMENT_REQUIRED')) {
         const grant = this.store.list<Grant>('grant', workspaceId).find(item => item.issueId === issueId &&
           item.granteeId === actor.id && item.action === 'complete' && this.grantStatus(item, issue) === 'AVAILABLE');
         if (grant) offer('delivery_complete', { grantId: grant.id });
@@ -399,7 +403,11 @@ export class Workflow {
       delivery: issue => {
         let digest: string | null = null;
         try { digest = acceptanceDigest(this.store,issue); } catch {}
-        try { const blockers = this.closureBlockers(issue); return { digest,accepted: !!digest && !blockers.includes('HUMAN_ACCEPTANCE_REQUIRED'),blockers }; }
+        try {
+          const blockers = this.closureBlockers(issue);
+          return { digest, accepted: !!digest && !blockers.some(code =>
+            code === 'HUMAN_ACCEPTANCE_REQUIRED' || code === 'MINOR_ACKNOWLEDGEMENT_REQUIRED'), blockers };
+        }
         catch (error) { return { digest: null,accepted: false,blockers: [error instanceof DomainError ? error.code : 'EVIDENCE_STALE'] }; }
       },
       unmanaged: issue => this.unmanagedWork(issue)
@@ -612,10 +620,24 @@ export class Workflow {
     if (grant.uses >= grant.maxUses) return 'EXHAUSTED';
     if (grant.scopeHash !== this.grantScope(issue)) return 'STALE';
     if (grant.action === 'complete') {
-      try { if (grant.candidateId !== issue.candidate?.id || grant.digest !== acceptanceDigest(this.store,issue)) return 'STALE'; }
+      try {
+        if (grant.candidateId !== issue.candidate?.id || grant.digest !== acceptanceDigest(this.store,issue)) return 'STALE';
+        const risks = this.defects().visibleDecisionRisks(issue);
+        if (grant.riskHash ? grant.riskHash !== risks.hash : risks.defects.length || risks.qaReport?.findings.length) return 'STALE';
+      }
       catch { return 'STALE'; }
     }
     return 'AVAILABLE';
+  }
+  private bindDecisionRisks(issue: Issue, expected: unknown, requireQa: boolean) {
+    const risks = this.defects().visibleDecisionRisks(issue);
+    if (requireQa && !risks.qaReport) throw new DomainError('EVIDENCE_STALE', 'The current QA finding set is unavailable');
+    if (risks.hash !== expected) throw new DomainError('DECISION_RISKS_STALE', 'Review the current risk packet before deciding', 409, { currentRiskHash: risks.hash });
+    return {
+      riskHash: risks.hash,
+      acknowledgedMinors: risks.defects.filter(record => record.state === 'OPEN' && record.severity === 'MINOR')
+        .map(({ id, version }) => ({ id, version }))
+    };
   }
   private useGrant(actor: Actor, issue: Issue, action: Grant['action'], grantId?: string) {
     requireRole(actor,'lead','pm');
@@ -646,14 +668,19 @@ export class Workflow {
     const s = this.store; const blockers: string[] = [];
     let digest: string | undefined;
     try { digest = acceptanceDigest(s,issue); } catch (error) { blockers.push(error instanceof DomainError ? error.code : 'EVIDENCE_STALE'); }
-    const approved = digest && issue.acceptedDigest === digest && s.list<any>('delivery_approval',issue.workspaceId).some(a => a.issueId === issue.id && a.candidateId === issue.candidate?.id && a.digest === digest && a.decision === 'ACCEPT' && s.get<Actor>('actor',a.actorId).role === 'human');
+    const approved = digest && issue.acceptedDigest === digest
+      ? s.list<any>('delivery_approval',issue.workspaceId).findLast(a => a.issueId === issue.id && a.candidateId === issue.candidate?.id && a.digest === digest && a.decision === 'ACCEPT' && s.get<Actor>('actor',a.actorId).role === 'human')
+      : undefined;
     if (!approved) blockers.push('HUMAN_ACCEPTANCE_REQUIRED');
     if (issue.parentId && ['ON_HOLD','ABANDONED'].includes(s.get<Issue>('issue',issue.parentId).state)) blockers.push('ANCESTOR_BLOCKED');
     if (issue.state !== 'USER_ACCEPTANCE') blockers.push('DELIVERY_NOT_READY');
     if (inScopeChildren(s,issue).some(c => c.state !== 'DONE')) blockers.push('CHILDREN_INCOMPLETE');
     if (issue.dependencies.some(id => s.get<Issue>('issue',id).state !== 'DONE')) blockers.push('DEPENDENCY_BLOCKED');
     if (s.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && (liveRunStates as readonly string[]).includes(r.state))) blockers.push('RUN_STILL_LIVE');
-    if (s.list<any>('defect',issue.workspaceId).some(d => d.issueId === issue.id && d.state === 'OPEN' && d.severity !== 'INFO')) blockers.push('UNRESOLVED_DEFECTS');
+    const openDefects = s.list<any>('defect',issue.workspaceId).filter(d => d.issueId === issue.id && d.state === 'OPEN');
+    if (openDefects.some(d => d.severity === 'BLOCKER' || d.severity === 'MAJOR')) blockers.push('UNRESOLVED_DEFECTS');
+    if (openDefects.some(d => d.severity === 'MINOR' && !approved?.acknowledgedMinors?.some((risk: { id: string; version: number }) =>
+      risk.id === d.id && risk.version === d.version))) blockers.push('MINOR_ACKNOWLEDGEMENT_REQUIRED');
     const workspace = s.get<Workspace>('workspace',issue.workspaceId);
     if ((issue.artifactMode ?? (workspace.commonDir ? 'git' : 'artifact')) === 'git') {
       if (!issue.gitSubmissionId) blockers.push('GIT_VERIFICATION_REQUIRED');
@@ -839,10 +866,12 @@ export class Workflow {
       const lifetime = Date.parse(a.expiresAt)-this.now();
       if (lifetime <= 0 || lifetime > 604800000) throw new DomainError('GRANT_EXPIRY_INVALID','A grant must expire in the next seven days');
       if (a.scopeHash !== this.grantScope(i)) throw new DomainError('GRANT_SCOPE_STALE','The issue or its child scope changed after the authorization view was loaded');
+      let riskBinding: Pick<Grant, 'riskHash' | 'acknowledgedMinors'> = {};
       if (a.action === 'complete') {
         if (i.state !== 'USER_ACCEPTANCE' || a.candidateId !== i.candidate?.id || a.digest !== acceptanceDigest(s,i)) throw new DomainError('APPROVAL_STALE','Completion authority must bind the current reviewed delivery');
-      } else if (a.candidateId !== undefined || a.digest !== undefined) throw new DomainError('INVALID_INPUT','Delivery bindings apply only to completion grants',400);
-      const grant: Grant = { id: randomUUID(),workspaceId: w.id,issueId: i.id,grantorId: actor.id,granteeId: grantee.id,action: a.action,scopeRevision: i.scopeRevision,designId: this.design(i)?.id ?? null,scopeHash: this.grantScope(i),candidateId: a.candidateId,digest: a.digest,expiresAt: a.expiresAt,maxUses: a.maxUses,uses: 0,version: 1,reason: a.reason,createdAt: new Date(this.now()).toISOString() };
+        riskBinding = this.bindDecisionRisks(i, a.riskHash, true);
+      } else if (a.candidateId !== undefined || a.digest !== undefined || a.riskHash !== undefined) throw new DomainError('INVALID_INPUT','Delivery bindings apply only to completion grants',400);
+      const grant: Grant = { id: randomUUID(),workspaceId: w.id,issueId: i.id,grantorId: actor.id,granteeId: grantee.id,action: a.action,scopeRevision: i.scopeRevision,designId: this.design(i)?.id ?? null,scopeHash: this.grantScope(i),candidateId: a.candidateId,digest: a.digest,...riskBinding,expiresAt: a.expiresAt,maxUses: a.maxUses,uses: 0,version: 1,reason: a.reason,createdAt: new Date(this.now()).toISOString() };
       s.put('grant',grant,w.id);
       return { ...this.save(actor,op,i,{ grantId: grant.id,granteeId: grant.granteeId,action: grant.action,reason: a.reason }),grant };
     }
@@ -894,7 +923,7 @@ export class Workflow {
       let grant: Grant | undefined;
       if (a.grantId) {
         grant = this.useGrant(actor,i,'complete',a.grantId);
-        const approval = { id: randomUUID(),issueId: i.id,actorId: grant.grantorId,executedBy: actor.id,grantId: grant.id,source: 'delegated_close',candidateId: grant.candidateId,digest: grant.digest,decision: 'ACCEPT',reason: grant.reason,at: new Date(this.now()).toISOString() };
+        const approval = { id: randomUUID(),issueId: i.id,actorId: grant.grantorId,executedBy: actor.id,grantId: grant.id,source: 'delegated_close',candidateId: grant.candidateId,digest: grant.digest,riskHash: grant.riskHash,acknowledgedMinors: grant.acknowledgedMinors,decision: 'ACCEPT',reason: grant.reason,at: new Date(this.now()).toISOString() };
         s.put('delivery_approval',approval,w.id); i.acceptedDigest = grant.digest;
       }
       const blockers = this.closureBlockers(i);
@@ -936,10 +965,12 @@ export class Workflow {
     if (op === 'delivery_decide') {
       requireRole(actor,'human');
       if (i.state !== 'USER_ACCEPTANCE' || i.candidate?.id !== a.candidateId || acceptanceDigest(s,i) !== a.digest) throw new DomainError('APPROVAL_STALE','Accept only the current reviewed delivery digest');
-      const approval = { id: randomUUID(), issueId: i.id, actorId: actor.id, candidateId: i.candidate!.id, digest: a.digest, decision: a.decision, reason: a.reason, at: new Date(this.now()).toISOString() };
+      if (a.decision === 'REJECT' && !a.reason.trim()) throw new DomainError('INVALID_INPUT', 'Give a reason for the rejection', 400);
+      const risk = this.bindDecisionRisks(i, a.riskHash, true);
+      const approval = { id: randomUUID(), issueId: i.id, actorId: actor.id, candidateId: i.candidate!.id, digest: a.digest, riskHash: risk.riskHash,...(a.decision === 'ACCEPT' ? { acknowledgedMinors: risk.acknowledgedMinors } : {}), decision: a.decision, reason: a.reason, at: new Date(this.now()).toISOString() };
       s.put('delivery_approval',approval,w.id);
       if (a.decision === 'REJECT') {
-        this.defects().classifyRejection(actor,w.id,i.id,approval.id,{ classification: a.classification,...(a.classification === 'DEFECT' ? { findings: a.findings } : {}) });
+        this.defects().classifyRejection(actor,w.id,i.id,approval.id,{ classification: a.classification,...(a.classification === 'DEFECT' && a.findings !== undefined ? { findings: a.findings } : {}) });
         i.state = 'USER_REJECTED'; i.acceptedDigest = undefined;
       }
       else {
@@ -992,11 +1023,13 @@ export class Workflow {
       const d = s.get<Design>('design', i.designId);
       if (op === 'design_submit') { if (d.status !== 'DRAFT' && d.status !== 'CHANGES_REQUESTED') throw new DomainError('INVALID_TRANSITION', 'Design is not editable'); d.status = 'IN_REVIEW'; }
       else {
-        if (a.designId !== d.id) throw new DomainError('APPROVAL_STALE', 'Design revision changed');
+        if (a.designId !== d.id || a.designHash !== d.hash) throw new DomainError('APPROVAL_STALE', 'Design revision changed');
         if (d.requirementDescription !== i.description) throw new DomainError('DESIGN_SCOPE_STALE','Create a current scope-bound design revision before approving it');
         if (d.status !== 'IN_REVIEW') throw new DomainError('INVALID_TRANSITION', 'Design is not awaiting a decision');
+        if (a.decision === 'CHANGES_REQUESTED' && !a.reason.trim()) throw new DomainError('INVALID_INPUT', 'Give a reason for requesting changes', 400);
+        const risk = this.bindDecisionRisks(i, a.riskHash, false);
         d.status = a.decision;
-        s.put('approval', { id: randomUUID(), actorId: actor.id, designId: d.id, hash: d.hash, decision: a.decision, reason: a.reason, at: new Date(this.now()).toISOString() }, w.id);
+        s.put('approval', { id: randomUUID(), actorId: actor.id, designId: d.id, hash: d.hash, riskHash: risk.riskHash, decision: a.decision, reason: a.reason, at: new Date(this.now()).toISOString() }, w.id);
       }
       s.put('design', d, w.id);
       return this.save(actor, op, i, { designId: d.id, decision: d.status });

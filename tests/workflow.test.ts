@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { Actor, DomainError, Issue, Run, agentOperations } from '../src/contracts.js';
 import { Store, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
-import { applyFixturePlan, bindFixtureImplementation } from './fixtures.js';
+import { applyFixturePlan, bindFixtureImplementation, executeFixture } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
@@ -18,7 +18,7 @@ function setup() {
   const human = store.bootstrap();
   let clock = Date.now();
   const workflow = new Workflow(store, () => clock);
-  const call = (actor: Actor, op: string, input: object = {}) => (op === 'work_claim' ? workflow.claimReservedWork.bind(workflow,actor) : workflow.execute.bind(workflow,actor,op))( { ...(['workspace_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'grant_list'].includes(op) ? {} : { idempotencyKey: randomUUID() }), ...input }) as any;
+  const call = (actor: Actor, op: string, input: object = {}) => (op === 'work_claim' ? workflow.claimReservedWork.bind(workflow,actor) : executeFixture.bind(null,workflow,actor,op))( { ...(['workspace_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'grant_list'].includes(op) ? {} : { idempotencyKey: randomUUID() }), ...input }) as any;
   const workspace = call(human.actor, 'workspace_register', { root, name: 'Test workspace', prefix: 'TEST' }).workspace;
   const enroll = (role: string) => call(human.actor, 'actor_enroll', { workspaceId: workspace.id, role, name: `${role} test` });
   const lead = enroll('lead'); const pm = enroll('pm'); const worker = enroll('worker'); const qa = enroll('qa');

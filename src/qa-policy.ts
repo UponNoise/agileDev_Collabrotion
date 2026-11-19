@@ -75,7 +75,7 @@ export function validateQaReport(store: Store, issue: Issue, actor: Actor, repor
   }
   if (report.findings.some(f => !issue.criteria.includes(f.criterionId))) throw new DomainError('QA_COVERAGE_REQUIRED','Findings must identify an assigned criterion');
   const referenced = new Set(report.results.flatMap(r => r.evidenceIds));
-  if (report.verdict === 'PASS' && (report.results.some(r => r.result !== 'PASS') || report.findings.some(f => f.severity !== 'INFO') || (run.checkProfileIds ?? []).some(id => !checks.some(c => c.profileId === id && c.state === 'PASSED' && referenced.has(c.id))))) throw new DomainError('EVIDENCE_MISSING','QA cannot pass with missing checks, failed criteria, or unresolved findings');
+  if (report.verdict === 'PASS' && (report.results.some(r => r.result !== 'PASS') || report.findings.some(f => f.severity === 'BLOCKER' || f.severity === 'MAJOR') || (run.checkProfileIds ?? []).some(id => !checks.some(c => c.profileId === id && c.state === 'PASSED' && referenced.has(c.id))))) throw new DomainError('EVIDENCE_MISSING','QA cannot pass with missing checks, failed criteria, or BLOCKER/MAJOR findings');
   if (report.verdict === 'FAIL' && (!report.findings.length || !report.results.some(r => r.result === 'FAIL'))) throw new DomainError('FINDING_REQUIRED','QA rejection requires a failed criterion and reproducible finding');
 }
 export function acceptanceDigest(store: Store, issue: Issue) {

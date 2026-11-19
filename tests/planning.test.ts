@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Actor, DomainError, Issue, Plan } from '../src/contracts.js';
 import { Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
-import { bindFixtureImplementation } from './fixtures.js';
+import { bindFixtureImplementation, executeFixture } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -21,7 +21,7 @@ function fixture(criteria = ['A', 'B', 'ASSEMBLY']) {
   cleanup.push(() => rmSync(source,{ recursive: true,force: true }));
   const human = store.bootstrap().actor;
   const call = (actor: Actor, op: string, input: object) =>
-    (op === 'work_claim' ? flow.claimReservedWork.bind(flow,actor) : flow.execute.bind(flow,actor,op))({
+    (op === 'work_claim' ? flow.claimReservedWork.bind(flow,actor) : executeFixture.bind(null,flow,actor,op))({
       ...input,
       ...(['plan_get', 'issue_get'].includes(op) ? {} : { idempotencyKey: randomUUID() })
     }) as any;

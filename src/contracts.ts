@@ -19,7 +19,8 @@ export interface GitSubmission { id: string; workspaceId: string; issueId: strin
 export interface GitAttempt { id: string; submissionId: string; workspaceId: string; issueId: string; attempt: number; entryIndex: number; treeComparison: boolean; evidenceRole: 'snapshot' | 'reference'; startedAt: string; finishedAt?: string; state: 'VERIFYING' | 'VERIFIED' | 'UNAVAILABLE' | 'FAILED' | 'STALE'; apiVersion: string; repository: string; sha: string; errorCode?: string; rootTreeSha?: string; treeSha?: string; expectedTreeSha?: string }
 export interface Design { id: string; issueId: string; content: string; criteria: string[]; status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'CHANGES_REQUESTED'; hash: string; requirementDescription?: string }
 export const grantActions = ['hold', 'resume', 'abandon', 'reopen', 'complete'] as const;
-export interface Grant { id: string; workspaceId: string; issueId: string; grantorId: string; granteeId: string; action: typeof grantActions[number]; scopeRevision: number; designId: string | null; scopeHash: string; candidateId?: string; digest?: string; expiresAt: string; maxUses: number; uses: number; version: number; reason: string; createdAt: string; revokedAt?: string; revokedBy?: string; revocationReason?: string }
+export interface AcknowledgedMinor { id: string; version: number }
+export interface Grant { id: string; workspaceId: string; issueId: string; grantorId: string; granteeId: string; action: typeof grantActions[number]; scopeRevision: number; designId: string | null; scopeHash: string; candidateId?: string; digest?: string; riskHash?: string; acknowledgedMinors?: AcknowledgedMinor[]; expiresAt: string; maxUses: number; uses: number; version: number; reason: string; createdAt: string; revokedAt?: string; revokedBy?: string; revocationReason?: string }
 export interface Plan { id: string; workspaceId: string; issueId: string; designId: string | null; mode: 'DRAFT' | 'READY'; actorId: string; reason: string; createdAt: string; scopeHash: string; hash: string; integrationCriteria: string[]; overlapReasons: Record<string,string>; tasks: { issueId: string; scopeRevision: number; title: string; description: string; criteria: string[]; dependencies: string[] }[] }
 export interface ScopeBinding { issueId: string; parentId: string; version: number; scopeRevision: number; title: string; description: string; criteria: string[]; hash: string }
 export interface ScopeDecision { id: string; workspaceId: string; issueId: string; childId: string; designId: string; designHash: string; action: 'EXCLUDE' | 'REPLACE' | 'RESTORE'; actorId: string; reason: string; createdAt: string; previousDecisionId: string | null; target: ScopeBinding; replacements: ScopeBinding[]; hash: string }
@@ -67,11 +68,12 @@ const estimate = z.object({ value: z.number().positive().max(100000), unit: z.en
 const schedule = { priority: z.number().int().min(0).max(4).optional(),plannedStart: z.iso.date().nullable().optional(),dueDate: z.iso.date().nullable().optional(),estimate: estimate.optional(),iterationId: id.nullable().optional() };
 const retiredIterationError = { error: (issue: z.core.$ZodRawIssue) => issue.code === 'unrecognized_keys' && (issue.keys as string[]).some(key => ['iteration','legacyIterationLabel'].includes(key)) ? 'Use iterationId; legacyIterationLabel is read-only' : undefined };
 const planTask = z.object({ ref: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,49}$/),issueId: id.optional(),expectedVersion: z.number().int().positive().optional(),title: z.string().min(1).max(300),description: z.string().max(65536).optional(),criteria: z.array(id).max(100).optional(),dependencies: z.array(z.union([z.object({ ref: id }).strict(),z.object({ issueId: id }).strict()])).max(100).optional(),assigneeId: id.nullable().optional(),harness: z.enum(harnesses).nullable().optional(),...schedule },retiredIterationError).strict();
-const delivery = { ...change, candidateId: id, digest: id, reason: text };
+const riskHash = z.string().regex(/^[a-f0-9]{64}$/).optional();
+const delivery = { ...change, candidateId: id, digest: id, riskHash };
 const deliveryDecisionSchema = z.union([
-  z.object({ ...delivery, decision: z.literal('ACCEPT') }).strict(),
-  z.object({ ...delivery, decision: z.literal('REJECT'), classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).min(1).max(20) }).strict(),
-  z.object({ ...delivery, decision: z.literal('REJECT'), classification: z.enum(['SCOPE_CHANGE','CLARIFICATION']) }).strict()
+  z.object({ ...delivery, decision: z.literal('ACCEPT'), reason: text.optional() }).strict(),
+  z.object({ ...delivery, decision: z.literal('REJECT'), reason: text, classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).max(20).optional() }).strict(),
+  z.object({ ...delivery, decision: z.literal('REJECT'), reason: text, classification: z.enum(['SCOPE_CHANGE','CLARIFICATION']) }).strict()
 ]);
 export const schemas = {
   ...iterationSchemas,
@@ -110,9 +112,12 @@ export const schemas = {
   artifact_read: z.object({ ...target,snapshotId: id,path: z.string().min(1).max(500),offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(65536).default(16384),encoding: z.enum(['utf8','base64']).default('utf8') }).strict(),
   design_set: z.object({ ...change, content: text, criteria: z.array(id).min(1).max(100) }).strict(),
   design_submit: z.object(change).strict(),
-  design_decide: z.object({ ...change, designId: id, decision: z.enum(['APPROVED', 'CHANGES_REQUESTED']), reason: text }).strict(),
+  design_decide: z.discriminatedUnion('decision', [
+    z.object({ ...change, designId: id, designHash: id.optional(), riskHash, decision: z.literal('APPROVED'), reason: text.optional() }).strict(),
+    z.object({ ...change, designId: id, designHash: id.optional(), riskHash, decision: z.literal('CHANGES_REQUESTED'), reason: text }).strict()
+  ]),
   issue_assign: z.object({ ...change, actorId: id.nullable(), harness: z.enum(harnesses).nullable() }).strict(),
-  grant_create: z.object({ ...change, granteeId: id, action: z.enum(grantActions), scopeHash: id, expiresAt: z.iso.datetime(), maxUses: z.number().int().min(1).max(10).default(1), reason: text, candidateId: id.optional(), digest: id.optional() }).strict(),
+  grant_create: z.object({ ...change, granteeId: id, action: z.enum(grantActions), scopeHash: id, expiresAt: z.iso.datetime(), maxUses: z.number().int().min(1).max(10).default(1), reason: text, candidateId: id.optional(), digest: id.optional(), riskHash }).strict(),
   grant_revoke: z.object({ ...change, grantId: id, expectedGrantVersion: z.number().int().positive(), reason: text }).strict(),
   grant_list: z.object({ ...target, limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().nonnegative().default(0) }).strict(),
   dependency_add: z.object({ ...change, dependsOn: id }).strict(),

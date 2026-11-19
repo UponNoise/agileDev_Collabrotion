@@ -12,7 +12,7 @@ import { sealSnapshot, snapshotManifest } from '../src/snapshots.js';
 import { Store, canonical, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { acceptanceDigest, integrationManifest } from '../src/qa-policy.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 const gitAt = (root: string) => (...args: string[]) => execFileSync('git', args, { cwd: root, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const blobSha = (bytes: Buffer) => createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
@@ -383,7 +383,7 @@ test('pre-upgrade accepted children keep parent integration valid', async () => 
   const f = await multiRepoFixture();
   try {
     const s = f.store; const flow = f.flow; const owner = f.owner; const w = f.workspace;
-    const call = (op: string, input: object) => flow.execute(owner, op, { idempotencyKey: randomUUID(), ...input }) as any;
+    const call = (op: string, input: object) => executeFixture(flow, owner, op, { idempotencyKey: randomUUID(), ...input }) as any;
     const parent = call('issue_create', { workspaceId: w.id, title: 'Legacy integration parent', description: 'Parent scope over legacy children', criteria: ['SCOPE'] }).issue as Issue;
     const change = (op: string, id: string, input: object = {}) => call(op, { workspaceId: w.id, issueId: id, expectedVersion: s.get<Issue>('issue', id).version, ...input });
     change('design_set', parent.id, { content: 'Assemble the accepted legacy child', criteria: ['SCOPE'] });
@@ -628,7 +628,7 @@ test('only genuine legacy shape and exact current proof identities can clear del
 test('verifier callback leaves an accepted parent in USER_ACCEPTANCE until explicit completion', async () => {
   const f = await multiRepoFixture();
   const s = f.store; const flow = f.flow; const owner = f.owner; const w = f.workspace;
-  const call = (op: string, input: object) => flow.execute(owner, op, { idempotencyKey: randomUUID(), ...input }) as any;
+  const call = (op: string, input: object) => executeFixture(flow, owner, op, { idempotencyKey: randomUUID(), ...input }) as any;
   const change = (op: string, id: string, input: object = {}) => call(op, { workspaceId: w.id, issueId: id, expectedVersion: s.get<Issue>('issue', id).version, ...input });
   let proofTree = '';
   const verifier = new GitVerifier(s, new GitHubProvider(async () => Response.json({ sha: f.primarySha, tree: { sha: proofTree } }), () => undefined));

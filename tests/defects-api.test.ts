@@ -1,3 +1,4 @@
+import { executeFixture } from './fixtures.js';
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -20,7 +21,7 @@ function fixture(t: TestContext) {
   const store = new Store(':memory:'); const flow = new Workflow(store); const { actor: human,token } = store.bootstrap();
   const workspace = (flow.execute(human,'workspace_register',{ root: source,name: 'Automated defect API fixture',prefix: 'DFA',idempotencyKey: randomUUID() }) as any).workspace;
   const reads = new Set(['issue_get','defect_get','defect_list','gap_list','issue_list']);
-  const cmd = (op: string,input: object = {},actor = human) => flow.execute(actor,op,{ workspaceId: workspace.id,...(reads.has(op) ? {} : { idempotencyKey: randomUUID() }),...input }) as any;
+  const cmd = (op: string,input: object = {},actor = human) => executeFixture(flow,actor,op,{ workspaceId: workspace.id,...(reads.has(op) ? {} : { idempotencyKey: randomUUID() }),...input }) as any;
   const enroll = (role: 'lead' | 'pm' | 'worker' | 'qa') => cmd('actor_enroll',{ role,name: `Fixture ${role}` });
   const lead = enroll('lead'); const pm = enroll('pm'); const worker = enroll('worker'); const qa = enroll('qa');
   const current = (id: string) => store.get<Issue>('issue',id);
@@ -134,9 +135,46 @@ test('delivery rejection classification is mandatory and DEFECT findings commit 
   const f = fixture(t); const issue = f.issue(); f.reviewed(issue.id); const before = f.db();
   assert.throws(() => f.decide(issue.id,{ decision: 'REJECT' }),fails('INVALID_INPUT')); assert.equal(f.db(),before);
   assert.throws(() => f.decide(issue.id,{ decision: 'REJECT',classification: 'DEFECT',findings: [finding,{ ...finding,criterionIds: ['MISSING'] }] }),fails('CRITERIA_UNMAPPED')); assert.equal(f.db(),before);
-  const input = { expectedVersion: f.current(issue.id).version,decision: 'REJECT',classification: 'DEFECT',findings: [finding,{ ...finding,severity: 'MINOR' }],idempotencyKey: randomUUID() }; const result = f.decide(issue.id,input);
+  const input = { expectedVersion: f.current(issue.id).version,riskHash: f.cmd('issue_get',{ issueId: issue.id }).decisionRisks.hash,decision: 'REJECT',classification: 'DEFECT',findings: [finding,{ ...finding,severity: 'MINOR' }],idempotencyKey: randomUUID() }; const result = f.decide(issue.id,input);
   assert.equal(result.issue.state,'USER_REJECTED'); const records = f.cmd('defect_list').defects; assert.equal(records.length,2); assert.ok(records.every((d: DefectRecord) => d.origin === 'USER_ACCEPTANCE' && d.observation.digest === result.approval.digest));
   const saved = f.db(); assert.equal(f.cmd('delivery_decide',{ workspaceId: f.workspace.id,issueId: issue.id,candidateId: result.approval.candidateId,digest: result.approval.digest,reason: 'Automated fixture decision only',...input }).replayed,true); assert.equal(f.db(),saved);
+});
+
+test('design approval requires the current design and risks even when the issue version is unchanged', t => {
+  const f = fixture(t); const issue = f.issue();
+  f.change('design_set', issue.id, { content: 'Design requiring a human decision', criteria: ['C1'] });
+  f.change('design_submit', issue.id);
+  const opened = f.cmd('issue_get', { issueId: issue.id });
+  const input = { designId: opened.design.id, designHash: opened.design.hash, riskHash: opened.designRisks.hash, decision: 'APPROVED' };
+  f.propose(issue.id);
+  assert.equal(f.current(issue.id).version, opened.issue.version);
+  const current = f.cmd('issue_get', { issueId: issue.id });
+  const before = f.db();
+  assert.throws(() => f.change('design_decide', issue.id, input), fails('DECISION_RISKS_STALE'));
+  assert.throws(() => f.change('design_decide', issue.id, { ...input, riskHash: undefined }), fails('DECISION_RISKS_STALE'));
+  assert.throws(() => f.change('design_decide', issue.id, { ...input, riskHash: current.designRisks.hash, decision: 'CHANGES_REQUESTED' }), fails('INVALID_INPUT'));
+  assert.equal(f.db(), before);
+  f.change('design_decide', issue.id, { ...input, riskHash: current.designRisks.hash });
+  assert.equal(f.cmd('issue_get', { issueId: issue.id }).design.status, 'APPROVED');
+});
+
+test('reason-only rejection requires renewed review after a risk change and records no defect', t => {
+  const f = fixture(t); const issue = f.issue(); f.reviewed(issue.id);
+  const opened = f.cmd('issue_get', { issueId: issue.id });
+  const input = { decision: 'REJECT', classification: 'DEFECT', riskHash: opened.decisionRisks.hash };
+  const proposal = f.propose(issue.id);
+  assert.equal(f.current(issue.id).version, opened.issue.version);
+  const before = f.db();
+  assert.throws(() => f.decide(issue.id, input), fails('DECISION_RISKS_STALE'));
+  assert.equal(f.db(), before);
+  const riskHash = f.cmd('issue_get', { issueId: issue.id }).decisionRisks.hash;
+  assert.throws(() => f.decide(issue.id, { ...input, riskHash, reason: undefined }), fails('INVALID_INPUT'));
+  assert.equal(f.db(), before);
+  const result = f.decide(issue.id, { ...input, riskHash });
+  assert.equal(result.approval.riskHash, riskHash);
+  assert.equal(result.issue.state, 'USER_REJECTED');
+  assert.deepEqual(f.cmd('defect_list').defects.map((record: DefectRecord) => record.id), [proposal.id]);
+  assert.deepEqual(f.store.get<{ defectIds: string[] }>('delivery_rejection', result.approval.id).defectIds, []);
 });
 
 test('scope rejection blocks admission until a different current design is approved after rejection', t => {

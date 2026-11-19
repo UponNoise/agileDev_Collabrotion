@@ -1,3 +1,4 @@
+import { executeFixture } from './fixtures.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -74,7 +75,7 @@ test('owner binds the actual selected remote and agents cannot substitute anothe
     const issue = (flow.execute(owner,'issue_create',{ workspaceId: w.id,title: 'Approved work',description: 'Scope',criteria: ['AC'],idempotencyKey: 'issue' }) as any).issue;
     for (const [operation,args] of [['design_set',{ content: 'Approved scope',criteria: ['AC'] }],['design_submit',{}],['design_decide',{ designId: 'current',decision: 'APPROVED',reason: 'Fixture only' }]] as const) {
       const current = store.get<any>('issue',issue.id);
-      flow.execute(owner,operation,{ workspaceId: w.id,issueId: issue.id,expectedVersion: current.version,idempotencyKey: randomUUID(),...args,...(operation === 'design_decide' ? { designId: current.designId } : {}) });
+      executeFixture(flow,owner,operation,{ workspaceId: w.id,issueId: issue.id,expectedVersion: current.version,idempotencyKey: randomUUID(),...args,...(operation === 'design_decide' ? { designId: current.designId } : {}) });
     }
     git('remote','set-url','origin','https://github.com/other/repository.git');
     assert.throws(() => flow.execute(owner,'workspace_git_bind',{ workspaceId: w.id,expectedBindingId: bound.id,idempotencyKey: 'changed' }),(e: any) => e.code === 'REBIND_REQUIRES_SCOPE_RESET');
@@ -88,7 +89,7 @@ test('owner binds the actual selected remote and agents cannot substitute anothe
 test('initial repository binding cannot inherit an unrelated design approval and draft rebinding preserves a hold', () => {
   const root = mkdtempSync(join(tmpdir(),'agiledev-first-bind-')); const store = new Store(':memory:'); const flow = new Workflow(store); const owner = store.bootstrap().actor;
   const git = (...args: string[]) => execFileSync('git',args,{ cwd: root,windowsHide: true,stdio: 'ignore' });
-  const run = (op: string,input: object) => flow.execute(owner,op,{ ...input,idempotencyKey: randomUUID() }) as any;
+  const run = (op: string,input: object) => executeFixture(flow,owner,op,{ ...input,idempotencyKey: randomUUID() }) as any;
   try {
     git('init'); git('remote','add','origin','https://github.com/fixture/repository.git');
     const workspace = run('workspace_register',{ root,name: 'Binding fixture',prefix: 'BIND' }).workspace;

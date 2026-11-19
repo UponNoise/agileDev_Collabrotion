@@ -13,7 +13,7 @@ import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 async function until(check: () => boolean) {
   const deadline = Date.now() + 12000;
@@ -50,7 +50,7 @@ test(
     const flow = new Workflow(store);
     const human = store.bootstrap().actor;
     const call = (actor: Actor, op: string, input: object) =>
-      flow.execute(actor, op, {
+      executeFixture(flow, actor, op, {
         ...input,
         ...(['issue_get', 'plan_get', 'integration_get', 'artifact_read'].includes(op)
           ? {}

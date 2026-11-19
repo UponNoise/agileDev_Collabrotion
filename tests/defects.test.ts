@@ -1,3 +1,4 @@
+import { executeFixture } from './fixtures.js';
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -21,7 +22,7 @@ function fixture() {
   cleanup.push(() => { store.close(); assert.equal(dirname(root), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
   const flow = new Workflow(store);
   const human = store.bootstrap().actor;
-  const write = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
+  const write = (actor: Actor, operation: string, input: object) => executeFixture(flow, actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = write(human, 'workspace_register', { root, name: 'Automated defect fixture', prefix: 'DF' }).workspace;
   const agent = (role: string) => write(human, 'actor_enroll', { workspaceId: workspace.id, role, name: `Fixture ${role}` }).actor as Actor;
   const worker = agent('worker'); const qa = agent('qa'); const lead = agent('lead'); const pm = agent('pm');
@@ -259,7 +260,7 @@ test('rejection classifications create only their intended facts and cannot be r
   const defects = f.registry.classifyRejection(f.human, f.workspace.id, value.id, nextApproval.id, { classification: 'DEFECT', findings: [finding, { ...finding, severity: 'MINOR', actual: 'Second distinct fixture problem' }] });
   assert.equal(defects.defectIds.length, 2);
   for (const id of defects.defectIds) assert.equal(f.registry.get(f.human, f.workspace.id, id).origin, 'USER_ACCEPTANCE');
-  assert.throws(() => f.registry.classifyRejection(f.human, f.workspace.id, value.id, 'nonexistent-approval', { classification: 'DEFECT', findings: [] }), fails('INVALID_INPUT'));
+  assert.throws(() => f.registry.classifyRejection(f.human, f.workspace.id, value.id, nextApproval.id, { classification: 'DEFECT', findings: [{ ...finding, actual: '' }] }), fails('INVALID_INPUT'));
 });
 
 test('scope-change rework waits for an actual newer approved requirement revision after rejection', () => {

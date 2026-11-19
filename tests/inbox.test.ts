@@ -1,3 +1,4 @@
+import { executeFixture } from './fixtures.js';
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -25,7 +26,7 @@ function fixture(t: TestContext, git = false) {
   const store = new Store(':memory:'); const flow = new Workflow(store, () => now); const { actor: owner, token } = store.bootstrap();
   const workspace = (flow.execute(owner, 'workspace_register', { root: source, name: 'Inbox fixture', prefix: 'INB', idempotencyKey: randomUUID() }) as any).workspace as Workspace;
   if (git) flow.execute(owner, 'workspace_git_bind', { workspaceId: workspace.id, expectedBindingId: null, idempotencyKey: randomUUID() });
-  const cmd = (operation: string, args: any = {}, actor = owner): any => flow.execute(actor, operation, { workspaceId: workspace.id, idempotencyKey: randomUUID(), ...args });
+  const cmd = (operation: string, args: any = {}, actor = owner): any => executeFixture(flow, actor, operation, { workspaceId: workspace.id, idempotencyKey: randomUUID(), ...args });
   const current = (id: string) => store.get<Issue>('issue', id);
   const change = (operation: string, id: string, args: any = {}, actor = owner) => cmd(operation, { issueId: id, expectedVersion: current(id).version, ...args }, actor);
   const issue = (parentId?: string) => cmd('issue_create', parentId ? { parentId, expectedParentVersion: current(parentId).version, title: '[Feature] Fixture: inspect evidence -> preserve human control', description: 'Automated fixture task', criteria: ['C1'] } : { title: 'Automated inbox fixture', description: 'Automated source verification, not actual user approval', criteria: ['C1'] }).issue as Issue;
