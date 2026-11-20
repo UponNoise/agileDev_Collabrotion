@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -13,6 +14,18 @@ test('harness probes invoke an executable without a shell and distinguish failur
   assert.equal(good.available, true); assert.match(good.version!, /^v\d/); assert.equal(good.executionVerified, false);
   const bad = await probeHarness({ id: 'dsh', command: join(tmpdir(), 'missing-agiledev-executable'), args: [] });
   assert.equal(bad.available, false); assert.equal(bad.error, 'VERSION_PROBE_FAILED');
+});
+
+test('a damaged optional Windows harness directory does not block discovery of other harnesses', { skip: process.platform !== 'win32' }, t => {
+  const root = mkdtempSync(join(tmpdir(), 'agiledev-damaged-harness-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, 'Claude-Data'), 'fixture file where an optional directory belongs');
+  const env = { ...process.env, APPDATA: root, LOCALAPPDATA: root, PATH: '', AGILEDEV_DATA_DIR: root,
+    AGILEDEV_CODEX_PATH: process.execPath, AGILEDEV_CLAUDE_PATH: '', AGILEDEV_DSH_PATH: join(root, 'missing-dsh.exe') };
+  const output = execFileSync(process.execPath, [resolve('dist/cli.js'), 'doctor'], { env, encoding: 'utf8', timeout: 10000, windowsHide: true });
+  const report = JSON.parse(output);
+  assert.deepEqual(report.missing, ['claude-code', 'dsh']);
+  assert.equal(report.harnesses.find((entry: { id: string }) => entry.id === 'codex')?.available, true);
 });
 
 test('artifact paths cannot escape through traversal or directory junctions', () => {

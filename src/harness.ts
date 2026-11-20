@@ -20,8 +20,9 @@ function executable(name: string): string | undefined {
   return undefined;
 }
 function directories(path: string): string[] {
-  if (!existsSync(path)) return [];
-  return readdirSync(path, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  try {
+    return readdirSync(path, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  } catch { return []; }
 }
 export function discoverHarnesses(): HarnessEntry[] {
   const result: HarnessEntry[] = [];
