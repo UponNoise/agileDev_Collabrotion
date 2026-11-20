@@ -5,8 +5,8 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Harness, DomainError } from './contracts.js';
-import { HarnessEntry, discoverHarnesses, probeHarness } from './harness.js';
-import { consultLauncherIdentity, type ConsultVerification } from './consult-verification.js';
+import { HarnessEntry, discoverHarnesses, harnessEnvironment } from './harness.js';
+import { consultLauncherIdentity, matchesConsultVerification, type ConsultVerification } from './consult-verification.js';
 import { terminateTree } from './execution.js';
 
 export interface AdapterResult { outcome: 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; errorCode?: string; summary?: string }
@@ -110,9 +110,6 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
   };
   return { child, result, interrupt, setListener: (fn: (event: any) => void) => { listener = fn; }, complete: settle, setSession: (id: string) => { sessionId = id; context.onProvider(id); }, setTerminal: (state: 'succeeded' | 'failed') => { terminal = state; } };
 }
-function harnessEnvironment(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries({ ...process.env,...extra }).filter(([key]) => key.toUpperCase() !== 'AGILEDEV_GITHUB_TOKEN'));
-}
 function writeDshMcpPatch(c: AdapterContext) {
   const patch = join(c.directory, 'dsh.patch.yml');
   writeFileSync(patch, `- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`, { mode: 0o600 });
@@ -159,12 +156,16 @@ async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSe
   return p;
 }
 export class NativeAdapter implements ExecutionAdapter {
+  private stale = new Set<Harness>();
   constructor(
     private entries: () => HarnessEntry[] = discoverHarnesses,
-    private verification: (harness: Harness) => ConsultVerification | undefined = () => undefined
+    private verification: ReadonlyMap<Harness, ConsultVerification> = new Map()
   ) {}
+  private verifiedFresh(harness: Harness) {
+    return this.stale.has(harness) ? undefined : this.verification.get(harness);
+  }
   supportsConsult(harness: Harness) {
-    const verified = this.verification(harness);
+    const verified = this.verifiedFresh(harness);
     if (!verified) return false;
     const entry = this.entries().find(candidate => candidate.id === harness);
     return !!entry && consultLauncherIdentity(entry) === verified.launcher;
@@ -174,16 +175,15 @@ export class NativeAdapter implements ExecutionAdapter {
     const entry = this.entries().find(e => e.id === c.harness);
     if (!entry) throw new DomainError('HARNESS_UNAVAILABLE', 'Selected harness executable was not found');
     if (consult) {
-      const verified = this.verification(c.harness);
-      if (!verified || consultLauncherIdentity(entry) !== verified.launcher) {
+      const verified = this.verifiedFresh(c.harness);
+      if (!verified) {
         throw new DomainError('HARNESS_UNAVAILABLE', 'Native fresh consult support has not been verified for this launcher');
       }
-      const probe = await probeHarness(entry);
-      const current = this.verification(c.harness);
-      if (!probe.available || probe.version !== verified.version || current?.launcher !== verified.launcher ||
-          current.version !== verified.version || consultLauncherIdentity(entry) !== verified.launcher) {
+      if (!await matchesConsultVerification(entry, verified)) {
+        this.stale.add(c.harness);
         throw new DomainError('HARNESS_UNAVAILABLE', 'The verified native consult launcher or CLI version changed');
       }
+      if (this.verifiedFresh(c.harness) !== verified) throw new DomainError('HARNESS_UNAVAILABLE', 'The native consult verification changed before launch');
       c.checkBeforeSpawn?.();
     }
     mkdirSync(c.directory, { recursive: true });

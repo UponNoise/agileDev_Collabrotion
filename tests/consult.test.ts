@@ -262,6 +262,21 @@ test('already answered consults cancel before launch and leave no live coordinat
   assert.equal(f.coordinator['live'].size, 0);
 });
 
+test('unavailable queued launches preserve the daily budget when the target recovers', async t => {
+  const f = await fixture(t);
+  f.setting(true);
+  const queued = Array.from({ length: 3 }, () => f.send(f.lead.actor, role('worker')));
+  f.adapter.supported.delete('dsh');
+  for (const question of queued) {
+    await f.coordinator.tick();
+    assert.equal(f.run(question.delivery.runId).errorCode, 'HARNESS_UNAVAILABLE');
+  }
+  assert.equal(f.adapter.calls.length, 0);
+  assert.equal(f.send(f.lead.actor, role('worker')).delivery.reason, 'WAKE_UNAVAILABLE');
+  f.adapter.supported.add('dsh');
+  assert.equal(f.send(f.lead.actor, role('worker')).delivery.state, 'QUEUED');
+});
+
 test('a reply arriving during the launcher version check prevents native consult spawn', async t => {
   const f = await fixture(t);
   const start = f.adapter.start.bind(f.adapter);

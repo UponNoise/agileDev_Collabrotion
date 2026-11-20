@@ -59,7 +59,9 @@ export function admitConsult(store: Store, actor: Actor, issue: Issue, message: 
   if (runs.some(run => run.state === 'UNCERTAIN' && run.actorId === recipient.actorId)) {
     return { state: 'STORED', reason: 'WAKE_UNCERTAIN' } as const;
   }
-  if (runs.filter(run => run.createdAt.startsWith(day)).length >= dailyWakeLimit) {
+  const wakes = runs.filter(run => run.createdAt.startsWith(day) &&
+    !(run.state === 'FAILED' && run.errorCode === 'HARNESS_UNAVAILABLE' && !run.pid && !run.providerSessionId));
+  if (wakes.length >= dailyWakeLimit) {
     return { state: 'STORED', reason: 'WAKE_BUDGET_EXHAUSTED' } as const;
   }
   const root = issue.parentId ? store.get<Issue>('issue', issue.parentId) : issue;

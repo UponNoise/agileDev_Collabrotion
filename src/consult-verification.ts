@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, wr
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { harnesses, type Harness } from './contracts.js';
-import type { HarnessEntry } from './harness.js';
+import { discoverHarnesses, probeHarness, type HarnessEntry } from './harness.js';
 
 const verificationSchema = z.strictObject({
   policy: z.literal(1),
@@ -40,6 +40,27 @@ export function readConsultVerification(directory: string, harness: Harness): Ve
     const record = verificationSchema.safeParse(JSON.parse(readFileSync(join(directory, `consult-${harness}.json`), 'utf8')));
     if (record.success && record.data.harness === harness) return record.data;
   } catch { return undefined; }
+}
+
+export async function matchesConsultVerification(entry: HarnessEntry, verification: ConsultVerification): Promise<boolean> {
+  if (consultLauncherIdentity(entry) !== verification.launcher) return false;
+  const probe = await probeHarness(entry);
+  return probe.available && probe.version === verification.version && consultLauncherIdentity(entry) === verification.launcher;
+}
+
+export async function loadConsultVerifications(directory: string, discover = discoverHarnesses) {
+  const records = new Map<Harness, ConsultVerification>();
+  const saved = harnesses.flatMap(harness => {
+    const record = readConsultVerification(directory, harness);
+    return record ? [record] : [];
+  });
+  if (!saved.length) return records;
+  const entries = discover();
+  await Promise.all(saved.map(async record => {
+    const entry = entries.find(candidate => candidate.id === record.harness);
+    if (entry && await matchesConsultVerification(entry, record)) records.set(record.harness, record);
+  }));
+  return records;
 }
 
 export function recordConsultVerification(directory: string, evidence: Omit<VerificationRecord, 'policy'>) {

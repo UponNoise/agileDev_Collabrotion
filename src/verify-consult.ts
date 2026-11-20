@@ -22,7 +22,7 @@ export async function verifyConsult(harness: Harness, bridgeScript: string, opti
   const probe = entry ? await probeHarness(entry) : null;
   if (entry && (!launcher || !probe?.version)) throw new DomainError('VERSION_PROBE_FAILED', 'The target executable did not provide a verifiable launcher and version');
   const verification = launcher && probe?.version ? { launcher, version: probe.version } : undefined;
-  const adapter = controlledAdapter ?? new NativeAdapter(() => entry ? [entry] : [], () => verification);
+  const adapter = controlledAdapter ?? new NativeAdapter(() => entry ? [entry] : [], new Map(verification ? [[harness, verification]] : []));
   const root = mkdtempSync(join(tmpdir(), 'agiledev-consult-probe-'));
   const source = join(root, 'source');
   mkdirSync(source);
