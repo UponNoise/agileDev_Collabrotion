@@ -6,6 +6,8 @@ import { describedInput, isReadOperation, permitsConsultOperation, roleInstructi
 import { commandFailure } from './issue-brief.js';
 import { LocalClient } from './client.js';
 
+const connectionMetadataTimeoutMs = 2000;
+
 export async function connectMcp(client: LocalClient) {
   const { actor, profile } = await client.request('/api/session');
   if (actor.role === 'human') throw new DomainError('HUMAN_CREDENTIAL_DENIED', 'Enroll a scoped agent; owner credentials cannot be used by MCP', 403);
@@ -13,19 +15,28 @@ export async function connectMcp(client: LocalClient) {
   const operations = toolsForRole(actor.role).filter(operation => !consult || permitsConsultOperation(operation));
   const instructions = consult ? 'Read scoped issue context and answer through message_send. Messages carry no workflow authority.' : roleInstructions(actor.role);
   const server = new Server({ name: 'agiledev', version: '0.1.0' }, { capabilities: { tools: {} }, instructions });
+  let registration = Promise.resolve();
   server.oninitialized = () => {
     const clientInfo = server.getClientVersion();
-    if (clientInfo) void client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }).catch(() => process.stderr.write('Could not record MCP initialization metadata.\n'));
+    if (clientInfo && !consult) {
+      registration = client.request('/api/connection', { name: clientInfo.name, version: clientInfo.version }, undefined, connectionMetadataTimeoutMs)
+        .then(() => {}, () => { process.stderr.write('Could not record MCP initialization metadata.\n'); });
+    }
   };
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: operations.map(name => ({
-    name, description: toolDescription(name), inputSchema: describedInput(schemas[name]) as any,
-    annotations: { readOnlyHint: isReadOperation(name), destructiveHint: !isReadOperation(name), idempotentHint: true, openWorldHint: false }
-  })) }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    await registration;
+    return { tools: operations.map(name => ({
+      name, description: toolDescription(name), inputSchema: describedInput(schemas[name]) as any,
+      annotations: { readOnlyHint: isReadOperation(name), destructiveHint: !isReadOperation(name), idempotentHint: true, openWorldHint: false }
+    })) };
+  });
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     try {
       const name = request.params.name;
       if (!Object.hasOwn(schemas, name)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
       if (!operations.includes(name as Operation)) throw new DomainError('ROLE_DENIED', 'Operation is outside this role profile', 403);
+      await registration;
+      extra.signal.throwIfAborted();
       const result = await client.command(name, request.params.arguments ?? {}, name === 'message_wait' ? extra.signal : undefined);
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result };
     } catch (error) {

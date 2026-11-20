@@ -5,16 +5,17 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { discoverHarnesses, HarnessEntry, probeHarness } from './harness.js';
-import { hash, Store } from './store.js';
+import { discoverHarnesses, HarnessEntry, harnessEnvironment, probeHarness } from './harness.js';
+import { canonical, hash, Store } from './store.js';
 import { Workflow } from './workflow.js';
 import { createServer } from './http.js';
+import type { Actor, Harness, Issue, Run } from './contracts.js';
 
 const exec = promisify(execFile);
 async function codexProbe(entry: HarnessEntry, home: string, root: string, token: string, endpoint: string, script: string) {
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, 'config.toml'), `[mcp_servers.agiledev]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(script)}, "mcp"]\nenv_vars = ["AGILEDEV_TOKEN", "AGILEDEV_ENDPOINT"]\nstartup_timeout_sec = 15\n`);
-  const child = spawn(entry.command, [...entry.args, 'app-server', '--stdio'], { cwd: root, env: { ...process.env, ...entry.env, CODEX_HOME: home, AGILEDEV_TOKEN: token, AGILEDEV_ENDPOINT: endpoint }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(entry.command, [...entry.args, 'app-server', '--stdio'], { cwd: root, env: { ...harnessEnvironment(entry.env), CODEX_HOME: home, AGILEDEV_TOKEN: token, AGILEDEV_ENDPOINT: endpoint }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   let seq = 0;
   let stderr = '';
@@ -64,7 +65,7 @@ async function codexProbe(entry: HarnessEntry, home: string, root: string, token
 }
 async function claudeProbe(entry: HarnessEntry, home: string, root: string, token: string, endpoint: string, script: string) {
   mkdirSync(home, { recursive: true });
-  const env = { ...process.env, ...entry.env, CLAUDE_CONFIG_DIR: home, AGILEDEV_TOKEN: token, AGILEDEV_ENDPOINT: endpoint };
+  const env = { ...harnessEnvironment(entry.env), CLAUDE_CONFIG_DIR: home, AGILEDEV_TOKEN: token, AGILEDEV_ENDPOINT: endpoint };
   const connection = { type: 'stdio', command: process.execPath, args: [script, 'mcp'], env: { AGILEDEV_TOKEN: '${AGILEDEV_TOKEN}', AGILEDEV_ENDPOINT: '${AGILEDEV_ENDPOINT}' } };
   await exec(entry.command, [...entry.args, 'mcp', 'add-json', '--scope', 'user', 'agiledev', JSON.stringify(connection)], { cwd: root, env, windowsHide: true, timeout: 15000, maxBuffer: 65536 });
   const { stdout } = await exec(entry.command, [...entry.args, 'mcp', 'list'], { cwd: root, env, windowsHide: true, timeout: 25000, maxBuffer: 65536 });
@@ -75,7 +76,7 @@ async function dshProbe(entry: HarnessEntry, home: string, root: string, token: 
   mkdirSync(home, { recursive: true });
   const patch = join(home, 'agiledev.patch.yml');
   writeFileSync(patch, `- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(script)}, "mcp"]\n        env:\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n`);
-  const child = spawn(entry.command, [...entry.args, '--profile', 'sdk', '--patch', patch], { cwd: root, env: { ...process.env, ...entry.env, DSH_HOME: home, AGILEDEV_TOKEN: token, AGILEDEV_ENDPOINT: endpoint }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(entry.command, [...entry.args, '--profile', 'sdk', '--patch', patch], { cwd: root, env: { ...harnessEnvironment(entry.env), DSH_HOME: home, AGILEDEV_TOKEN: token, AGILEDEV_ENDPOINT: endpoint }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let stderr = ''; let failed = false;
   child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-3000); });
   child.stdout.resume();
@@ -93,6 +94,31 @@ async function dshProbe(entry: HarnessEntry, home: string, root: string, token: 
     }
   }
 }
+
+function consultRouteProbe(store: Store, owner: Actor, worker: Actor, recipient: Actor, workspaceId: string, harness: Harness) {
+  const flow = new Workflow(store, Date.now, () => true);
+  const command = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, {
+    ...input, workspaceId, idempotencyKey: `route-probe-${harness}-${operation}`
+  }) as any;
+  const created = command(owner, 'issue_create', { title: 'Native host consult routing probe' }).issue as Issue;
+  const { issue } = command(owner, 'issue_assign', {
+    issueId: created.id, expectedVersion: created.version, actorId: worker.id, harness: harness === 'codex' ? 'dsh' : 'codex'
+  }) as { issue: Issue };
+  const originalIssue = canonical(store.get<Issue>('issue', issue.id));
+  const { message, delivery } = command(worker, 'message_send', {
+    issueId: issue.id, recipient: { kind: 'actor', actorId: recipient.id }, kind: 'QUESTION', wake: true, body: 'Verify the routing of this synthetic question.'
+  });
+  const run = delivery?.runId ? store.get<Run>('run', delivery.runId) : undefined;
+  const workflowUnchanged = canonical(store.get<Issue>('issue', issue.id)) === originalIssue;
+  const routed = run?.kind === 'consult' && run.state === 'QUEUED' && run.actorId === recipient.id &&
+    run.harness === harness && run.consult.questionId === message.id && workflowUnchanged;
+  return {
+    status: routed ? 'ROUTE_VERIFIED' : 'ROUTE_NOT_VERIFIED', recipientRole: recipient.role,
+    selectedHarness: run?.harness ?? null, workflowUnchanged,
+    ...(routed ? {} : { reason: workflowUnchanged ? delivery?.reason ?? 'ROUTE_MISMATCH' : 'WORKFLOW_CHANGED' })
+  };
+}
+
 export async function probeHosts() {
   const protectedFiles = [join(homedir(), '.claude.json'), join(homedir(), '.claude/settings.json'), join(homedir(), '.codex/config.toml')];
   const fingerprint = () => protectedFiles.map(path => existsSync(path) ? hash(readFileSync(path)) : null);
@@ -102,6 +128,10 @@ export async function probeHosts() {
   const store = new Store(join(root, 'workflow.sqlite'));
   const flow = new Workflow(store); const owner = store.bootstrap();
   const workspace = (flow.execute(owner.actor, 'workspace_register', { root: workspaceRoot, name: 'Host connectivity probe', prefix: 'PR', idempotencyKey: 'workspace' }) as any).workspace;
+  const { actor: worker } = flow.execute(owner.actor, 'actor_enroll', {
+    workspaceId: workspace.id, role: 'worker', name: 'Probe routing sender', idempotencyKey: 'route-worker'
+  }) as { actor: Actor };
+  flow.execute(owner.actor, 'wake_settings_update', { workspaceId: workspace.id, idempotencyKey: 'fixture-enable-wake', expectedVersion: 0, enabled: true });
   const server = createServer(store); const endpoint = await server.listen({ host: '127.0.0.1', port: 0 });
   const script = resolve(fileURLToPath(new URL('../dist/cli.js', import.meta.url)));
   const results = [];
@@ -109,16 +139,24 @@ export async function probeHosts() {
     for (const entry of discoverHarnesses()) {
       const version = await probeHarness(entry);
       if (!version.available) { results.push(version); continue; }
-      const enrollment = flow.execute(owner.actor, 'actor_enroll', { workspaceId: workspace.id, role: 'lead', name: `${entry.id} probe`, idempotencyKey: `enroll-${entry.id}` }) as any;
+      const role = entry.id === 'claude-code' ? 'pm' : 'lead';
+      const enrollment = flow.execute(owner.actor, 'actor_enroll', {
+        workspaceId: workspace.id, role, name: `${entry.id} probe`, idempotencyKey: `enroll-${entry.id}`
+      }) as { actor: Actor; token: string };
+      const connection = () => store.list<{ actorId: string; client: { name: string; version: string } }>('connection', workspace.id)
+        .find(record => record.actorId === enrollment.actor.id);
       try {
         const result = entry.id === 'codex'
           ? await codexProbe(entry, join(root, 'codex'), workspaceRoot, enrollment.token, endpoint, script)
           : entry.id === 'claude-code'
             ? await claudeProbe(entry, join(root, 'claude'), workspaceRoot, enrollment.token, endpoint, script)
-            : await dshProbe(entry, join(root, 'dsh'), workspaceRoot, enrollment.token, endpoint, script, () => store.list<any>('connection', workspace.id).some(c => c.actorId === enrollment.actor.id));
-        results.push({ ...version, ...result });
+            : await dshProbe(entry, join(root, 'dsh'), workspaceRoot, enrollment.token, endpoint, script, () => !!connection());
+        results.push({
+          ...version, ...result, mcpClient: connection()?.client ?? null,
+          consultRoute: result.status === 'PROBE_FAILED' ? null : consultRouteProbe(store, owner.actor, worker, enrollment.actor, workspace.id, entry.id)
+        });
       } catch { results.push({ ...version, status: 'PROBE_FAILED', error: 'Host connectivity probe failed; credentials were not printed', inferenceStarted: false }); }
     }
-    return { results, checkedGlobalConfigurationChanged: JSON.stringify(before) !== JSON.stringify(fingerprint()), limitations: ['No model turn or worker execution was started.', 'Connection health does not prove task execution, independent QA, or embedded UI support.', 'Global configuration check covers Claude and Codex user settings only.'] };
+    return { results, checkedGlobalConfigurationChanged: JSON.stringify(before) !== JSON.stringify(fingerprint()), limitations: ['No model turn or worker execution was started.', 'Consult routing uses controlled availability and a disposable queue without a coordinator.', 'Connection health does not prove task execution, independent QA, or embedded UI support.', 'Global configuration check covers Claude and Codex user settings only.'] };
   } finally { await server.close(); store.close(); rmSync(root, { recursive: true, force: true }); }
 }

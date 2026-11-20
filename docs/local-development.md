@@ -161,7 +161,9 @@ node dist/cli.js probe-hosts
 
 This starts a disposable workflow service and temporary host configurations. Codex initializes its actual App Server, loads the bridge, lists the workspace, creates an issue, and reads it back without starting a model turn. Claude Code adds the bridge to a temporary config directory and health-checks the real MCP connection. DSH starts its SDK profile with a temporary home and patch; success requires the bridge to receive the real MCP initialized notification and report it back under that DSH actor credential. The command fingerprints the checked Claude/Codex user configuration files before and after the probe. It does not copy authentication data or change global permission modes.
 
-`connection_list` reports the most recent MCP initialization metadata per agent session. Client name/version are client-reported diagnostics, not cryptographic host identity or proof that a connection is still live. The separate native host probes establish the tested host behavior.
+`probe-hosts` reports the actual MCP client name and version independently of the executable version. For each connected host it queues a synthetic question to the recorded lead or PM under controlled availability, checks the selected harness and leaves the synthetic issue unchanged. The probe has no coordinator and discards its queue. `ROUTE_VERIFIED` covers selection from recorded metadata. Live execution is checked separately.
+
+`connection_list` reports the most recent MCP initialization metadata per agent session. The bridge gives the local registration request up to two seconds to finish before serving its first tools, then continues if registration fails. Client name and version are reported by the host. Live connection state and execution evidence come from separate checks.
 
 The doctor can find Codex on PATH or its npm entry, Claude Code inside its Desktop-managed runtime, and DSH inside its Windows Desktop installation. Optional `AGILEDEV_CODEX_PATH`, `AGILEDEV_CLAUDE_PATH`, and `AGILEDEV_DSH_PATH` select explicit native executables. POSIX scripts discovered on Windows are deliberately not executed through an implicit shell.
 

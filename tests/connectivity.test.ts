@@ -4,12 +4,116 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
+import type { Issue, Run } from '../src/contracts.js';
+
+test('the first MCP tool requests see their host connection metadata', { timeout: 10000 }, async () => {
+  const store = new Store(':memory:');
+  const owner = store.bootstrap();
+  const flow = new Workflow(store);
+  const { workspace } = flow.execute(owner.actor, 'workspace_register', {
+    root: tmpdir(), name: 'Connection ordering fixture', prefix: 'MCR', idempotencyKey: 'workspace'
+  }) as any;
+  const { actor, token } = flow.execute(owner.actor, 'actor_enroll', {
+    workspaceId: workspace.id, role: 'pm', name: 'Fixture PM', idempotencyKey: 'enroll'
+  }) as any;
+  const worker = flow.execute(owner.actor, 'actor_enroll', {
+    workspaceId: workspace.id, role: 'worker', name: 'Fixture Worker', idempotencyKey: 'enroll-worker'
+  }) as any;
+  const { issue } = flow.execute(owner.actor, 'issue_create', {
+    workspaceId: workspace.id, title: 'Connection routing fixture', idempotencyKey: 'create'
+  }) as any;
+  flow.execute(owner.actor, 'issue_assign', {
+    workspaceId: workspace.id, issueId: issue.id, expectedVersion: issue.version, actorId: worker.actor.id, harness: 'codex', idempotencyKey: 'assign'
+  });
+  flow.execute(owner.actor, 'wake_settings_update', { workspaceId: workspace.id, expectedVersion: 0, enabled: true, idempotencyKey: 'wake' });
+  let arrived!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { arrived = resolve; });
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  const server = createServer(store, undefined, () => true);
+  server.addHook('preHandler', async request => {
+    if (request.routeOptions.url === '/api/connection') {
+      arrived();
+      await ready;
+    }
+  });
+  const client = new Client({ name: 'dsh-mcp-client', version: 'ordering-fixture' });
+  try {
+    const endpoint = await server.listen({ host: '127.0.0.1', port: 0 });
+    await client.connect(new StdioClientTransport({
+      command: process.execPath, args: [resolve('dist/cli.js'), 'mcp'],
+      env: { AGILEDEV_ENDPOINT: endpoint, AGILEDEV_TOKEN: token }, stderr: 'pipe'
+    }));
+    const tools = client.listTools();
+    const workspaces = client.callTool({ name: 'workspace_list', arguments: {} });
+    const canceled = new AbortController();
+    const canceledWrite = assert.rejects(client.callTool({
+      name: 'issue_create', arguments: { workspaceId: workspace.id, title: 'Canceled first write', idempotencyKey: 'canceled' }
+    }, undefined, { signal: canceled.signal }));
+    await entered;
+    assert.equal(await Promise.race([Promise.race([tools, workspaces]).then(() => 'raced'), delay(120, 'waiting')]), 'waiting');
+    canceled.abort();
+    await canceledWrite;
+    await delay(50);
+    release();
+    assert.ok((await tools).tools.length);
+    assert.equal((await workspaces).isError, undefined);
+    assert.deepEqual(store.list<Issue>('issue', workspace.id).map(issue => issue.title), ['Connection routing fixture']);
+    assert.deepEqual(store.list<any>('connection', workspace.id).map(row => [row.actorId, row.client.name]), [[actor.id, 'dsh-mcp-client']]);
+    const asked = await new LocalClient(endpoint, worker.token).command('message_send', {
+      workspaceId: workspace.id, issueId: issue.id, recipient: { kind: 'role', role: 'pm' }, kind: 'QUESTION',
+      wake: true, body: 'Route this question to the connected PM.', idempotencyKey: 'route'
+    });
+    assert.equal(asked.delivery.state, 'QUEUED');
+    const run = store.get<Run>('run', asked.delivery.runId);
+    assert.equal(run.harness, 'dsh');
+    assert.equal(run.actorId, actor.id);
+  } finally {
+    release();
+    await client.close();
+    await server.close();
+    store.close();
+  }
+});
+
+test('metadata reporting failure leaves normal MCP tools available', { timeout: 10000 }, async () => {
+  const store = new Store(':memory:');
+  const owner = store.bootstrap();
+  const flow = new Workflow(store);
+  const { workspace } = flow.execute(owner.actor, 'workspace_register', {
+    root: tmpdir(), name: 'Metadata failure fixture', prefix: 'MCF', idempotencyKey: 'workspace'
+  }) as any;
+  const { token } = flow.execute(owner.actor, 'actor_enroll', {
+    workspaceId: workspace.id, role: 'lead', name: 'Fixture Lead', idempotencyKey: 'enroll'
+  }) as any;
+  const server = createServer(store);
+  server.addHook('preHandler', async (request, reply) => {
+    if (request.routeOptions.url === '/api/connection') return reply.code(503).send({ ok: false });
+  });
+  const client = new Client({ name: 'claude-code', version: 'failure-fixture' });
+  try {
+    const endpoint = await server.listen({ host: '127.0.0.1', port: 0 });
+    await client.connect(new StdioClientTransport({
+      command: process.execPath, args: [resolve('dist/cli.js'), 'mcp'],
+      env: { AGILEDEV_ENDPOINT: endpoint, AGILEDEV_TOKEN: token }, stderr: 'pipe'
+    }));
+    assert.ok((await client.listTools()).tools.length);
+    const workspaces = (await client.callTool({ name: 'workspace_list', arguments: {} })).structuredContent as any;
+    assert.equal(workspaces.workspaces[0].id, workspace.id);
+    assert.equal(store.list('connection', workspace.id).length, 0);
+  } finally {
+    await client.close();
+    await server.close();
+    store.close();
+  }
+});
 
 test('real SQLite service shares one issue across three independent MCP processes', { timeout: 30000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-mcp-'));
