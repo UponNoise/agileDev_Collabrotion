@@ -9,6 +9,7 @@ import { serve } from './daemon.js';
 import { dataDirectory, ensureService, requireService, ServiceError, stopService } from './service-launcher.js';
 import { verifyExecution,verifyGit } from './verify-execution.js';
 import { verifyConsult } from './verify-consult.js';
+import { consultLauncherIdentity, readConsultVerification } from './consult-verification.js';
 import { harnesses, Harness } from './contracts.js';
 
 const dataDir = dataDirectory();
@@ -31,10 +32,16 @@ async function main() {
   }
   if (command === 'verify-git') { console.log(JSON.stringify(await verifyGit(args[0] ?? process.cwd()),null,2)); return; }
   if (command === 'verify-consult') {
-    if (args.length !== 1 || !(harnesses as readonly string[]).includes(args[0] ?? '')) {
-      throw new Error('Usage: verify-consult <codex|claude-code|dsh>; starts one real model run in a disposable workspace.');
+    if (!(harnesses as readonly string[]).includes(args[0] ?? '') || args.length > 2 || (args.length === 2 && args[1] !== '--record')) {
+      throw new Error('Usage: verify-consult <codex|claude-code|dsh> [--record]; starts one real model run in a disposable workspace.');
     }
-    const result = await verifyConsult(args[0] as Harness, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'));
+    const record = args[1] === '--record';
+    if (record && (process.env.AGILEDEV_TOKEN || process.env.AGILEDEV_ENDPOINT)) {
+      throw new Error('Recording consult verification requires a local command outside an agent connection.');
+    }
+    const result = await verifyConsult(args[0] as Harness, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), {
+      recordDirectory: record ? dataDir : undefined
+    });
     console.log(JSON.stringify(result, null, 2));
     if (result.status !== 'NATIVE_TARGET_VERIFIED') process.exitCode = 1;
     return;
@@ -48,7 +55,12 @@ async function main() {
   if (command === 'probe-hosts') { console.log(JSON.stringify(await probeHosts(), null, 2)); return; }
   if (command === 'doctor') {
     const entries = discoverHarnesses();
-    console.log(JSON.stringify({ harnesses: await Promise.all(entries.map(probeHarness)), missing: ['codex', 'claude-code', 'dsh'].filter(id => !entries.some(e => e.id === id)) }, null, 2));
+    const status = await Promise.all(entries.map(async entry => {
+      const probe = await probeHarness(entry);
+      const record = readConsultVerification(dataDir, entry.id);
+      return { ...probe, freshConsultVerified: !!record && probe.available && record.version === probe.version && record.launcher === consultLauncherIdentity(entry) };
+    }));
+    console.log(JSON.stringify({ harnesses: status, missing: harnesses.filter(id => !entries.some(e => e.id === id)) }, null, 2));
     return;
   }
   if (command === 'serve') { await serve(dataDir); return; }
@@ -88,6 +100,6 @@ async function main() {
     } else throw new Error('Connection format must be codex, claude-code, or dsh.');
     return;
   }
-  console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-consult <harness> | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
+  console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-consult <harness> [--record] | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
 main().catch(error => { console.error(error instanceof ServiceError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });

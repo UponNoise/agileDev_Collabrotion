@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -262,6 +262,28 @@ test('already answered consults cancel before launch and leave no live coordinat
   assert.equal(f.coordinator['live'].size, 0);
 });
 
+test('a reply arriving during the launcher version check prevents native consult spawn', async t => {
+  const f = await fixture(t);
+  const start = f.adapter.start.bind(f.adapter);
+  let release!: () => void;
+  const preflight = new Promise<void>(resolve => { release = resolve; });
+  f.adapter.start = async context => {
+    await preflight;
+    context.checkBeforeSpawn?.();
+    return start(context);
+  };
+  f.setting(true);
+  const asked = f.send(f.lead.actor, role('worker'));
+  try {
+    await f.coordinator.tick();
+    assert.equal(f.run(asked.delivery.runId).state, 'RUNNING');
+    f.send(f.worker.actor, actorTarget(f.lead.actor), { kind: 'REPLY', replyTo: asked.message.id, wake: false });
+  } finally { release(); }
+  await until(() => f.run(asked.delivery.runId).state === 'CANCELLED');
+  assert.equal(f.run(asked.delivery.runId).errorCode, 'QUESTION_ALREADY_ANSWERED');
+  assert.equal(f.adapter.calls.length, 0);
+});
+
 test('an admitted consult wait ends when its issue scope changes', async t => {
   const f = await fixture(t);
   f.setting(true);
@@ -294,13 +316,16 @@ test('the disposable consult probe labels controlled proof separately from nativ
       return { result, interrupt: async () => true };
     }
   };
-  const observed = await verifyConsult('dsh', resolve('dist/cli.js'), adapter);
+  const recordDirectory = join(tmpdir(), `agiledev-controlled-no-record-${randomUUID()}`);
+  const observed = await verifyConsult('dsh', resolve('dist/cli.js'), { controlledAdapter: adapter, recordDirectory });
   try {
     assert.equal(observed.status, 'CONTROLLED_PASS');
     assert.equal(observed.version, null);
     assert.equal(observed.workflowUnchanged, true);
     assert.ok(observed.replyId);
     assert.equal(launches, 1);
+    assert.equal(observed.recorded, false);
+    assert.equal(existsSync(recordDirectory), false);
   } finally {
     const root = observed.retainedEvidenceDirectory;
     assert.equal(dirname(root), resolve(tmpdir()));

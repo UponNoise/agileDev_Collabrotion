@@ -7,6 +7,8 @@ import { createServer } from './http.js';
 import { Store } from './store.js';
 import { Coordinator } from './runner.js';
 import { GitVerifier } from './git-verifier.js';
+import { NativeAdapter } from './adapters.js';
+import { readConsultVerification } from './consult-verification.js';
 import { processExists, readDescriptor, ServiceError } from './service-launcher.js';
 
 export async function serve(dataDir: string) {
@@ -59,7 +61,8 @@ export async function serve(dataDir: string) {
     renameSync(temporary, descriptorFile);
     verifier = new GitVerifier(store!); verifier.start();
     if (process.env.AGILEDEV_RUNNER_ENABLED !== '0') {
-      coordinator = new Coordinator(store!, { endpoint, directory: join(dataDir, 'runs'), bridgeScript: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), concurrency: Number(process.env.AGILEDEV_CONCURRENCY ?? 2), maxRunMs: Number(process.env.AGILEDEV_MAX_RUN_MS ?? 1800000) });
+      const adapter = new NativeAdapter(undefined, harness => readConsultVerification(dataDir, harness));
+      coordinator = new Coordinator(store!, { endpoint, directory: join(dataDir, 'runs'), bridgeScript: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), adapter, concurrency: Number(process.env.AGILEDEV_CONCURRENCY ?? 2), maxRunMs: Number(process.env.AGILEDEV_MAX_RUN_MS ?? 1800000) });
       await coordinator.start();
     }
     console.log(JSON.stringify({ endpoint, pid: process.pid, dataDir }));

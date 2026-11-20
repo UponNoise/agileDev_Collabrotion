@@ -5,13 +5,15 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Harness, DomainError } from './contracts.js';
-import { HarnessEntry, discoverHarnesses } from './harness.js';
+import { HarnessEntry, discoverHarnesses, probeHarness } from './harness.js';
+import { consultLauncherIdentity, type ConsultVerification } from './consult-verification.js';
 import { terminateTree } from './execution.js';
 
 export interface AdapterResult { outcome: 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; errorCode?: string; summary?: string }
 export interface AdapterContext {
   harness: Harness; cwd: string; directory: string; prompt: string; endpoint: string; token: string; bridgeScript: string;
   kind?: 'consult';
+  checkBeforeSpawn?(): void;
   onPid(pid: number): void; onProvider(id: string): void; onOutput(text: string): void;
 }
 export interface RunningSession { result: Promise<AdapterResult>; interrupt(): Promise<boolean> }
@@ -159,16 +161,31 @@ async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSe
 export class NativeAdapter implements ExecutionAdapter {
   constructor(
     private entries: () => HarnessEntry[] = discoverHarnesses,
-    private verifiedFresh: ReadonlySet<Harness> = new Set()
+    private verification: (harness: Harness) => ConsultVerification | undefined = () => undefined
   ) {}
   supportsConsult(harness: Harness) {
-    return this.verifiedFresh.has(harness) && this.entries().some(entry => entry.id === harness);
+    const verified = this.verification(harness);
+    if (!verified) return false;
+    const entry = this.entries().find(candidate => candidate.id === harness);
+    return !!entry && consultLauncherIdentity(entry) === verified.launcher;
   }
   async start(c: AdapterContext): Promise<RunningSession> {
     const consult = c.kind === 'consult';
-    if (consult && !this.verifiedFresh.has(c.harness)) throw new DomainError('HARNESS_UNAVAILABLE', 'Native fresh consult support has not been verified');
     const entry = this.entries().find(e => e.id === c.harness);
     if (!entry) throw new DomainError('HARNESS_UNAVAILABLE', 'Selected harness executable was not found');
+    if (consult) {
+      const verified = this.verification(c.harness);
+      if (!verified || consultLauncherIdentity(entry) !== verified.launcher) {
+        throw new DomainError('HARNESS_UNAVAILABLE', 'Native fresh consult support has not been verified for this launcher');
+      }
+      const probe = await probeHarness(entry);
+      const current = this.verification(c.harness);
+      if (!probe.available || probe.version !== verified.version || current?.launcher !== verified.launcher ||
+          current.version !== verified.version || consultLauncherIdentity(entry) !== verified.launcher) {
+        throw new DomainError('HARNESS_UNAVAILABLE', 'The verified native consult launcher or CLI version changed');
+      }
+      c.checkBeforeSpawn?.();
+    }
     mkdirSync(c.directory, { recursive: true });
     if (c.harness === 'dsh' && !consult) return dshSdk(entry, c);
     let args: string[];

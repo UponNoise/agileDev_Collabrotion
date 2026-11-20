@@ -130,20 +130,22 @@ export class Coordinator {
     const confirmed = await owned.session.interrupt() && checksStopped;
     if (!confirmed) this.finish(id, owned, { outcome: 'uncertain', errorCode: 'STOP_UNCONFIRMED' });
   }
+  private consultLaunchQuestion(run: Extract<Run, { kind: 'consult' }>, issue: Issue) {
+    if (this.closing || run.state === 'STOPPING') throw new DomainError('INTERRUPTED_BEFORE_LAUNCH', 'Consult interrupted before launch');
+    if (!wakeSettings(this.store, run.workspaceId).enabled) throw new DomainError('WAKE_DISABLED', 'Workspace wake was disabled before launch');
+    const question = consultQuestion(this.store, run, issue);
+    if (new IssueMessages(this.store).answeredQuestion(question)) throw new DomainError('QUESTION_ALREADY_ANSWERED', 'The question already received a reply');
+    return question;
+  }
   private async execute(id: string, owned: OwnedExecution) {
     let stopped = false;
     try {
       let run = this.store.get<Run>('run', id);
       let issue = this.store.get<Issue>('issue', run.issueId);
       if (run.kind === 'consult') {
-        if (!wakeSettings(this.store, run.workspaceId).enabled) throw new DomainError('WAKE_DISABLED', 'Workspace wake was disabled before launch');
+        const question = this.consultLaunchQuestion(run, issue);
         if (!this.canConsult(run.harness)) throw new DomainError('HARNESS_UNAVAILABLE', 'Fresh consult capability is unavailable');
-        const question = consultQuestion(this.store, run, issue);
         const messages = new IssueMessages(this.store);
-        if (messages.answeredQuestion(question)) {
-          this.finish(id, owned, { outcome: 'cancelled', errorCode: 'QUESTION_ALREADY_ANSWERED' });
-          return;
-        }
         const cwd = join(this.options.directory, id, 'consult');
         mkdirSync(cwd, { recursive: true });
         const running = this.update(id, { executionRoot: cwd, state: 'RUNNING' });
@@ -202,7 +204,9 @@ export class Coordinator {
       if (result.outcome === 'succeeded' && run.kind !== 'qa' && this.store.get<Run>('run',id).state === 'RUNNING') this.sealDelivery(run,owned);
       this.finish(id, owned, checksStopped ? result : { outcome: 'uncertain', errorCode: 'CHECK_STOP_UNCONFIRMED' });
     } catch (error) {
-      this.finish(id, owned, { outcome: owned.session && !stopped ? 'uncertain' : 'failed', errorCode: error instanceof DomainError ? error.code : 'EXECUTION_FAILED', summary: error instanceof DomainError ? error.message : 'Execution could not be completed; inspect the retained run directory' });
+      const errorCode = error instanceof DomainError ? error.code : 'EXECUTION_FAILED';
+      const cancelled = errorCode === 'INTERRUPTED_BEFORE_LAUNCH' || errorCode === 'QUESTION_ALREADY_ANSWERED';
+      this.finish(id, owned, { outcome: owned.session && !stopped ? 'uncertain' : cancelled ? 'cancelled' : 'failed', errorCode, summary: error instanceof DomainError ? error.message : 'Execution could not be completed; inspect the retained run directory' });
     } finally { this.live.delete(id); }
   }
   private async launch(run: Run, owned: OwnedExecution, cwd: string, prompt: string) {
@@ -210,7 +214,13 @@ export class Coordinator {
     const context: AdapterContext = {
       harness: run.harness, cwd, directory: join(this.options.directory, id), prompt,
       token: owned.token, endpoint: this.options.endpoint, bridgeScript: this.options.bridgeScript,
-      ...(run.kind === 'consult' ? { kind: 'consult' as const } : {}),
+      ...(run.kind === 'consult' ? {
+        kind: 'consult' as const,
+        checkBeforeSpawn: () => {
+          const current = this.store.get<Extract<Run, { kind: 'consult' }>>('run', id);
+          this.consultLaunchQuestion(current, this.store.get<Issue>('issue', current.issueId));
+        }
+      } : {}),
       onPid: pid => { if (this.store.db.open) this.update(id, { pid }); },
       onProvider: providerSessionId => { if (this.store.db.open) this.update(id, { providerSessionId }); },
       onOutput: summary => { if (this.store.db.open) this.update(id, { summary: summary.replaceAll(owned.token, '[redacted]').slice(-16000) }); }

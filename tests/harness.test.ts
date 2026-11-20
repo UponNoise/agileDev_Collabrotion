@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { probeHarness } from '../src/harness.js';
 import { inside } from '../src/workflow.js';
 import { declaredDshRoute, decodeNativeEvent, NativeAdapter } from '../src/adapters.js';
-import type { Harness } from '../src/contracts.js';
+import { consultLauncherIdentity, readConsultVerification, recordConsultVerification } from '../src/consult-verification.js';
 
 test('harness probes invoke an executable without a shell and distinguish failure', async () => {
   const good = await probeHarness({ id: 'codex', command: process.execPath, args: [] });
@@ -49,6 +49,7 @@ test('fresh consult adapters preserve capability gates and parse all three nativ
     writeFileSync(script, [
       "import { writeFileSync } from 'node:fs';",
       'const [harness, ...args] = process.argv.slice(2);',
+      "if (args.includes('--version')) { console.log('controlled-version'); process.exit(0); }",
       'let prompt = ""; for await (const chunk of process.stdin) prompt += String(chunk);',
       'writeFileSync("fixture-invocation.json", JSON.stringify({ args, prompt }));',
       "const emit = value => console.log(JSON.stringify(value));",
@@ -67,7 +68,10 @@ test('fresh consult adapters preserve capability gates and parse all three nativ
       const unverified = new NativeAdapter(entries);
       assert.equal(unverified.supportsConsult(harness), false);
       await assert.rejects(unverified.start(context), (error: any) => error.code === 'HARNESS_UNAVAILABLE');
-      const tested = new NativeAdapter(entries, new Set<Harness>([harness]));
+      const launcher = consultLauncherIdentity(entries()[0]!);
+      assert.ok(launcher);
+      const verification = { launcher, version: 'controlled-version' };
+      const tested = new NativeAdapter(entries, () => verification);
       assert.equal(tested.supportsConsult(harness), true);
       const session = await tested.start(context);
       assert.equal((await session.result).outcome, 'succeeded');
@@ -93,4 +97,43 @@ test('fresh consult adapters preserve capability gates and parse all three nativ
     assert.ok(basename(root).startsWith('agiledev-consult-adapter-'));
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('local consult capability rejects missing, corrupted, stale and mismatched verification before model launch', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'agiledev-consult-evidence-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const script = join(root, 'fixture.mjs');
+  const marker = join(root, 'launch-attempt');
+  const versionPath = join(root, 'version');
+  writeFileSync(versionPath, 'controlled-version-1');
+  writeFileSync(script, [
+    "import { readFileSync, writeFileSync } from 'node:fs';",
+    "if (process.argv.includes('--version')) console.log(readFileSync(new URL('./version', import.meta.url), 'utf8'));",
+    "else writeFileSync(new URL('./launch-attempt', import.meta.url), 'launched');"
+  ].join('\n'));
+  const entry = { id: 'codex' as const, command: process.execPath, args: [script] };
+  const launcher = consultLauncherIdentity(entry);
+  assert.ok(launcher);
+  const evidenceDir = join(root, 'evidence');
+  const evidence = { harness: entry.id, launcher, version: 'controlled-version-1', verifiedAt: Date.now(), questionId: 'fixture-question', runId: 'fixture-run', replyId: 'fixture-reply' };
+  const adapter = new NativeAdapter(() => [entry], harness => readConsultVerification(evidenceDir, harness));
+  const context = {
+    harness: entry.id, kind: 'consult' as const, cwd: root, directory: join(root, 'run'),
+    prompt: 'Controlled fixture', endpoint: 'http://127.0.0.1:1', token: 'fixture-no-secret', bridgeScript: script,
+    onPid() {}, onProvider() {}, onOutput() {}
+  };
+  assert.equal(adapter.supportsConsult('codex'), false);
+  recordConsultVerification(evidenceDir, evidence);
+  assert.deepEqual(readConsultVerification(evidenceDir, 'codex'), { ...evidence, policy: 1 });
+  assert.equal(adapter.supportsConsult('codex'), true);
+  assert.equal(adapter.supportsConsult('claude-code'), false);
+  await assert.rejects(adapter.start({ ...context, checkBeforeSpawn() { throw new Error('fixture cancel after version check'); } }), /fixture cancel after version check/);
+  assert.throws(() => readFileSync(marker), { code: 'ENOENT' });
+  writeFileSync(versionPath, 'controlled-version-2');
+  await assert.rejects(adapter.start(context), { code: 'HARNESS_UNAVAILABLE' });
+  assert.throws(() => readFileSync(marker), { code: 'ENOENT' });
+  writeFileSync(script, '// updated launcher');
+  assert.equal(adapter.supportsConsult('codex'), false);
+  writeFileSync(join(evidenceDir, 'consult-codex.json'), 'corrupted');
+  assert.equal(readConsultVerification(evidenceDir, 'codex'), undefined);
 });

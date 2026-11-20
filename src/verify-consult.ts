@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { NativeAdapter, type ExecutionAdapter } from './adapters.js';
+import { consultLauncherIdentity, recordConsultVerification } from './consult-verification.js';
 import { DomainError, type Actor, type Harness, type Issue, type Run } from './contracts.js';
 import { discoverHarnesses, probeHarness } from './harness.js';
 import { createServer } from './http.js';
@@ -13,12 +14,15 @@ import { Coordinator } from './runner.js';
 import { canonical, Store } from './store.js';
 import { Workflow } from './workflow.js';
 
-export async function verifyConsult(harness: Harness, bridgeScript: string, controlledAdapter?: ExecutionAdapter) {
+export async function verifyConsult(harness: Harness, bridgeScript: string, options: { controlledAdapter?: ExecutionAdapter; recordDirectory?: string } = {}) {
+  const { controlledAdapter, recordDirectory } = options;
   const entry = controlledAdapter ? undefined : discoverHarnesses().find(candidate => candidate.id === harness);
   if (!controlledAdapter && !entry) throw new DomainError('HARNESS_UNAVAILABLE', 'The requested native executable was not found');
+  const launcher = entry && consultLauncherIdentity(entry);
   const probe = entry ? await probeHarness(entry) : null;
-  if (probe && !probe.available) throw new DomainError('VERSION_PROBE_FAILED', 'The target executable did not report a version');
-  const adapter = controlledAdapter ?? new NativeAdapter(() => entry ? [entry] : [], new Set([harness]));
+  if (entry && (!launcher || !probe?.version)) throw new DomainError('VERSION_PROBE_FAILED', 'The target executable did not provide a verifiable launcher and version');
+  const verification = launcher && probe?.version ? { launcher, version: probe.version } : undefined;
+  const adapter = controlledAdapter ?? new NativeAdapter(() => entry ? [entry] : [], () => verification);
   const root = mkdtempSync(join(tmpdir(), 'agiledev-consult-probe-'));
   const source = join(root, 'source');
   mkdirSync(source);
@@ -74,11 +78,18 @@ export async function verifyConsult(harness: Harness, bridgeScript: string, cont
     const reply = response?.reply;
     const workflowUnchanged = canonical(store.get<Issue>('issue', issue.id)) === originalIssue;
     const replyVerified = response?.status === 'REPLIED' && reply?.sender.runId === run.id && reply.body.trim() === expectedReply;
-    const passed = run.state === 'SUCCEEDED' && !!run.providerSessionId && replyVerified && workflowUnchanged;
+    const launcherUnchanged = !entry || consultLauncherIdentity(entry) === launcher;
+    const passed = run.state === 'SUCCEEDED' && !!run.providerSessionId && replyVerified && workflowUnchanged && launcherUnchanged;
+    const recorded = !!(passed && verification && recordDirectory && reply);
+    if (recorded) {
+      recordConsultVerification(recordDirectory, {
+        ...verification, harness, verifiedAt: Date.now(), questionId: asked.message.id, runId, replyId: reply.id
+      });
+    }
     return {
       status: passed ? controlledAdapter ? 'CONTROLLED_PASS' : 'NATIVE_TARGET_VERIFIED' : 'NOT_VERIFIED',
       harness, version: probe?.version ?? null, source: 'agiledev stdio MCP probe',
-      questionId: asked.message.id, runId, runState: run.state, replyId: reply?.id ?? null, workflowUnchanged,
+      questionId: asked.message.id, runId, runState: run.state, replyId: reply?.id ?? null, workflowUnchanged, recorded,
       ...(passed ? {} : { reason: run.errorCode ?? 'CONSULT_EVIDENCE_INCOMPLETE' }),
       retainedEvidenceDirectory: root
     };
