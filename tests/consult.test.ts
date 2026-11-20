@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -14,7 +14,7 @@ import { createServer } from '../src/http.js';
 import { Coordinator } from '../src/runner.js';
 import { canonical, Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
-import { verifyConsult } from '../src/verify-consult.js';
+import { verifyConsult, verifyConsultExchange } from '../src/verify-consult.js';
 
 class ConsultAdapter implements ExecutionAdapter {
   supported = new Set<Harness>(['codex', 'dsh', 'claude-code']);
@@ -348,3 +348,74 @@ test('the disposable consult probe labels controlled proof separately from nativ
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const waitForReply of [true, false]) {
+  test(`the exchange probe ${waitForReply ? 'proves both authenticated MCP endpoints' : 'rejects a reply ID obtained without message_wait'}`, { timeout: 15000 }, async () => {
+    const launches: Harness[] = [];
+    const adapter: ExecutionAdapter = {
+      supportsConsult: harness => harness === 'dsh',
+      async start(context) {
+        launches.push(context.harness);
+        context.onPid(process.pid);
+        context.onProvider(`controlled-${context.harness}`);
+        const result = (async (): Promise<AdapterResult> => {
+          const client = await bridge(context.endpoint, context.token, context.harness);
+          try {
+            if (context.harness === 'dsh') {
+              const replyLine = context.prompt.split('\n').find(line => line.startsWith('Reply arguments: '));
+              const marker = context.prompt.match(/AGILEDEV_CONSULT_PROBE_[a-f0-9-]{36}/)?.[0];
+              assert.ok(replyLine);
+              assert.ok(marker);
+              const arguments_ = JSON.parse(replyLine.slice('Reply arguments: '.length, -'. Add your answer as body.'.length));
+              const result = await client.callTool({ name: 'message_send', arguments: { ...arguments_, body: marker } });
+              assert.ok(result.structuredContent?.message);
+              return { outcome: 'succeeded' };
+            }
+            const probeLine = context.prompt.split('\n').find(line => line.startsWith('Probe inputs: '));
+            assert.ok(probeLine);
+            const { disabled, enabled } = JSON.parse(probeLine.slice('Probe inputs: '.length));
+            const off = (await client.callTool({ name: 'message_send', arguments: disabled })).structuredContent as any;
+            assert.deepEqual(off.delivery, { state: 'STORED', reason: 'WAKE_DISABLED' });
+            const on = (await client.callTool({ name: 'message_send', arguments: enabled })).structuredContent as any;
+            assert.equal(on.delivery.state, 'QUEUED');
+            const thread = { workspaceId: enabled.workspaceId, issueId: enabled.issueId };
+            let replyId: string | undefined;
+            if (waitForReply) {
+              const waited = (await client.callTool({
+                name: 'message_wait', arguments: { ...thread, questionId: on.message.id, timeoutMs: 4000 }
+              })).structuredContent as any;
+              assert.equal(waited.status, 'REPLIED');
+              replyId = waited.reply.id;
+            } else {
+              for (let attempt = 0; attempt < 40 && !replyId; attempt++) {
+                const listed = (await client.callTool({ name: 'message_list', arguments: thread })).structuredContent as any;
+                replyId = listed.messages.find((message: any) => message.replyTo === on.message.id)?.id;
+                if (!replyId) await delay(75);
+              }
+            }
+            assert.ok(replyId);
+            return { outcome: 'succeeded', summary: `AGILEDEV_CONSULT_SEEN ${replyId}` };
+          } finally { await client.close(); }
+        })();
+        return { result, interrupt: async () => true };
+      }
+    };
+    const observed = await verifyConsultExchange('codex', 'dsh', resolve('dist/cli.js'), adapter);
+    const root = observed.retainedEvidenceDirectory;
+    try {
+      assert.deepEqual(launches, ['codex', 'dsh']);
+      assert.equal(observed.status, waitForReply ? 'CONTROLLED_PASS' : 'NOT_VERIFIED');
+      assert.equal(observed.sourceReadReply, waitForReply);
+      assert.equal(observed.workflowUnchanged, true);
+      assert.equal(observed.runCount, 1);
+      assert.equal(observed.messageCount, 3);
+      assert.ok(observed.disabledQuestionId);
+      assert.ok(observed.questionId);
+      assert.deepEqual(JSON.parse(readFileSync(join(root, 'exchange.json'), 'utf8')), observed);
+    } finally {
+      assert.equal(dirname(root), resolve(tmpdir()));
+      assert.ok(basename(root).startsWith('agiledev-consult-probe-'));
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

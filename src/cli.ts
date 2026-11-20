@@ -8,7 +8,7 @@ import { probeHosts } from './probe.js';
 import { serve } from './daemon.js';
 import { dataDirectory, ensureService, requireService, ServiceError, stopService } from './service-launcher.js';
 import { verifyExecution,verifyGit } from './verify-execution.js';
-import { verifyConsult } from './verify-consult.js';
+import { verifyConsult, verifyConsultExchange } from './verify-consult.js';
 import { consultLauncherIdentity, readConsultVerification } from './consult-verification.js';
 import { harnesses, Harness } from './contracts.js';
 
@@ -44,6 +44,19 @@ async function main() {
     });
     console.log(JSON.stringify(result, null, 2));
     if (result.status !== 'NATIVE_TARGET_VERIFIED') process.exitCode = 1;
+    return;
+  }
+  if (command === 'verify-consult-exchange') {
+    const [source, target] = args;
+    if (args.length !== 2 || !harnesses.includes(source as Harness) || !harnesses.includes(target as Harness) || source === target) {
+      throw new Error('Usage: verify-consult-exchange <source harness> <different target harness>; starts up to two real model runs in a disposable workspace.');
+    }
+    if (process.env.AGILEDEV_TOKEN || process.env.AGILEDEV_ENDPOINT) {
+      throw new Error('Run consult exchange verification locally outside an agent connection.');
+    }
+    const result = await verifyConsultExchange(source as Harness, target as Harness, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'));
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status !== 'NATIVE_EXCHANGE_VERIFIED') process.exitCode = 1;
     return;
   }
   if (command === 'verify-execution' || command === 'verify-qa') {
@@ -100,6 +113,6 @@ async function main() {
     } else throw new Error('Connection format must be codex, claude-code, or dsh.');
     return;
   }
-  console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-consult <harness> [--record] | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
+  console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-consult <harness> [--record] | verify-consult-exchange <source harness> <target harness> | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
 main().catch(error => { console.error(error instanceof ServiceError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
