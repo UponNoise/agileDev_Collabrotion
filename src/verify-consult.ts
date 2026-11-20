@@ -175,6 +175,16 @@ export async function verifyConsultExchange(sourceHarness: Harness, targetHarnes
     const disabled = { ...send, idempotencyKey: randomUUID(), body: 'Verify that a question is stored when workspace wake is disabled.' };
     const enabled = { ...send, idempotencyKey: randomUUID(), body: `Reply with ${expectedReply} as the complete message body.` };
     const observed: { disabledId?: string; questionId?: string; runId?: string; queuedAt?: number; reply?: IssueMessage } = {};
+    app.addHook('preHandler', async request => {
+      if (request.actor?.id !== lead.actor.id || request.routeOptions.url !== '/api/command/:operation') return;
+      const { operation } = request.params as { operation: string };
+      if (operation === 'message_wait' || operation === 'message_list') return;
+      if (operation === 'message_send') {
+        const input = canonical(request.body);
+        if (input === canonical(disabled) || (observed.disabledId && input === canonical(enabled))) return;
+      }
+      throw new DomainError('EXCHANGE_PROBE_COMMAND_DENIED', 'The probe lead can only send or read the planned test messages', 403);
+    });
     app.addHook('onSend', async (request, response, payload) => {
       if (request.actor?.id !== lead.actor.id || response.statusCode !== 200 || typeof payload !== 'string') return payload;
       const input = request.body as { idempotencyKey?: string; questionId?: string } | undefined;

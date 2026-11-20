@@ -374,11 +374,19 @@ for (const waitForReply of [true, false]) {
             const probeLine = context.prompt.split('\n').find(line => line.startsWith('Probe inputs: '));
             assert.ok(probeLine);
             const { disabled, enabled } = JSON.parse(probeLine.slice('Probe inputs: '.length));
+            const premature = await client.callTool({ name: 'message_send', arguments: enabled });
+            assert.equal(premature.isError, true);
             const off = (await client.callTool({ name: 'message_send', arguments: disabled })).structuredContent as any;
             assert.deepEqual(off.delivery, { state: 'STORED', reason: 'WAKE_DISABLED' });
             const on = (await client.callTool({ name: 'message_send', arguments: enabled })).structuredContent as any;
             assert.equal(on.delivery.state, 'QUEUED');
             const thread = { workspaceId: enabled.workspaceId, issueId: enabled.issueId };
+            const replay = (await client.callTool({ name: 'message_send', arguments: enabled })).structuredContent as any;
+            assert.equal(replay.replayed, true);
+            assert.equal(replay.delivery.runId, on.delivery.runId);
+            await assert.rejects(new LocalClient(context.endpoint, context.token).command('message_send', {
+              ...enabled, idempotencyKey: randomUUID(), body: 'This must never launch a second target'
+            }), fails('EXCHANGE_PROBE_COMMAND_DENIED'));
             let replyId: string | undefined;
             if (waitForReply) {
               const waited = (await client.callTool({
