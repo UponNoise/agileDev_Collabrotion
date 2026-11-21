@@ -58,6 +58,19 @@ B23 integration `c00e306` preserves reviewed source `5d84831` on accepted main. 
 
 B24 incorporates Claude's nonblocking catalog review. Common authorization, version and error guidance moves into the shared MCP playbook. Tool descriptions keep their individual contracts and relevant domain rejections, and repeated field help is shortened. The worker and QA coordinator prompts already reuse `roleInstructions`; focused tests will lock that parity with the MCP instructions. Roles, schemas and callable operations stay fixed.
 
+At the main-based runtime `108e18a`, actual stdio catalogs shrink while the operations, input schema structures and annotations compare equal after removing prose descriptions. The measured listing excludes the JSON-RPC envelope and the once-per-session role playbook. The tokenizer is `tiktoken 0.12.0`, `o200k_base`.
+
+| Role | Tools | JSON bytes before | JSON bytes after | Tokens before | Tokens after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Worker | 16 | 22,094 | 16,046 | 4,821 | 3,689 |
+| QA | 17 | 25,210 | 18,745 | 5,508 | 4,288 |
+| PM | 40 | 77,539 | 61,132 | 17,549 | 14,474 |
+| Lead | 43 | 82,457 | 64,923 | 18,623 | 15,341 |
+
+The retargeted 200-defect default brief measures 553 JSON-body tokens and 1,135 tokens for the complete stdio MCP result for each of the four roles. The long Unicode brief measures 462 body tokens and 964 MCP result tokens. The compact defect list contains 20 rows. Native-host AC43 remains a separate acceptance check.
+
+The exact main-based B24 runtime `108e18a` passes type checks, production build and all 207 tests. The real stdio profile test matches each role's published playbook, and the managed worker rework and QA re-test assertions check the same text in both prompts. B24 is ready for Claude's acceptance against main `0858b2e`; B25 follows after B24 merges.
+
 B24 brief projection work in `.agents/worktrees/r2-briefs` claims the issue, defect and run read views in the service and their schemas, the shared brief projection, the `nextActions` web API type and focused tests. Agent defaults use compact projections with explicit authorized expansion. The existing human evidence views remain available through the full packets. Acceptance uses blocked, dispatchable parent, rework and large-record fixtures under the recorded NF05 tokenizer.
 
 The B24 decision risk projection at `ea66169` is enforced by `698d079` for design, delivery and completion-grant writes. The service binds exact visible risk evidence, acknowledges open MINOR records by ID and version, and allows a QA pass with MINOR/INFO findings. Proposal confirmation uses the full sealed snapshot hash. The existing forms reload on stale evidence and require a fresh decision. Presentation as one card, the metadata-only retry and full keyboard/zoom coverage remain B27/B28 work. A 1280×720 in-app browser test with an earlier build of the refresh path verified that a new proposal at the same issue version blocks the old request, refreshes the Chinese form and permits exactly one explicit approval afterward. This used an in-memory fixture and one synthetic owner.
