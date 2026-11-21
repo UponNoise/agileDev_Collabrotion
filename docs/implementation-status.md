@@ -1,6 +1,6 @@
 # Implementation evidence and remaining work
 
-Updated: 2026-11-19. Main `946a707` includes the independently reviewed defect and rejection package from PR #13 and portable package evidence from PR #15. R2 acceptance and the five review clarifications are recorded at `cd64c51` on draft PR #14. The user retains the publication decision for that PR. B23 is independently reviewed and stacked as draft PR #16. B24 and B25 are frozen and independently reviewed locally. Claude owns the round-three prototype and the later B27/B28 web work. The accepted R2 deferrals remain parked.
+Updated: 2026-11-21. Main `b237d97` includes accepted R2 through PR #14. B23 is ready for Claude's acceptance on PR #16 against main. The B24, B25 and B26 branches are published on origin. Their implementation PRs follow one at a time after each predecessor merges. Claude owns prototype round 3 and takes B27/B28 after B24 merges.
 
 ## Concurrent ownership, 2026-11-14
 
@@ -54,6 +54,8 @@ W0-2 is complete for the reviewed compatibility/support slice and merged via PR 
 W2b private core checkpoint, 2026-11-11: the defect helper and pure feature contracts pass type checks, build, and 17 SQLite/actual-Workflow core tests. Pending problems have null confirmed origin and truthful unsealed observations; conversion creates an unapproved requirement, and confirmation preserves the original observation. Migration retains QA state/resolution/history and explicitly unknown old observation versions. Human-origin defects cannot be resolved by the transitional legacy QA pass helper. Rejection classifications create only their intended facts; scope-change rework derives a blocker until a different current design has an explicit human approval after rejection, without changing issue state. Public workflow/schema/MCP/gap wiring and actual admission enforcement, explicit W3b QA/waiver policy, UI, independent review, and full AC41 acceptance remain outstanding. Core fixtures deliberately seed observations/reports and do not prove native execution or real human approval.
 
 ## Current evidence
+
+B25 handoff: published `codex/r2-messages` retains the independently reviewed B25 runtime `ca591be` and its 214-test evidence below. The stack still uses B24's earlier projection. After B24 merges, integrate accepted main, remeasure NF05 with B25 message previews, rerun check/build and the full suite, and send the B25 PR to Claude for acceptance. B26 remains separate.
 
 The first B25 slice stores immutable issue messages with authenticated sender identity, scoped recipient resolution, byte limits and existing idempotency receipts. The service enforces the worker–QA wall for direct sends, paging, cursors and reply references. Check/build and eight focused message/profile tests pass, including real loopback HTTP and stdio transport. This slice has no wake integration.
 
