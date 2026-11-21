@@ -306,6 +306,8 @@ Active overdue records add advisory `ITERATION_OVERDUE` gaps for planners. Worke
 
 Agent-only `defect_propose` takes `workspaceId`, `issueId`, current issue `expectedVersion`, an `idempotencyKey`, and a finding: `{severity, criterionIds, reproduce, expected, actual}`. The issue must be readable, but need not have a delivery. The result is `PROPOSED` with null confirmed origin; an unsealed observation explicitly uses `ISSUE_SCOPE` and null snapshot/digest. The service records the actual issue/scope/design reference, never an invented artifact. Proposals do not alter issue versions or confirmed defect sets and add only advisory `DEFECT_TRIAGE_PENDING` gaps.
 
+The human inbox derives one `DEFECT_TRIAGE` entry per pending proposal. Each entry includes the current issue and defect versions, reporter, proposed severity, a bounded summary and the pending time from the creation event when available. These entries count toward human attention and leave workflow gates unchanged. A triage decision removes that proposal from the pending projection.
+
 `issue_get` supplies `defects.observation` and `defects.decisionSet` for the exact readable issue. The observation includes `kind`, `issueVersion`, `scopeRevision`, `designId`, `candidateId`, `snapshotId`, `snapshotHash` and `digest`, with unknown/unsealed values explicitly null. A confirmed-set preview is `{revision, hash, members:[{id, version}]}`. This prepares later verification/decision bindings; the W2b register slice does not yet make QA reports or batch/waiver decisions consume complete-set snapshots.
 
 Human-only commands are absent from MCP and grants, and direct agent HTTP calls are denied:

@@ -11,7 +11,8 @@ export const decisionKinds: Record<InboxKind, string> = {
   SCOPE_DECISION: 'Scope decision',
   RUN_RECONCILE: 'Execution reconciliation',
   CLOSURE_BLOCKED: 'Accepted delivery',
-  AGENT_QUESTION: 'Agent question'
+  AGENT_QUESTION: 'Agent question',
+  DEFECT_TRIAGE: 'Defect triage'
 };
 interface Counts { total: number; blocking: number; attention: number; byKind: Record<InboxKind, number> }
 export interface InboxData {
@@ -61,6 +62,7 @@ function Entry({ entry, threshold, open }: { entry: InboxEntry; threshold: numbe
   const dateText = useDateText();
   const age = entry.ageMs;
   const ownerQuestion = entry.kind === 'AGENT_QUESTION';
+  const pendingDefect = entry.kind === 'DEFECT_TRIAGE';
   const ageText = age === null ? t('Age unavailable') : age < 60000 ? t('Less than a minute') : age < 3600000
     ? t('{count} min').replace('{count}', String(Math.floor(age / 60000)))
     : t('{count} h').replace('{count}', String(Math.floor(age / 3600000)));
@@ -70,7 +72,7 @@ function Entry({ entry, threshold, open }: { entry: InboxEntry; threshold: numbe
         <div className="decision-labels">
           <strong>{t(decisionKinds[entry.kind])}</strong>
           <span className={`status ${entry.status === 'READY_TO_COMPLETE' ? 'good' : entry.blocking ? 'review' : 'neutral'}`}>
-            {t(ownerQuestion ? 'Awaiting your reply' : entry.status === 'READY_TO_COMPLETE' ? 'Ready to complete' : entry.blocking ? 'Decision required' : 'Acceptance recorded')}
+            {t(ownerQuestion ? 'Awaiting your reply' : entry.status === 'READY_TO_COMPLETE' ? 'Ready to complete' : entry.blocking || pendingDefect ? 'Decision required' : 'Acceptance recorded')}
           </span>
         </div>
         <a href={entry.target.runId ? `/?${new URLSearchParams({ workspace: entry.workspaceId, view: 'runs', run: entry.target.runId })}` : `${entry.url}?view=reviews`}
@@ -92,7 +94,7 @@ function Entry({ entry, threshold, open }: { entry: InboxEntry; threshold: numbe
           </dl>
         </details>
       </div>
-      <button onClick={() => open(entry)}>{t(ownerQuestion ? 'View issue' : entry.target.runId ? 'Inspect run' : entry.status === 'READY_TO_COMPLETE' ? 'Inspect completion' : 'Review item')}</button>
+      <button onClick={() => open(entry)}>{t(ownerQuestion || pendingDefect ? 'View issue' : entry.target.runId ? 'Inspect run' : entry.status === 'READY_TO_COMPLETE' ? 'Inspect completion' : 'Review item')}</button>
     </article>
   );
 }

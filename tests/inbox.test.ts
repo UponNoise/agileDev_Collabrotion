@@ -47,6 +47,50 @@ function fixture(t: TestContext, git = false) {
 }
 type Fixture = ReturnType<typeof fixture>;
 function database(store: Store) { return canonical(['records', 'events', 'receipts', 'credentials'].map(table => store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())); }
+
+test('the human inbox tracks exact pending defect proposals until triage', t => {
+  const f = fixture(t);
+  const issue = f.issue();
+  const reporter = f.enroll('lead').actor as Actor;
+  const before = canonical(f.current(issue.id));
+  const finding = { severity: 'MAJOR', criterionIds: ['C1'], reproduce: 'Open the fixture', expected: 'Visible value', actual: 'Missing value' };
+  const first = f.change('defect_propose', issue.id, finding, reporter).defect;
+  const second = f.change('defect_propose', issue.id, { ...finding, severity: 'MINOR' }, reporter).defect;
+  const sequence = f.pin(first.id, 'defect_created', now - day);
+  const query = { workspaceId: f.workspace.id, kind: 'DEFECT_TRIAGE' };
+  const stored = database(f.store);
+  const page = f.list({ ...query, limit: 1 });
+  assert.equal(page.total, 2);
+  assert.equal(page.nextOffset, 1);
+  assert.equal(page.summary.byKind.DEFECT_TRIAGE, 2);
+  assert.equal(page.summary.attention, 2);
+  assert.equal(page.summary.blocking, 0);
+  const entry = page.entries[0];
+  assert.equal(entry.issueId, issue.id);
+  assert.equal(entry.target.issueVersion, issue.version);
+  assert.equal(entry.target.defectId, first.id);
+  assert.equal(entry.target.defectVersion, first.version);
+  assert.equal(entry.nextAction, 'defect_triage');
+  assert.equal(entry.pendingSequence, sequence);
+  assert.equal(entry.pendingSince, iso(now - day));
+  assert.deepEqual(entry.defect, {
+    key: first.key, reporterId: reporter.id, reporterName: reporter.name, proposedSeverity: 'MAJOR', summary: finding.actual
+  });
+  const secondEntry = f.list({ ...query, offset: page.nextOffset, limit: 1 }).entries[0];
+  assert.equal(secondEntry.target.defectId, second.id);
+  assert.notEqual(secondEntry.id, entry.id);
+  assert.throws(() => f.flow.execute(reporter, 'inbox_list', query), (error: any) => error.code === 'ROLE_DENIED');
+  assert.equal(database(f.store), stored);
+  f.cmd('defect_triage', {
+    defectId: first.id, expectedVersion: first.version, expectedIssueVersion: issue.version,
+    action: 'REJECT', reason: 'Fixture resolution'
+  });
+  const remaining = f.list(query);
+  assert.deepEqual(remaining.entries.map((item: any) => item.target.defectId), [second.id]);
+  assert.equal(remaining.summary.attention, 1);
+  assert.equal(canonical(f.current(issue.id)), before);
+});
+
 function delivery(f: Fixture) {
   const issue = f.issue(); const design = f.design(issue.id, true); const worker = f.enroll('worker').actor as Actor; const lead = f.enroll('lead').actor as Actor;
   const root = join(f.directory, `delivery-${randomUUID()}`); mkdirSync(root); writeFileSync(join(root, 'delivery.txt'), 'Automated fixture artifact\n');

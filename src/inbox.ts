@@ -2,6 +2,8 @@ import { Actor, Design, DomainError, InboxKind, Issue, Run, Workspace, inboxKind
 import { scopeState, taskScopeHash } from './scope.js';
 import { canonical, hash, Store } from './store.js';
 import { IssueMessages } from './messages.js';
+import type { DefectRecord, DefectSeverity } from './defect-contracts.js';
+import { briefText } from './issue-brief.js';
 
 export { inboxKinds } from './contracts.js';
 export type { InboxKind } from './contracts.js';
@@ -19,8 +21,9 @@ export interface InboxPolicy {
 }
 export interface InboxEntry {
   id: string; kind: InboxKind; workspaceId: string; workspaceName: string; issueId: string; key: string; title: string; url: string;
-  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string };
+  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string; defectId?: string; defectVersion?: number };
   question?: { body: string; senderId: string; senderName: string };
+  defect?: { key: string; proposedSeverity: DefectSeverity; reporterId: string | null; reporterName: string | null; summary: string };
   blocking: boolean; status: 'WAITING' | 'BLOCKED' | 'READY_TO_COMPLETE'; blockers: string[]; nextAction: string;
   pendingSince: string | null; pendingSequence: number | null; ageMs: number | null; ageProvenance: 'AUDIT_EVENT' | 'UNAVAILABLE'; clockSkew: boolean;
 }
@@ -194,7 +197,7 @@ export function updateInboxSettings(store: Store, actor: Actor, input: { workspa
   return { settings: result };
 }
 
-function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: number, includeOwnerQuestions: boolean, allowedIssueIds?: ReadonlySet<string>): InboxEntry[] {
+function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: number, includeOwnerItems: boolean, allowedIssueIds?: ReadonlySet<string>): InboxEntry[] {
   const issues = store.list<Issue>('issue', workspace.id).filter(issue => !allowedIssueIds || allowedIssueIds.has(issue.id));
   let loadedHistory: History | undefined;
   const history = () => loadedHistory ??= new History(store, workspace);
@@ -202,7 +205,7 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
   const append = (issue: Issue, kind: InboxKind, target: InboxEntry['target'], epoch: Epoch | null, blocking: boolean, nextAction: string, blockers: string[] = [], status: InboxEntry['status'] = 'WAITING') => {
     const since = epoch?.at ?? null; const clockSkew = since !== null && Date.parse(since) > now;
     const title = issue.parentId ? `${store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
-    const entry: InboxEntry = { id: hash(canonical({ workspaceId: workspace.id, issueId: issue.id, kind, identity: target.runId ?? target.messageId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue.id, key: issue.key, title, url: `/w/${workspace.id}/issues/${issue.id}`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew };
+    const entry: InboxEntry = { id: hash(canonical({ workspaceId: workspace.id, issueId: issue.id, kind, identity: target.runId ?? target.messageId ?? target.defectId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue.id, key: issue.key, title, url: `/w/${workspace.id}/issues/${issue.id}`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew };
     entries.push(entry);
     return entry;
   };
@@ -234,7 +237,7 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
     if (issue.state !== 'DONE' && policy.unmanaged(issue)) append(issue, 'RUN_RECONCILE', { issueVersion: issue.version, revisionHash: null, candidateId: issue.candidate?.id ?? null, fence: issue.fence }, history().own(issue, value => value.state !== 'DONE' && policy.unmanaged(value)), true, 'work_reconcile', ['UNMANAGED_EXECUTION']);
   }
   const byId = new Map(issues.map(issue => [issue.id, issue]));
-  if (includeOwnerQuestions) {
+  if (includeOwnerItems) {
     for (const question of new IssueMessages(store).ownerQuestions(workspace.id)) {
       const issue = byId.get(question.issueId);
       if (!issue) continue;
@@ -242,6 +245,24 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
       const entry = append(issue, 'AGENT_QUESTION', { issueVersion: issue.version, revisionHash: null, messageId: question.id }, history().epoch(audit), false, 'message_send');
       const sender = store.get<Actor>('actor', question.sender.principalId);
       entry.question = { body: question.body, senderId: sender.id, senderName: sender.name };
+    }
+    const proposals = store.db.prepare(`
+      SELECT data FROM records
+      WHERE kind = 'defect' AND workspace_id = ? AND json_extract(data, '$.state') = 'PROPOSED'
+    `).all(workspace.id) as { data: string }[];
+    for (const row of proposals) {
+      const defect = JSON.parse(row.data) as DefectRecord;
+      const issue = byId.get(defect.issueId);
+      if (!issue) continue;
+      const audit = history().for(defect.id).find(event =>
+        event.operation === 'defect_created' && event.data?.state === 'PROPOSED' && event.data.issueId === issue.id);
+      const target = { issueVersion: issue.version, revisionHash: null, defectId: defect.id, defectVersion: defect.version };
+      const entry = append(issue, 'DEFECT_TRIAGE', target, history().epoch(audit), false, 'defect_triage');
+      const reporter = defect.reporterId ? maybe<Actor>(store, 'actor', defect.reporterId) : null;
+      entry.defect = {
+        key: defect.key, proposedSeverity: defect.severity, reporterId: defect.reporterId,
+        reporterName: reporter?.name ?? null, summary: briefText(defect.actual, 160)
+      };
     }
   }
   for (const run of store.list<Run>('run', workspace.id)) {
@@ -260,7 +281,7 @@ export function inboxList(store: Store, actor: Actor, query: InboxQuery, policy:
   const counts = (entries: InboxEntry[]) => ({
     total: entries.length,
     blocking: entries.filter(entry => entry.blocking).length,
-    attention: entries.filter(entry => entry.blocking || entry.kind === 'AGENT_QUESTION').length,
+    attention: entries.filter(entry => entry.blocking || entry.kind === 'AGENT_QUESTION' || entry.kind === 'DEFECT_TRIAGE').length,
     byKind: Object.fromEntries(inboxKinds.map(kind => [kind, entries.filter(entry => entry.kind === kind).length]))
   });
   const filtered = all.filter(entry => query.kind === undefined || entry.kind === query.kind).sort((a, b) => Number(b.blocking) - Number(a.blocking) || Number(a.pendingSince !== null) - Number(b.pendingSince !== null) || (a.pendingSince !== null && b.pendingSince !== null ? Date.parse(a.pendingSince) - Date.parse(b.pendingSince) : 0) || a.workspaceId.localeCompare(b.workspaceId) || a.id.localeCompare(b.id));

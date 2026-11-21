@@ -61,6 +61,8 @@ W2b private core checkpoint, 2026-11-11: the defect helper and pure feature cont
 
 B25 integration against main starts from the tested detached runtime db2e4d7. The published B25 branch retained its previous runtime until B24 merged. The acceptance candidate uses the same scoped message and bounded brief resolutions as that trial.
 
+B25 also owns the B24 acceptance follow-up for the pending defect projection. The human inbox derives one nonblocking `DEFECT_TRIAGE` entry per current PROPOSED defect, with exact issue and defect versions, reporter, proposed severity and audited pending time. Existing inbox labels and navigation provide compatibility. Prototype-specific cards and triage interaction remain B27 work.
+
 The trial reproduced a crowded user-acceptance brief dropping every open blocking defect ID while retaining the defect count. Trial follow-up `db2e4d7` keeps the first blocking ID and prioritizes compacting secondary entries. On a synthetic fixture with 200 defects and long message previews, the four complete stdio MCP results use 1,565–1,575 tokens on a closed issue and 1,477–1,485 in user acceptance. The acceptance brief retains one open blocking defect ID, one pending question preview and exact totals for all four roles. Adding 200 QA-only messages leaves the worker's brief unchanged. Measurements use `tiktoken 0.12.0` with `o200k_base` and include text and structured tool content, excluding the JSON-RPC envelope. The default message page returns 20 compact rows. These are local transport and projection checks.
 
 The exact detached runtime `db2e4d7` passes type checks, production build and all 215 tests. The published B25 branch records the trial evidence and retains its prior runtime until PR #17 merges.
