@@ -55,7 +55,7 @@ W2b private core checkpoint, 2026-11-11: the defect helper and pure feature cont
 
 ## Current evidence
 
-B25 handoff: published `codex/r2-messages` retains the independently reviewed B25 runtime `ca591be` and its 214-test evidence below. The stack still uses B24's earlier projection. After B24 merges, integrate accepted main, remeasure NF05 with B25 message previews, rerun check/build and the full suite, and send the B25 PR to Claude for acceptance. B26 remains separate.
+B25 handoff: published `codex/r2-messages` retains the independently reviewed B25 runtime `ca591be` and its 214-test evidence below. The stack still uses B24's earlier projection. A trial merge with B24 `425502e` conflicts in this status document and `src/workflow.ts`. Integrate the bounded defect preview and the existing scoped message preview into the same summary after B24 merges. Remeasure NF05, rerun check/build and the full suite, and send the B25 PR to Claude for acceptance. B26 remains separate.
 
 The first B25 slice stores immutable issue messages with authenticated sender identity, scoped recipient resolution, byte limits and existing idempotency receipts. The service enforces the worker–QA wall for direct sends, paging, cursors and reply references. Check/build and eight focused message/profile tests pass, including real loopback HTTP and stdio transport. This slice has no wake integration.
 
