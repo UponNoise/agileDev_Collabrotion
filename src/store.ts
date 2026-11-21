@@ -25,6 +25,7 @@ export class Store {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, workspace_id TEXT, data TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE INDEX IF NOT EXISTS records_workspace ON records(kind,workspace_id);
+      CREATE INDEX IF NOT EXISTS issue_parent ON records(workspace_id,json_extract(data,'$.parentId')) WHERE kind='issue';
       CREATE INDEX IF NOT EXISTS issue_message_thread ON records(workspace_id,json_extract(data,'$.issueId')) WHERE kind='issue_message';
       CREATE INDEX IF NOT EXISTS issue_message_reply ON records(workspace_id,json_extract(data,'$.replyTo')) WHERE kind='issue_message' AND json_extract(data,'$.kind')='REPLY';
       CREATE TABLE IF NOT EXISTS credentials (hash TEXT PRIMARY KEY, actor_id TEXT NOT NULL);
@@ -44,6 +45,14 @@ export class Store {
       ? this.db.prepare('SELECT data FROM records WHERE kind=? ORDER BY rowid').all(kind)
       : this.db.prepare('SELECT data FROM records WHERE kind=? AND workspace_id=? ORDER BY rowid').all(kind, workspaceId);
     return (rows as { data: string }[]).map(r => JSON.parse(r.data) as T);
+  }
+  issueChildren(workspaceId: string, parentId: string): Issue[] {
+    const rows = this.db.prepare(`
+      SELECT data FROM records
+      WHERE kind='issue' AND workspace_id=? AND json_extract(data,'$.parentId')=?
+      ORDER BY rowid
+    `).all(workspaceId, parentId) as { data: string }[];
+    return rows.map(row => JSON.parse(row.data) as Issue);
   }
   put<T extends { id: string }>(kind: string, value: T, workspaceId: string | null = null) {
     this.db.prepare('INSERT INTO records(kind,id,workspace_id,data) VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data').run(kind, value.id, workspaceId, JSON.stringify(value));
