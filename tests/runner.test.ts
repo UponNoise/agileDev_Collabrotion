@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -27,9 +27,11 @@ class ControlledAdapter implements ExecutionAdapter {
     return { result: new Promise<AdapterResult>(done => this.finish.set(context.cwd, done)), interrupt: async () => { this.finish.get(context.cwd)?.({ outcome: 'cancelled' }); return true; } };
   }
 }
-async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapter(), concurrency = 2) {
+async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapter(), concurrency = 2, provisionDependencies = false) {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-runner-'));
   const source = join(root, 'source'); mkdirSync(source); writeFileSync(join(source, 'source.txt'), 'original');
+  const dependencies = provisionDependencies ? mkdirSync(join(root, 'dependencies'), { recursive: true }) : undefined;
+  if (dependencies) writeFileSync(join(dependencies, 'package.txt'), 'owned dependency');
   const git = (...args: string[]) => execFileSync('git', args, { cwd: source, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   git('init'); git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fixture');
   const store = new Store(join(root, 'service.sqlite')); const flow = new Workflow(store); const owner = store.bootstrap();
@@ -49,9 +51,20 @@ async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapte
   applyFixturePlan(flow,owner.actor,parent.id);
   const jobs = tasks.map(i => change('work_dispatch', i.id, { designId: store.get<Issue>('issue', parent.id).designId, scopeRevision: 1 }).run as Run);
   const server = createServer(store); const endpoint = await server.listen({ host: '127.0.0.1', port: 0 });
-  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency });
-  const close = async () => { await coordinator.close(); await server.close(); store.close(); rmSync(root, { recursive: true, force: true }); };
-  return { root, source, store, flow, owner, change, workspace, tasks, jobs, adapter, coordinator, close };
+  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency, executionDependencies: dependencies });
+  const close = async () => {
+    await coordinator.close();
+    await server.close();
+    if (dependencies) for (const job of jobs) {
+      const executionRoot = store.get<Run>('run', job.id).executionRoot;
+      if (!executionRoot) continue;
+      const link = join(executionRoot, 'node_modules');
+      if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
+    }
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  };
+  return { root, source, dependencies, store, flow, owner, change, workspace, tasks, jobs, adapter, coordinator, close };
 }
 
 test('cross-harness dispatch isolates real Git worktrees and requires authenticated submission', { timeout: 20000 }, async () => {
@@ -94,6 +107,34 @@ test('provider success without a submission fails the run and preserves the busi
     await waitFor(() => f.store.get<Run>('run', f.jobs[0]!.id).state === 'FAILED');
     assert.equal(f.store.get<Run>('run', f.jobs[0]!.id).errorCode, 'SUBMISSION_REQUIRED');
     assert.equal(f.store.get<Issue>('issue', f.tasks[0]!.id).state, 'NOT_STARTED');
+  } finally { await f.close(); }
+});
+
+test('rejected adapter startup removes dependencies only when no process started', { timeout: 20000 }, async () => {
+  const contexts = new Map<string, AdapterContext>();
+  const adapter: ExecutionAdapter = {
+    async start(context) {
+      contexts.set(context.harness, context);
+      if (context.harness === 'claude-code') context.onPid(process.pid);
+      throw new DomainError('HARNESS_UNAVAILABLE', 'Fixture adapter rejected startup');
+    }
+  };
+  const f = await setup(2, adapter, 2, true);
+  try {
+    await f.coordinator.tick();
+    const runs = () => f.jobs.map(job => f.store.get<Run>('run', job.id));
+    await waitFor(() => runs().every(run => !!run.finishedAt));
+    const [failed, uncertain] = runs() as [Run, Run];
+    assert.equal(failed.state, 'FAILED');
+    assert.equal(failed.errorCode, 'HARNESS_UNAVAILABLE');
+    assert.equal(f.store.get<Issue>('issue', failed.issueId).state, 'NOT_STARTED');
+    assert.equal(lstatSync(join(failed.executionRoot!, 'node_modules'), { throwIfNoEntry: false }), undefined);
+    assert.throws(() => f.store.authenticate(contexts.get('codex')!.token), { code: 'UNAUTHENTICATED' });
+    assert.equal(uncertain.state, 'UNCERTAIN');
+    assert.equal(uncertain.pid, process.pid);
+    assert.ok(lstatSync(join(uncertain.executionRoot!, 'node_modules')).isSymbolicLink());
+    assert.throws(() => f.store.authenticate(contexts.get('claude-code')!.token), { code: 'UNAUTHENTICATED' });
+    assert.equal(readFileSync(join(f.dependencies!, 'package.txt'), 'utf8'), 'owned dependency');
   } finally { await f.close(); }
 });
 

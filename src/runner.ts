@@ -141,6 +141,7 @@ export class Coordinator {
   }
   private async execute(id: string, owned: OwnedExecution) {
     let stopped = false;
+    let unlinkDependencies: (() => void) | undefined;
     try {
       let run = this.store.get<Run>('run', id);
       let issue = this.store.get<Issue>('issue', run.issueId);
@@ -200,7 +201,7 @@ export class Coordinator {
         'The coordinator has claimed your lease. Use agiledev issue_get to read the latest issue version and fence, and work_heartbeat for long work. Implement and self-check the assigned behavior.',
         'When ready, call agiledev work_submit with the current expectedVersion, fence, a unique idempotencyKey, a concise summary, and the relative paths of actual delivered files. Do not submit secrets or dependency directories. A final text response alone is not submission. Never approve your own implementation.',
       ].join('\n\n');
-      const unlinkDependencies = this.executionDependencies ? linkExecutionDependencies(directory.root, this.executionDependencies) : undefined;
+      unlinkDependencies = this.executionDependencies ? linkExecutionDependencies(directory.root, this.executionDependencies) : undefined;
       const instructions = unlinkDependencies ? `${prompt}\n\nThe owner provisioned shared node_modules for running existing scripts. Do not change that directory or run package installation in this execution root.` : prompt;
       const result = await this.launch(run, owned, directory.root, instructions);
       stopped = result.outcome !== 'uncertain';
@@ -209,9 +210,16 @@ export class Coordinator {
       if (checksStopped && result.outcome === 'succeeded' && run.kind !== 'qa' && this.store.get<Run>('run',id).state === 'RUNNING') this.sealDelivery(run,owned);
       this.finish(id, owned, checksStopped ? result : { outcome: 'uncertain', errorCode: 'CHECK_STOP_UNCONFIRMED' });
     } catch (error) {
-      const errorCode = error instanceof DomainError ? error.code : 'EXECUTION_FAILED';
+      if (!this.store.db.open) return;
+      const mayBeRunning = !stopped && !!(owned.session || this.store.get<Run>('run', id).pid);
+      let failure = error;
+      if (!stopped && !mayBeRunning) {
+        try { unlinkDependencies?.(); }
+        catch (cleanupError) { failure = cleanupError; }
+      }
+      const errorCode = failure instanceof DomainError ? failure.code : 'EXECUTION_FAILED';
       const cancelled = errorCode === 'INTERRUPTED_BEFORE_LAUNCH' || errorCode === 'QUESTION_ALREADY_ANSWERED';
-      this.finish(id, owned, { outcome: owned.session && !stopped ? 'uncertain' : cancelled ? 'cancelled' : 'failed', errorCode, summary: error instanceof DomainError ? error.message : 'Execution could not be completed; inspect the retained run directory' });
+      this.finish(id, owned, { outcome: mayBeRunning ? 'uncertain' : cancelled ? 'cancelled' : 'failed', errorCode, summary: failure instanceof DomainError ? failure.message : 'Execution could not be completed; inspect the retained run directory' });
     } finally { this.live.delete(id); }
   }
   private async launch(run: Run, owned: OwnedExecution, cwd: string, prompt: string) {
