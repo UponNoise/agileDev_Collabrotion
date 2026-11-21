@@ -9,6 +9,17 @@ import { fileURLToPath } from 'node:url';
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('This packaging path currently verifies Windows x64 only.');
 if (!process.env.npm_execpath) throw new Error('Run npm run package:desktop so the trusted npm CLI is explicit.');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+function cleanSourceCommit() {
+  const git = args => execFileSync('git', args, {
+    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000, windowsHide: true
+  }).trim();
+  try {
+    if (git(['rev-parse', '--show-prefix']) || git(['status', '--porcelain', '--untracked-files=normal'])) return null;
+    const commit = git(['rev-parse', '--verify', 'HEAD']);
+    return /^[a-f0-9]{40,64}$/.test(commit) ? commit : null;
+  } catch { return null; }
+}
+const sourceCommit = cleanSourceCommit();
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const stage = mkdtempSync(join(tmpdir(), 'agiledev-package-'));
 const app = join(stage, 'app');
@@ -53,5 +64,10 @@ writeFileSync(join(service, 'runtime.json'), JSON.stringify({ node: process.vers
 mkdirSync(join(root, 'release'), { recursive: true });
 const output = mkdtempSync(join(root, 'release', 'build-'));
 const paths = await packager({ dir: app, name: 'AgileDev Collaboration', executableName: 'AgileDev', appVersion: manifest.version, electronVersion: manifest.devDependencies.electron, platform: 'win32', arch: 'x64', asar: true, extraResource: service, out: output, overwrite: false });
-writeFileSync(join(root, 'release', 'latest.json'), JSON.stringify({ directory: paths[0], node: actualVersion, electron: manifest.devDependencies.electron, appArchiveSha256: createHash('sha256').update(readFileSync(join(paths[0], 'resources', 'app.asar'))).digest('hex') }, null, 2));
+writeFileSync(join(root, 'release', 'latest.json'), JSON.stringify({
+  directory: paths[0], node: actualVersion, electron: manifest.devDependencies.electron,
+  appArchiveSha256: createHash('sha256').update(readFileSync(join(paths[0], 'resources', 'app.asar'))).digest('hex'),
+  commit: sourceCommit && cleanSourceCommit() === sourceCommit ? sourceCommit : null,
+  builtAt: new Date().toISOString(),
+}, null, 2));
 console.log(JSON.stringify({ packages: paths, stage, runtime: { version: actualVersion, sha256: expected } }, null, 2));
