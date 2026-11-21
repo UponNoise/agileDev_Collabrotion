@@ -197,7 +197,7 @@ Revision R2 decisions, accepted by the user on 2026-11-14 with every proposed de
 
 **Ready to implement:** user-approved applicable design revision; concrete task scope and acceptance mapping; assigned accountable worker; cleared blocking dependencies; valid execution binding; available concurrency/cost policy; no effective hold; no unresolved readiness blockers. Dates and estimates remain optional.
 
-**Task done:** current artifact/review/QA and applicable defect-set evidence; human acceptance of that snapshot or exact authorized delegation; non-INFO defects resolved or current MINOR waivers; required Git/non-Git proof; an explicit authorized acceptance/completion transaction with its audit event. Fact callbacks cannot supply that transition.
+**Task done:** current artifact/review/QA and applicable defect evidence; human acceptance of that snapshot or exact authorized delegation; non-INFO defects resolved, or open MINOR defects acknowledged by the current human acceptance (R2 §13.1); required Git/non-Git proof; an explicit authorized acceptance/completion transaction with its audit event. Fact callbacks cannot supply that transition.
 
 **Parent done:** applicable design approved; nonempty in-scope delivery; every in-scope child done; exclusions approved; all parent criteria passed; current integration, lead/QA, defect-set and human evidence. The service derives readiness from these facts; an explicit authorized parent acceptance/completion command records DONE. Neither an empty child set nor ABANDONED nor a callback alone completes it.
 
