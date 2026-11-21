@@ -314,6 +314,8 @@ Active overdue records add advisory `ITERATION_OVERDUE` gaps for planners. Worke
 
 Agent-only `defect_propose` takes `workspaceId`, `issueId`, current issue `expectedVersion`, an `idempotencyKey`, and a finding: `{severity, criterionIds, reproduce, expected, actual}`. The issue must be readable, but need not have a delivery. The result is `PROPOSED` with null confirmed origin; an unsealed observation explicitly uses `ISSUE_SCOPE` and null snapshot/digest. The service records the actual issue/scope/design reference, never an invented artifact. Proposals do not alter issue versions or confirmed defect sets and add only advisory `DEFECT_TRIAGE_PENDING` gaps.
 
+The human inbox derives one `DEFECT_TRIAGE` entry per pending proposal. Each entry includes the current issue and defect versions, reporter, proposed severity, a bounded summary and the pending time from the creation event when available. These entries count toward human attention and leave workflow gates unchanged. A triage decision removes that proposal from the pending projection.
+
 `issue_get` supplies `defects.observation` and `defects.decisionSet` for the exact readable issue. The observation includes `kind`, `issueVersion`, `scopeRevision`, `designId`, `candidateId`, `snapshotId`, `snapshotHash` and `digest`, with unknown/unsealed values explicitly null. A confirmed-set preview is `{revision, hash, members:[{id, version}]}`. This prepares later verification/decision bindings; the W2b register slice does not yet make QA reports or batch/waiver decisions consume complete-set snapshots.
 
 Human-only commands are absent from MCP and grants, and direct agent HTTP calls are denied:
@@ -335,6 +337,10 @@ This stacked implementation awaits publication of accepted R2. The following tab
 `design_get` reads the current design for a scoped issue's requirement, including the captured requirement and criteria. A readable child resolves to its parent requirement. Pass `designId` for an older revision of that requirement. Decision history is newest first, with a default page of 20 and an optional `nextOffset`. Expand one decision with `evidence_get` and kind `design_decision` or `delivery_decision`, using the issue that owns the record.
 
 Agent `issue_get` defaults to a summary with the issue identity and state, responsible parties for blockers, design and rejection references, and suggested `nextActions`. Each action contains the operation and the known arguments for the current target. Fill in the other required inputs from the tool schema and use a unique idempotency key for each new mutation. A role may still wait for a workflow step while it can propose a defect. If `blockerCount` exceeds the visible blockers or the brief lacks a needed field, use `view: "full"` for the full authorized packet. The human web view uses full detail.
+
+The MCP role playbook supplies the shared authorization, input and retry rules once. Each tool describes its own behavior and domain-specific rejections. Managed worker and QA prompts use the same role playbook as the MCP instructions.
+
+The summary's `defects` section counts open, proposed and blocking records. It includes up to two open BLOCKER/MAJOR IDs, ordered by severity, and the issue-scoped `defect_list` arguments for pagination. Use `defect_get` with an ID for the complete authorized finding.
 
 Agent `issue_list`, `run_list` and `defect_list` default to compact pages of up to 20. Expand a specific record with its read tool, or request `view: "full"` with the existing scope and page limits. Command errors include `code`, `message`, `details` and a `remedy` naming the responsible party and any applicable operation.
 

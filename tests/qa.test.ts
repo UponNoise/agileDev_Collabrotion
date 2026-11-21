@@ -16,6 +16,7 @@ import { GitHubProvider } from '../src/git.js';
 import { GitVerifier } from '../src/git-verifier.js';
 import { GitSubmission } from '../src/contracts.js';
 import { applyFixturePlan, executeFixture } from './fixtures.js';
+import { roleInstructions } from '../src/agent-profiles.js';
 
 async function until(check: () => boolean, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -253,10 +254,12 @@ test('real failing QA creates a reproducible defect and rework requires fresh in
     f.dispatch();
     const rework = await f.context(2);
     assert.match(rework.prompt, /Historical rejection context/);
+    assert.ok(rework.prompt.includes(roleInstructions('worker')));
     assert.ok(rework.prompt.includes(rejected.report.id));
     assert.match(rework.prompt, /source.txt contains incorrect output/);
     await f.submit(rework,'delivered'); f.initialReview(); const freshQa = await f.context(3);
     assert.match(freshQa.prompt, /Historical rejection for re-testing/);
+    assert.ok(freshQa.prompt.includes(roleInstructions('qa')));
     assert.ok(freshQa.prompt.includes(rejected.report.id));
     assert.match(freshQa.prompt, /Run the captured .qa\/check.mjs command/);
     assert.notEqual(f.store.authenticate(freshQa.token).sessionId,failed.sessionId);

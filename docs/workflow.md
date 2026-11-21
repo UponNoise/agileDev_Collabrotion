@@ -70,7 +70,7 @@ All mutations require authenticated actor scope, `expected_version`, and an idem
 | `LEAD_REVIEW:FINAL` | Pass / assigned lead | `USER_ACCEPTANCE` | Initial review + QA still current; requirement fit and integration implications assessed |
 | `LEAD_REVIEW:FINAL` | Fail / assigned lead | `LEAD_REJECTED` | Recorded final-stage rejection; rework owner retained or explicitly reassigned |
 | `USER_ACCEPTANCE` | Reject / human | `USER_REJECTED` | Exact snapshot/revision and actionable feedback; classification `DEFECT` (creates defects on the rejected digest), `SCOPE_CHANGE` (rework blocked by `SCOPE_REVISION_REQUIRED` until a newer approved design), or `CLARIFICATION` |
-| `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest; optional MINOR waivers in the same transaction; batch acceptance per §5; all closure checks pass |
+| `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest and visible risk set; acknowledges open MINOR findings (§12); all closure checks pass |
 | `USER_ACCEPTANCE` | Complete / lead or PM | `DONE` | Exact-snapshot human close grant or prior current human acceptance; all closure checks still pass |
 | Any rework state | Claim rework / assigned worker | `IN_PROGRESS` | Valid assignment/binding, dependencies, fresh lease, required approved scope |
 | Nonterminal state | Hold / human or granted lead/PM | `ON_HOLD` | Reason, action scope, prior state/stage saved; cancellation/reconciliation of active runs requested |
@@ -121,6 +121,8 @@ A completion grant additionally binds the currently reviewed candidate and deliv
 For MVP, human decisions/grants originate in the authenticated web approval flow. A host adapter may later accept direct human events only after AC14 proves attribution; a model's statement that the user agreed is never such an event. Batch decisions enumerate exact item versions/digests; no hidden approval of unseen items is allowed.
 
 ### Decision inbox and batch acceptance, 2026-11-09
+
+R2 (§12) withdraws batch acceptance; the rest of this subsection stands.
 
 Accepted revision R1 (D11, D13, D14): the service derives the human decision inbox from current records. It lists designs `IN_REVIEW`, deliveries needing a current valid decision on the digest and applicable decision defect set, unresolved abandoned-child scope, uncertain/legacy-unbound execution, accepted deliveries still in `USER_ACCEPTANCE`, and defect proposals. Entries bind exact versions and revision hashes/digests. The existing `CLOSURE_BLOCKED` kind covers both guard-blocked and `READY_TO_COMPLETE` accepted deliveries: expose named blockers or an authorized `delivery_complete` action, and retain the entry until explicit completion. There is no separate mutable queue and no agent create/dismiss/resolve operation. `pendingSince` is the first unresolved pending event for that exact decision target; retries, reads, metadata edits, and guard recovery do not reset it. A genuinely replaced target or a completed-and-reopened decision cycle starts a new pending epoch. The default 24-hour workspace threshold produces `HUMAN_DECISION_AGING`.
 
@@ -181,6 +183,8 @@ The report cannot advance the issue until the native QA producer has stopped suc
 Final lead pass exposes an exact delivery digest. Human `delivery_decide` can accept/reject only that digest. Reviewed artifact mode can close after all guards; Git mode retains acceptance with closure blocked until remote commit verification matches that snapshot. These commands refine the existing gates and do not waive Git, parent integration, UI/human attribution, minor-risk waiver, or release acceptance requirements. The present implementation is stricter than the target waiver policy: any non-INFO current QA finding prevents a pass.
 
 ### Defect register, verification, and waivers, 2026-11-09
+
+R2 (§12) defers versioned defect sets, explicit per-defect QA verification and separate waivers until after P5; MINOR findings and rejection follow §12.
 
 Accepted revision R1 (D11, D15, D16) makes defects register records with a workspace-local key, origin (`QA`, `USER_ACCEPTANCE`, or `ESCAPED`), severity, criterion IDs, reproduction, expected and actual behavior, the observed snapshot or digest, reporter, owner, and source record. Their states are `PROPOSED`, `OPEN`, `RESOLVED`, `WAIVED`, `REJECTED`, `WITHDRAWN`, and proposal-only `CONVERTED`.
 

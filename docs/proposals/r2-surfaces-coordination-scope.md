@@ -61,7 +61,7 @@ The current product is inverted against the direction above: the human surface r
 
 **H9. Prototype first.** The agreed prototype (`prototype/index.html`, rounds 1–2) is the visual baseline. Round 3 applies H1–H8 and is agreed with the user before `web/` changes.
 
-H1–H9 change no gate, permission or stored record, apart from the optional reason in H5. Language selection, page zoom and adaptive layout stay as approved on 2026-11-09.
+H1–H9 change no gate or permission. The stored human command contract changes only as H5 lists. Language selection, page zoom and adaptive layout stay as approved on 2026-11-09.
 
 ## 4. Part B: agent surface
 

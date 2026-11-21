@@ -1,6 +1,7 @@
 const pairs: [string, string][] = [
   ['Decisions', '待我决策'],
   ['Agent question', 'Agent 提问'],
+  ['Defect triage', '缺陷待确认'],
   ['Awaiting your reply', '等待你回复'],
   ['View issue', '查看工单'],
   ['Risks included in this decision', '本次决策包含的风险'],
