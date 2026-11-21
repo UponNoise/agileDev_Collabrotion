@@ -65,6 +65,7 @@ test('cross-harness dispatch isolates real Git worktrees and requires authentica
       const context = adapter.contexts[n]!; const client = new LocalClient(context.endpoint, context.token);
       const actor = f.store.authenticate(context.token); const job = f.store.get<Run>('run', actor.runId!);
       const other = f.jobs.find(j => j.id !== job.id)!;
+      context.onModelSettings?.({ model: { value: 'fixture-model', source: 'launch' } });
       await assert.rejects(client.command('issue_get', { workspaceId: f.workspace.id, issueId: other.issueId }), (e: any) => e.code === 'SCOPE_DENIED');
       const current = (await client.command('issue_get', { workspaceId: f.workspace.id, issueId: job.issueId })).issue;
       writeFileSync(join(context.cwd, 'source.txt'), `delivered ${n}`);
@@ -78,6 +79,8 @@ test('cross-harness dispatch isolates real Git worktrees and requires authentica
       const issue = f.store.get<Issue>('issue', job.issueId); const run = f.store.get<Run>('run', job.id);
       assert.equal(issue.state, 'LEAD_REVIEW'); assert.equal(issue.stage, 'PRE_QA'); assert.equal(issue.candidate!.runId, run.id);
       assert.match(run.baseSha!, /^[a-f0-9]{40,64}$/); assert.ok(issue.candidate!.executionRoot);
+      assert.deepEqual(f.flow.execute(f.owner.actor, 'run_get', { workspaceId: f.workspace.id, runId: run.id }), { run });
+      assert.deepEqual(run.modelSettings, { model: { value: 'fixture-model', source: 'launch' } });
       assert.throws(() => f.store.authenticate(adapter.contexts.find(c => c.cwd === run.executionRoot)!.token), /valid scoped credential/);
     }
   } finally { await f.close(); }

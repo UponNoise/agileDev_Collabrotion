@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { probeHarness } from '../src/harness.js';
 import { inside } from '../src/workflow.js';
 import { declaredDshRoute, decodeNativeEvent, NativeAdapter } from '../src/adapters.js';
+import type { RunModelSettings } from '../src/contracts.js';
 import { consultLauncherIdentity, loadConsultVerifications, readConsultVerification, recordConsultVerification } from '../src/consult-verification.js';
 
 test('harness probes invoke an executable without a shell and distinguish failure', async () => {
@@ -42,6 +43,9 @@ test('artifact paths cannot escape through traversal or directory junctions', ()
 test('DSH route detection reads the declared profile default without evaluating code or choosing another route', () => {
   const profile = "- id: agent-default-model\n  name: '@deepseek-ai/dsh-agent-default-model'\n  config:\n    provider: deepseek-official\n    model: 'deepseek-flash'\n- id: tools\n  name: tools\n";
   assert.deepEqual(declaredDshRoute(profile), { provider: 'deepseek-official', model: 'deepseek-flash' });
+  const effort = profile.replace('    model:', '    reasoningEffort: "high"\n    model:');
+  assert.equal(declaredDshRoute(effort)?.reasoningEffort, 'high');
+  assert.equal(declaredDshRoute(profile.replace("'deepseek-flash'", '"@provider/fixture\\u002dmodel"'))?.model, '@provider/fixture-model');
   assert.equal(declaredDshRoute(profile.replace('deepseek-official', '!!js process.env.PROVIDER')), null);
   assert.equal(declaredDshRoute(profile.replace('  config:', '  disabled: true\n  config:')), null);
   assert.equal(declaredDshRoute('- id: unrelated\n  config:\n    provider: other\n    model: other'), null);
@@ -55,9 +59,71 @@ test('native terminal events distinguish completed work from failure and idle no
   assert.equal(decodeNativeEvent('dsh', { method: 'session.event', params: { event: { type: 'turn/end', data: { reason: { kind: 'error' } } } } }).terminal, 'failed');
 });
 
+test('DSH SDK composes the owner overlay before resolving the default and forwards selected reasoning effort', { timeout: 10000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agiledev-sdk-model-'));
+  const patch = join(root, 'owner overlay.yml');
+  const previousEnv = process.env;
+  process.env = { ...previousEnv, AGILEDEV_DSH_PATCH: patch, AGILEDEV_DSH_REASONING_EFFORT: 'high' };
+  delete process.env.AGILEDEV_DSH_PROVIDER;
+  delete process.env.AGILEDEV_DSH_MODEL;
+  try {
+    writeFileSync(patch, '[]');
+    const script = join(root, 'sdk.mjs');
+    writeFileSync(script, [
+      "import { writeFileSync } from 'node:fs';",
+      "import { createInterface } from 'node:readline';",
+      'const args = process.argv.slice(2);',
+      "if (args.includes('--dump-config')) {",
+      "  writeFileSync('dump-args.json', JSON.stringify(args));",
+      "  console.log('- id: agent-default-model\\n  config:\\n    provider: overlay-provider\\n    model: overlay-model\\n    reasoningEffort: low');",
+      '  process.exit(0);',
+      '}',
+      "writeFileSync('sdk-args.json', JSON.stringify(args));",
+      'const print = value => console.log(JSON.stringify(value));',
+      'for await (const line of createInterface({ input: process.stdin })) {',
+      '  const request = JSON.parse(line);',
+      "  if (request.method === 'initialize') writeFileSync('initialize.json', JSON.stringify(request.params));",
+      "  if (request.method === 'session/wait') print({ method: 'session.event', params: { event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });",
+      '  print({ jsonrpc: "2.0", id: request.id, result: {} });',
+      '}',
+    ].join('\n'));
+    const adapter = new NativeAdapter(() => [{ id: 'dsh', command: process.execPath, args: [script] }]);
+    const launch = {
+      harness: 'dsh' as const, cwd: root, directory: root, prompt: 'Fixture prompt', endpoint: 'http://127.0.0.1:1', token: 'fixture',
+      bridgeScript: join(root, 'bridge.mjs'), onPid() {}, onProvider() {}, onOutput() {},
+    };
+    const session = await adapter.start(launch);
+    assert.equal((await session.result).outcome, 'succeeded');
+    const readFixture = (file: string) => JSON.parse(readFileSync(join(root, file), 'utf8'));
+    const dump = readFixture('dump-args.json');
+    const sdk = readFixture('sdk-args.json');
+    assert.equal(dump[1], 'sdk');
+    assert.equal(basename(dump[3]), 'owner overlay.yml');
+    assert.deepEqual(sdk.slice(0, 4), dump.slice(0, 4));
+    assert.match(readFileSync(sdk[5], 'utf8'), /reasoningEffort: "high"/);
+    const { provider, model, reasoningEffort } = readFixture('initialize.json');
+    assert.deepEqual({ provider, model, reasoningEffort }, { provider: 'overlay-provider', model: 'overlay-model', reasoningEffort: 'high' });
+    process.env.AGILEDEV_DSH_PATCH = 'relative.yml';
+    await assert.rejects(adapter.start(launch), { code: 'INVALID_DSH_PATCH' });
+  } finally {
+    process.env = previousEnv;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('fresh consult adapters preserve capability gates and parse all three native transports', { timeout: 10000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-consult-adapter-'));
+  const ownerPatch = join(root, 'owner.yml');
+  const previousEnv = process.env;
+  process.env = {
+    ...previousEnv,
+    AGILEDEV_CODEX_MODEL: 'fixture-codex', AGILEDEV_CODEX_REASONING_EFFORT: 'high',
+    AGILEDEV_DSH_PROVIDER: 'fixture-route', AGILEDEV_DSH_MODEL: 'fixture-dsh',
+    AGILEDEV_DSH_REASONING_EFFORT: 'medium', AGILEDEV_DSH_PATCH: ownerPatch,
+    AGILEDEV_CLAUDE_MODEL: 'fixture-alias',
+  };
   try {
+    writeFileSync(ownerPatch, '[]');
     const script = join(root, 'fixture.mjs');
     writeFileSync(script, [
       "import { writeFileSync } from 'node:fs';",
@@ -67,16 +133,18 @@ test('fresh consult adapters preserve capability gates and parse all three nativ
       'writeFileSync("fixture-invocation.json", JSON.stringify({ args, prompt }));',
       "const emit = value => console.log(JSON.stringify(value));",
       "if (harness === 'codex') { emit({ type: 'thread.started', thread_id: 'controlled-provider' }); emit({ type: 'turn.completed' }); }",
-      "if (harness === 'claude-code') { emit({ type: 'system', subtype: 'init', session_id: 'controlled-provider' }); emit({ type: 'result', subtype: 'success', session_id: 'controlled-provider' }); }",
+      "if (harness === 'claude-code') { emit({ type: 'system', subtype: 'init', session_id: 'controlled-provider', model: 'fixture-resolved-model' }); emit({ type: 'result', subtype: 'success', session_id: 'controlled-provider' }); }",
       "if (harness === 'dsh') { emit({ type: 'session', sessionId: 'controlled-provider' }); emit({ type: 'final', sessionId: prompt === 'mismatch' ? 'different-provider' : 'controlled-provider', reason: { kind: 'completed' }, text: 'fixture' }); }"
     ].join('\n'));
     for (const harness of ['codex', 'claude-code', 'dsh'] as const) {
       const entries = () => [{ id: harness, command: process.execPath, args: [script, harness] }];
       const providers: string[] = [];
+      let settings: RunModelSettings = {};
       const context = {
         harness, kind: 'consult' as const, cwd: root, directory: join(root, harness),
         prompt: 'Controlled consult prompt', endpoint: 'http://127.0.0.1:1', token: 'fixture-no-secret',
-        bridgeScript: join(root, 'unused-mcp-fixture.mjs'), onPid() {}, onProvider(id: string) { providers.push(id); }, onOutput() {}
+        bridgeScript: join(root, 'unused-mcp-fixture.mjs'), onPid() {}, onProvider(id: string) { providers.push(id); }, onOutput() {},
+        onModelSettings(observed: RunModelSettings) { settings = { ...settings, ...observed }; },
       };
       const unverified = new NativeAdapter(entries);
       assert.equal(unverified.supportsConsult(harness), false);
@@ -94,18 +162,28 @@ test('fresh consult adapters preserve capability gates and parse all three nativ
       if (harness === 'codex') {
         assert.equal(args[args.indexOf('--sandbox') + 1], 'read-only');
         assert.ok(args.includes('approval_policy="never"'));
+        assert.ok(args.includes('model="fixture-codex"'));
+        assert.ok(args.includes('model_reasoning_effort="high"'));
+        assert.deepEqual(settings, { model: { value: 'fixture-codex', source: 'launch' }, reasoningEffort: { value: 'high', source: 'launch' } });
       } else if (harness === 'claude-code') {
         assert.equal(args[args.indexOf('--tools') + 1], '');
         assert.ok(args.includes('--strict-mcp-config'));
+        assert.equal(args[args.indexOf('--model') + 1], 'fixture-alias');
+        assert.deepEqual(settings, { model: { value: 'fixture-resolved-model', source: 'harness' } });
       } else {
         assert.equal(args[args.indexOf('--profile') + 1], 'headless');
         assert.equal(args[args.indexOf('--permission-mode') + 1], 'read-only');
         assert.equal(args[args.indexOf('--approval-policy') + 1], 'never');
+        assert.equal(basename(args[args.indexOf('--patch') + 1]!), 'owner.yml');
+        const generated = args[args.lastIndexOf('--patch') + 1]!;
+        assert.match(readFileSync(generated, 'utf8'), /reasoningEffort: "medium"/);
+        assert.deepEqual(settings, { provider: { value: 'fixture-route', source: 'launch' }, model: { value: 'fixture-dsh', source: 'launch' }, reasoningEffort: { value: 'medium', source: 'launch' } });
         const mismatch = await tested.start({ ...context, prompt: 'mismatch' });
         assert.equal((await mismatch.result).outcome, 'failed');
       }
     }
   } finally {
+    process.env = previousEnv;
     assert.equal(dirname(root), resolve(tmpdir()));
     assert.ok(basename(root).startsWith('agiledev-consult-adapter-'));
     rmSync(root, { recursive: true, force: true });

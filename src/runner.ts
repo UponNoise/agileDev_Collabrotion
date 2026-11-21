@@ -228,6 +228,11 @@ export class Coordinator {
       } : {}),
       onPid: pid => { if (this.store.db.open) this.update(id, { pid }); },
       onProvider: providerSessionId => { if (this.store.db.open) this.update(id, { providerSessionId }); },
+      onModelSettings: settings => {
+        if (!this.store.db.open) return;
+        const modelSettings = this.store.get<Run>('run', id).modelSettings;
+        this.update(id, { modelSettings: { ...modelSettings, ...settings } });
+      },
       onOutput: summary => { if (this.store.db.open) this.update(id, { summary: summary.replaceAll(owned.token, '[redacted]').slice(-16000) }); }
     };
     owned.session = await this.adapter.start(context);
