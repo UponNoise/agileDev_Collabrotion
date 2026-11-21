@@ -328,6 +328,8 @@ This stacked implementation awaits publication of accepted R2. The following tab
 
 Agent `issue_get` defaults to a summary with the issue identity and state, responsible parties for blockers, design and rejection references, and suggested `nextActions`. Each action contains the operation and the known arguments for the current target. Fill in the other required inputs from the tool schema and use a unique idempotency key for each new mutation. A role may still wait for a workflow step while it can propose a defect. If `blockerCount` exceeds the visible blockers or the brief lacks a needed field, use `view: "full"` for the full authorized packet. The human web view uses full detail.
 
+The MCP role playbook supplies the shared authorization, input and retry rules once. Each tool describes its own behavior and domain-specific rejections. Managed worker and QA prompts use the same role playbook as the MCP instructions.
+
 The summary's `defects` section counts open, proposed and blocking records. It includes up to two open BLOCKER/MAJOR IDs, ordered by severity, and the issue-scoped `defect_list` arguments for pagination. Use `defect_get` with an ID for the complete authorized finding.
 
 Agent `issue_list`, `run_list` and `defect_list` default to compact pages of up to 20. Expand a specific record with its read tool, or request `view: "full"` with the existing scope and page limits. Command errors include `code`, `message`, `details` and a `remedy` naming the responsible party and any applicable operation.
