@@ -123,7 +123,7 @@ export class Coordinator {
       if (issue.scopeRevision !== run.scopeRevision || this.flow.design(issue)?.id !== run.designId) throw new DomainError('DISPATCH_STALE', 'Scope changed after dispatch');
       if (run.kind !== 'qa') {
         if (issue.assignee !== run.actorId || issue.harness !== run.harness) throw new DomainError('DISPATCH_STALE','Assignment changed after dispatch');
-        this.flow.execute(owned.actor, 'work_claim', { workspaceId: run.workspaceId, issueId: run.issueId, expectedVersion: issue.version, designId: run.designId, scopeRevision: run.scopeRevision, idempotencyKey: `run-claim-${id}` });
+        this.flow.claimReservedWork(owned.actor, { workspaceId: run.workspaceId, issueId: run.issueId, expectedVersion: issue.version, designId: run.designId, scopeRevision: run.scopeRevision, idempotencyKey: `run-claim-${id}` });
       }
       run = this.update(id, { state: 'RUNNING' }); issue = this.store.get<Issue>('issue', run.issueId);
       const iteration = new IterationService(this.store, this.now).packet(owned.actor, issue);

@@ -22,7 +22,7 @@ function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'iterations-api-')); const source = join(directory,'source'); mkdirSync(source);
   const store = new Store(':memory:'); let now = Date.parse('2026-11-12T12:00:00Z'); const flow = new Workflow(store, () => now);
   const { actor: human, token } = store.bootstrap();
-  const execute = (actor: Actor, op: string, input: object) => flow.execute(actor,op,input) as any;
+  const execute = (actor: Actor, op: string, input: object) => (op === 'work_claim' ? flow.claimReservedWork(actor,input) : flow.execute(actor,op,input)) as any;
   const workspace = execute(human,'workspace_register',{ root: source,name: 'Iteration API fixture',prefix: 'ITA',idempotencyKey: randomUUID() }).workspace;
   const readOps = new Set(['iteration_list','iteration_get','issue_get','gap_list','plan_get']);
   const cmd = (op: string,input: any = {},actor = human) => execute(actor,op,{ workspaceId: workspace.id,...(readOps.has(op) ? {} : { idempotencyKey: randomUUID() }),...input });
@@ -75,20 +75,16 @@ test('all planners write while workers and QA cannot bypass planning authority',
   }
 });
 
-test('scoped read projections hide unassigned members, full set hashes, adoption and Markdown', t => {
+test('external worker and QA iteration reads are absent under accepted R2 D21', t => {
   const f = fixture(t); const root = f.issue(); const mine = f.issue(root.id); const hidden = f.issue(root.id); const iteration = f.create();
   f.change('issue_assign',mine.id,{ actorId: f.worker.actor.id,harness: 'codex' }); f.move([mine.id,hidden.id],iteration.id);
-  const result = f.cmd('iteration_get',{ iterationId: iteration.id,view: 'full' },f.worker.actor);
-  assert.deepEqual(result.members.map((i: any) => i.id),[mine.id]); assert.equal(result.total,1); assert.equal(result.iteration.partial,true);
-  for (const key of ['version','membershipRevision','membershipHash','summaryId']) assert.equal(Object.hasOwn(result.iteration,key),false);
-  assert.equal(Object.hasOwn(result,'summary'),false); assert.equal(Object.hasOwn(result,'representedRequirements'),false);
-  assert.equal(result.progress.partial,true); assert.equal(result.progress.runCapacity.workspaceActiveRuns,null);
-  assert.throws(() => f.cmd('iteration_get',{ iterationId: iteration.id,legacyLabel: 'Secret' },f.worker.actor),rejects('ROLE_DENIED'));
-  assert.throws(() => f.cmd('iteration_get',{ iterationId: iteration.id,view: 'markdown' },f.worker.actor),rejects('ROLE_DENIED'));
-  assert.equal(f.cmd('iteration_list',{},f.qa.actor).total,0);
+  for (const actor of [f.worker.actor,f.qa.actor]) {
+    assert.throws(() => f.cmd('iteration_get',{ iterationId: iteration.id,view: 'full' },actor),rejects('ROLE_DENIED'));
+    assert.throws(() => f.cmd('iteration_list',{},actor),rejects('ROLE_DENIED'));
+  }
   const runId = randomUUID(); const actor = { ...f.worker.actor,id: randomUUID(),principalId: f.worker.actor.id,runId } as Actor;
   f.store.token(actor); f.store.put('run',{ id: runId,issueId: mine.id,workspaceId: f.workspace.id,actorId: f.worker.actor.id,state: 'RUNNING',kind: 'implementation',harness: 'codex',version: 1,createdAt: new Date().toISOString(),designId: 'fixture',scopeRevision: 1,executionActorId: actor.id } as Run,f.workspace.id);
-  assert.deepEqual(f.cmd('iteration_get',{ iterationId: iteration.id },actor).members.map((i: any) => i.id),[mine.id]);
+  assert.throws(() => f.cmd('iteration_get',{ iterationId: iteration.id },actor),rejects('ROLE_DENIED'));
 });
 
 test('approved ready plans and human grants survive issue_update and plan_apply membership metadata', t => {
@@ -277,7 +273,7 @@ for (const mode of ['failed','no-submission','cancelled','held-cancelled','submi
       assert.equal(last.counts[expected],destination ? 2 : 1); assert.equal(last.counts.IN_PROGRESS,0); assert.equal(last.counts.LEAD_REVIEW,0); assert.equal(last.counts.DONE,0); assert.equal(f.db(),before);
       if (destination) {
         assert.equal(Object.values(flow().points.at(-1).counts).reduce((sum: any,value: any) => sum + value,0),0);
-        const scoped = flow(destination.id,f.worker.actor); assert.equal(scoped.partial,true); assert.equal(scoped.points.at(-1).counts.NOT_STARTED,1); assert.equal(scoped.points.at(-1).counts.IN_PROGRESS,0);
+        assert.throws(() => flow(destination.id,f.worker.actor),rejects('ROLE_DENIED'));
       }
       if (mode === 'failed') {
         const ended = f.store.db.prepare("SELECT sequence FROM events WHERE target_id=? AND operation='run_finished'").get(run.id) as { sequence: number };
