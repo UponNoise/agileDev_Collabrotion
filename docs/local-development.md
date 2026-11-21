@@ -253,6 +253,24 @@ Set optional `AGILEDEV_CODEX_MODEL` and `AGILEDEV_CODEX_REASONING_EFFORT` in the
 
 DSH defaults to `deepseek-official` / `deepseek-flash` (DeepSeek-V41-Flash) with `max` effort. Select Gemini Hydrogen with `AGILEDEV_DSH_PROVIDER=google` and `AGILEDEV_DSH_MODEL=gemini-4-hydrogen`. It defaults to `high` and accepts `low`, `medium` and `high`. Supply its Google provider overlay as the trusted absolute `AGILEDEV_DSH_PATCH` file. Use `AGILEDEV_DSH_REASONING_EFFORT` for a supported override. The optional owner patch is applied before the generated route and MCP overlay in SDK and headless modes. The SDK also receives the selected route and effort at initialization. Other explicitly paired provider and model settings use the provider's effort default when no override is set. The service never changes routes after a launch failure.
 
+On DSH `0.2.2-rc.3`, the Google provider overlay must explicitly list `gemini-4-hydrogen`. A provider-only overlay composes but the SDK rejects the missing model during initialization. This minimal overlay uses a credential environment variable and works with the generated AgileDev route in both profiles. Keep other pi-ai provider definitions in the same replacement config if this overlay must supply them too.
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      google:
+        apiKeyEnv: GEMINI_API_KEY
+        models:
+          - id: gemini-4-hydrogen
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+```
+
+The environment variable resolves through the owner's service process. The overlay contains only the variable name. See the [DSH provider guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/providers.md) for provider configuration.
+
 `run_get` exposes the selected model, provider and reasoning effort under `modelSettings`. Sources identify an explicit owner override (`launch`), the Codex cache (`codex-cache`), the AgileDev default (`managed-default`), the harness default (`harness-default`) or a reported session value (`harness`). A reported model replaces its launch alias when available. An inherited value is null if the harness has yet to identify it. A launch value records what the service supplied even if launch failed. Native adapters use existing harness authentication without copying credentials or changing global permission modes.
 
 `run_interrupt` requests a stop and reports `STOPPING` until termination is confirmed, including QA test subprocesses. Coordinator loss marks previously starting/running/stopping jobs and live checks `UNCERTAIN`, revokes run API credentials, and does not redispatch them. After inspecting and stopping external execution, the human may call `run_reconcile` with the current run version, reason, and `confirmStopped: true`. A still-existing recorded provider or test PID blocks that action. The confirmation is an operator attestation that related external work stopped, not an automatic process-tree discovery claim.
