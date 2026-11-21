@@ -134,6 +134,19 @@ const extraPurposes: Record<string, string> = {
   event_list: 'Read scoped append-only audit events after a sequence cursor; no event grants authority.',
   work_heartbeat: 'Renew the current bound worker lease using the exact issue version and fence; never revives lost ownership.'
 };
+const specificRejections: Partial<Record<Operation, string>> = {
+  artifact_read: 'EVIDENCE_STALE if the sealed artifact changed.',
+  design_set: 'RUN_EXISTS while execution owns the affected scope.',
+  design_submit: 'INVALID_TRANSITION if the design cannot be edited.',
+  work_dispatch: 'NOT_READY lists blockers. APPROVAL_STALE requires the current design and scope.',
+  work_heartbeat: 'STALE_FENCE or LEASE_EXPIRED requires ownership reconciliation.',
+  work_submit: 'STALE_FENCE, LEASE_EXPIRED or PROVIDER_ID_REQUIRED.',
+  review_submit: 'EVIDENCE_STALE if the candidate changed. RUN_STILL_LIVE while its producer is active.',
+  qa_configure: 'REVIEW_INDEPENDENCE_REQUIRED if the selected reviewer cannot act independently.',
+  git_submit: 'GIT_BINDING_REQUIRED or COMMIT_REPOSITORY_MISMATCH requires the bound remote.',
+  git_retry: 'GIT_EVIDENCE_STALE if the current commit mapping changed.',
+  message_send: 'MESSAGE_NOT_VISIBLE for hidden references. MESSAGE_INDEPENDENCE_REQUIRED blocks worker–QA messages. MESSAGE_RECIPIENT_UNAVAILABLE requires another recipient.'
+};
 export const operationProfiles = entries;
 export function permitsOperation(role: Role, operation: Operation): boolean {
   return (entries[operation] as readonly Role[]).includes(role);
@@ -147,8 +160,8 @@ export const isReadOperation = (operation: Operation) => readOperations.has(oper
 export function toolDescription(operation: Operation) {
   const purpose = purposes[operation] ?? extraPurposes[operation];
   if (!purpose) throw new Error(`Missing advertised operation purpose: ${operation}`);
-  if (operation === 'message_send') return `${purpose} Preconditions: authenticated role, issue access for both parties, and an idempotency key. Rejections: SCOPE_DENIED, INVALID_INPUT, MESSAGE_NOT_VISIBLE, MESSAGE_INDEPENDENCE_REQUIRED or an unavailable recipient.`;
-  return `${purpose} Preconditions: authenticated role and authorized workspace/issue scope; mutations require current target versions and a unique idempotency key. Rejections: ROLE_DENIED, SCOPE_DENIED, INVALID_INPUT, and, for changed targets, VERSION_CONFLICT. Domain evidence and state guards remain enforced.`;
+  const rejections = specificRejections[operation];
+  return rejections ? `${purpose} Rejections: ${rejections}` : purpose;
 }
 export function roleInstructions(role: Role) {
   const task = {
@@ -158,7 +171,13 @@ export function roleInstructions(role: Role) {
     worker: 'Read your assigned issue and approved scope. Only the coordinator claims managed work. Renew your exact lease and submit actual files; ask PM to dispatch or reconcile missing ownership.',
     qa: 'Independently check your assigned sealed delivery using approved profiles. Submit criterion-level results and captured evidence. Never implement, approve or accept the worker delivery.'
   }[role];
-  return `${task} Use design_get to expand the design and its recorded decisions. Read current versions before mutations. Every operation remains subject to service authorization. Queued is not running, a model exit is not QA evidence, and no agent message or prose is human approval. Resolve blockers or wait for their accountable owner.`;
+  return [
+    task,
+    'Use design_get to expand the design and its recorded decisions. Resolve blockers or wait for their accountable owner.',
+    'All tools require an authenticated role and readable workspace or issue scope. For writes, use current versions when required and a unique idempotency key per intent. Follow each tool’s state and evidence rules.',
+    'Common errors: ROLE_DENIED means the role cannot act. SCOPE_DENIED means the target is outside its scope. INVALID_INPUT needs corrected arguments. VERSION_CONFLICT needs a fresh read. Use the returned remedy.',
+    'Queued is not running, a model exit is not QA evidence, and no agent message or prose is human approval.'
+  ].join(' ');
 }
 
 const fieldDescriptions: Record<string, string> = {
@@ -173,18 +192,18 @@ const fieldDescriptions: Record<string, string> = {
   "ref": "Task-local reference used to connect dependencies within this complete plan.",
   "id": "Existing record ID from the corresponding scoped preview; never generate a replacement for an existing member.",
   "issueVersion": "Issue version captured by the exact observation or complete member preview.",
-  "workspaceId": "Workspace ID returned by workspace_list; must be in this credential scope.",
-  "issueId": "Issue ID returned by issue_get or issue_list, within the selected workspace.",
-  "expectedVersion": "Current target version from its latest read; stale writes must reload.",
-  "idempotencyKey": "Fresh unique key for one mutation intent; reuse only for an unchanged retry.",
-  "candidateId": "Exact sealed candidate ID from the current issue packet.",
-  "designId": "Exact design revision ID from the issue or its authorized design history.",
-  "scopeRevision": "Approved scope revision from the current issue packet.",
-  "fence": "Current ownership fence returned by the managed claim; never invent or reuse an expired fence.",
+  "workspaceId": "Scoped workspace ID from workspace_list.",
+  "issueId": "Scoped issue ID from issue_get or issue_list.",
+  "expectedVersion": "Target version from its latest read.",
+  "idempotencyKey": "Unique intent key reused on exact retry.",
+  "candidateId": "Current sealed candidate ID from issue_get.",
+  "designId": "Exact revision ID from issue_get or design_get.",
+  "scopeRevision": "Approved scope revision from issue_get.",
+  "fence": "Active lease fence from issue_get.",
   "actorId": "Enrolled actor ID from an authorized assignment or enrollment record.",
   "assigneeId": "Enrolled worker ID for this task; assignments remain separate from dispatch.",
   "harness": "Configured execution harness: codex, claude-code or dsh.",
-  "reason": "Human-readable rationale for this explicit action; never evidence of another actor approval.",
+  "reason": "Caller’s reason for this action.",
   "content": "Markdown design content supplied by the accountable lead.",
   "criteria": "Acceptance criterion IDs from the approved parent design or the explicit new scope.",
   "criterionId": "Criterion ID from the approved design or assigned QA packet.",
@@ -196,14 +215,14 @@ const fieldDescriptions: Record<string, string> = {
   "severity": "Finding severity: BLOCKER, MAJOR, MINOR or INFO; does not grant an exception.",
   "files": "Relative submitted artifact paths under the bound execution directory.",
   "path": "Relative artifact path from the sealed snapshot manifest; never an arbitrary filesystem path.",
-  "offset": "Zero-based pagination or byte-window offset from the previous response.",
-  "limit": "Maximum bounded rows or bytes to return for this request.",
+  "offset": "Page or byte offset from the previous result.",
+  "limit": "Maximum rows or bytes to read.",
   "encoding": "Artifact byte representation: strict utf8 text or base64.",
   "snapshotId": "Immutable snapshot ID returned by the issue or integration packet.",
   "evidenceId": "ID of an existing evidence record returned by scoped reads.",
   "evidenceIds": "Captured check IDs supporting this criterion; shell-only assertions are insufficient.",
-  "kind": "Choose the message, recipient, or evidence kind from the advertised enum for this field.",
-  "runId": "Managed execution ID returned by dispatch or run reads.",
+  "kind": "Message, recipient or evidence kind from this enum.",
+  "runId": "Managed run ID from dispatch or run_list.",
   "checkId": "Captured QA check ID returned by qa_check_run.",
   "profileId": "Approved fixed check profile ID returned by check_profile_list.",
   "checkProfileIds": "Independent QA check profile IDs selected from check_profile_list.",
@@ -227,7 +246,7 @@ const fieldDescriptions: Record<string, string> = {
   "integrationCriteria": "Approved parent criteria tested by the aggregate integration task.",
   "overlapReasons": "Explicit reasons for intentionally overlapping criterion ownership.",
   "tasks": "Complete task decomposition including existing children and exact scope/version bindings.",
-  "view": "Response projection; expanded views can require planning authority.",
+  "view": "Compact or expanded authorized view.",
   "search": "Optional issue search text, applied only within readable scope.",
   "state": "Optional allowed workflow or iteration state filter.",
   "after": "Audit sequence cursor returned by the last event page.",

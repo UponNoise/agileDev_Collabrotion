@@ -11,7 +11,7 @@ import { Store, canonical } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { createServer } from '../src/http.js';
 import { DomainError, schemas, type Role } from '../src/contracts.js';
-import { agentReference, toolsForRole } from '../src/agent-profiles.js';
+import { agentReference, roleInstructions, toolsForRole } from '../src/agent-profiles.js';
 
 function fixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'b23-profile-'));
@@ -45,6 +45,46 @@ test('service role denial precedes malformed input, legacy-field handling and re
 test('published role reference is generated from the authoritative registry', () => {
   const reference = readFileSync('docs/local-development.md', 'utf8').replaceAll('\r\n', '\n').split('<!-- B23_PROFILE_REFERENCE_START -->\n')[1]?.split('\n<!-- B23_PROFILE_REFERENCE_END -->')[0];
   assert.equal(reference, agentReference());
+});
+
+test('default briefs keep 200 defects compact and point to exact scoped blocking evidence', t => {
+  const f = fixture(t);
+  const workspaceId = f.workspace.id;
+  const lead = f.agents.lead.actor;
+  const { issue } = f.flow.execute(f.human.actor, 'issue_create', {
+    workspaceId, title: 'Large scoped brief', description: '長い要件\n'.repeat(600), criteria: ['C'], idempotencyKey: randomUUID()
+  }) as any;
+  const rawEvidence = 'Exact private defect evidence 未解决\n'.repeat(120);
+  const ids = Array.from({ length: 200 }, () => randomUUID());
+  for (const [index, id] of ids.entries()) {
+    f.store.put('defect', {
+      id, workspaceId, issueId: issue.id, state: 'OPEN', severity: index >= 198 ? 'BLOCKER' : 'MAJOR',
+      criterionId: 'C', reproduce: rawEvidence, expected: rawEvidence, actual: rawEvidence,
+      reportId: randomUUID(), candidateId: randomUUID(), snapshotId: randomUUID()
+    }, workspaceId);
+  }
+  f.flow.execute(lead, 'defect_propose', {
+    workspaceId, issueId: issue.id, expectedVersion: issue.version, severity: 'BLOCKER',
+    criterionIds: ['C'], reproduce: 'Pending details', expected: 'Expected pending', actual: 'Proposed only',
+    idempotencyKey: randomUUID()
+  });
+  const before = f.unchanged();
+  const brief = f.flow.execute(lead, 'issue_get', { workspaceId, issueId: issue.id }) as any;
+  assert.deepEqual(brief.defects, {
+    open: 200, proposed: 1, blocking: 200,
+    topBlocking: ids.slice(-2).map(id => ({ id, severity: 'BLOCKER' })),
+    expand: { operation: 'defect_list', args: { workspaceId, issueId: issue.id } }
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(brief)) <= 1990);
+  assert.ok(!JSON.stringify(brief).includes('Exact private defect evidence'));
+  const { operation, args } = brief.defects.expand;
+  const page = f.flow.execute(lead, operation, args) as any;
+  assert.equal(page.defects.length, 20);
+  assert.equal(page.total, 201);
+  assert.equal(page.nextOffset, 20);
+  const expanded = f.flow.execute(lead, 'defect_get', { workspaceId, defectId: ids[199] }) as any;
+  assert.equal(expanded.defect.actual, rawEvidence);
+  assert.equal(f.unchanged(), before);
 });
 
 test('scoped design reads retain exact decision reasons and reject unrelated evidence', async t => {
@@ -151,6 +191,8 @@ test('real stdio MCP advertises complete described role profiles and rejects for
     try {
       await client.connect(transport); const tools = (await client.listTools()).tools; const names = tools.map(tool => tool.name);
       assert.deepEqual(new Set(names), new Set(toolsForRole(role))); assert.ok(client.getInstructions()?.includes(role === 'worker' ? 'coordinator' : role === 'qa' ? 'Independently' : role === 'pm' ? 'Plan scope' : 'initial/final'));
+      assert.equal(client.getInstructions(), roleInstructions(role));
+      assert.match(client.getInstructions()!, /Common errors: ROLE_DENIED.*SCOPE_DENIED.*INVALID_INPUT.*VERSION_CONFLICT/);
       for (const name of ['defect_get', 'defect_list', 'defect_propose', 'workspace_list', 'issue_get', 'design_get']) assert.ok(names.includes(name));
       for (const name of ['delivery_decide', 'defect_triage', 'work_claim', 'inbox_list']) assert.equal(names.includes(name), false);
       if (role === 'worker' || role === 'qa') for (const name of ['iteration_get', 'iteration_list', 'issue_create', 'review_submit']) assert.equal(names.includes(name), false);
@@ -160,7 +202,13 @@ test('real stdio MCP advertises complete described role profiles and rejects for
         for (const [key, value] of Object.entries(node.properties ?? {}) as [string, any][]) assert.ok(typeof value.description === 'string' && value.description.length > 20, `${role}: ${key}`);
         for (const value of Object.values(node)) Array.isArray(value) ? value.forEach(described) : described(value);
       }
-      for (const tool of tools) { assert.ok(tool.description?.includes('Preconditions:')); assert.ok(tool.description?.includes('Rejections:')); described(tool.inputSchema); }
+      for (const tool of tools) {
+        assert.ok(tool.description);
+        assert.doesNotMatch(tool.description, /ROLE_DENIED, SCOPE_DENIED, INVALID_INPUT/);
+        described(tool.inputSchema);
+      }
+      const dispatch = tools.find(tool => tool.name === 'work_dispatch');
+      if (dispatch) assert.match(dispatch.description ?? '', /NOT_READY.*APPROVAL_STALE/);
       for (const name of ['delivery_decide', 'work_claim', ...(role === 'worker' || role === 'qa' ? ['iteration_get'] : [])]) {
         const result = await client.callTool({ name, arguments: { expectedVersion: -1, iteration: 'legacy' } });
         assert.equal(result.isError, true);
