@@ -47,6 +47,46 @@ test('published role reference is generated from the authoritative registry', ()
   assert.equal(reference, agentReference());
 });
 
+test('default briefs keep 200 defects compact and point to exact scoped blocking evidence', t => {
+  const f = fixture(t);
+  const workspaceId = f.workspace.id;
+  const lead = f.agents.lead.actor;
+  const { issue } = f.flow.execute(f.human.actor, 'issue_create', {
+    workspaceId, title: 'Large scoped brief', description: '長い要件\n'.repeat(600), criteria: ['C'], idempotencyKey: randomUUID()
+  }) as any;
+  const rawEvidence = 'Exact private defect evidence 未解决\n'.repeat(120);
+  const ids = Array.from({ length: 200 }, () => randomUUID());
+  for (const [index, id] of ids.entries()) {
+    f.store.put('defect', {
+      id, workspaceId, issueId: issue.id, state: 'OPEN', severity: index >= 198 ? 'BLOCKER' : 'MAJOR',
+      criterionId: 'C', reproduce: rawEvidence, expected: rawEvidence, actual: rawEvidence,
+      reportId: randomUUID(), candidateId: randomUUID(), snapshotId: randomUUID()
+    }, workspaceId);
+  }
+  f.flow.execute(lead, 'defect_propose', {
+    workspaceId, issueId: issue.id, expectedVersion: issue.version, severity: 'BLOCKER',
+    criterionIds: ['C'], reproduce: 'Pending details', expected: 'Expected pending', actual: 'Proposed only',
+    idempotencyKey: randomUUID()
+  });
+  const before = f.unchanged();
+  const brief = f.flow.execute(lead, 'issue_get', { workspaceId, issueId: issue.id }) as any;
+  assert.deepEqual(brief.defects, {
+    open: 200, proposed: 1, blocking: 200,
+    topBlocking: ids.slice(-2).map(id => ({ id, severity: 'BLOCKER' })),
+    expand: { operation: 'defect_list', args: { workspaceId, issueId: issue.id } }
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(brief)) <= 1990);
+  assert.ok(!JSON.stringify(brief).includes('Exact private defect evidence'));
+  const { operation, args } = brief.defects.expand;
+  const page = f.flow.execute(lead, operation, args) as any;
+  assert.equal(page.defects.length, 20);
+  assert.equal(page.total, 201);
+  assert.equal(page.nextOffset, 20);
+  const expanded = f.flow.execute(lead, 'defect_get', { workspaceId, defectId: ids[199] }) as any;
+  assert.equal(expanded.defect.actual, rawEvidence);
+  assert.equal(f.unchanged(), before);
+});
+
 test('scoped design reads retain exact decision reasons and reject unrelated evidence', async t => {
   const f = fixture(t);
   const workspaceId = f.workspace.id;

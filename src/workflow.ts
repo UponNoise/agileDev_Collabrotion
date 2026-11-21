@@ -284,9 +284,19 @@ export class Workflow {
       const defectCounts = s.db.prepare(`
         SELECT
           count(CASE WHEN json_extract(data, '$.state') = 'OPEN' THEN 1 END) AS open,
-          count(CASE WHEN json_extract(data, '$.state') = 'PROPOSED' THEN 1 END) AS proposed
+          count(CASE WHEN json_extract(data, '$.state') = 'PROPOSED' THEN 1 END) AS proposed,
+          count(CASE WHEN json_extract(data, '$.state') = 'OPEN'
+            AND json_extract(data, '$.severity') IN ('BLOCKER', 'MAJOR') THEN 1 END) AS blocking
         FROM records WHERE kind = 'defect' AND workspace_id = ? AND json_extract(data, '$.issueId') = ?
-      `).get(workspace.id, issue.id);
+      `).get(workspace.id, issue.id) as { open: number; proposed: number; blocking: number };
+      const topBlocking = s.db.prepare(`
+        SELECT id, json_extract(data, '$.severity') AS severity
+        FROM records
+        WHERE kind = 'defect' AND workspace_id = ? AND json_extract(data, '$.issueId') = ?
+          AND json_extract(data, '$.state') = 'OPEN' AND json_extract(data, '$.severity') IN ('BLOCKER', 'MAJOR')
+        ORDER BY CASE severity WHEN 'BLOCKER' THEN 0 ELSE 1 END, rowid
+        LIMIT 2
+      `).all(workspace.id, issue.id) as { id: string; severity: 'BLOCKER' | 'MAJOR' }[];
       const shorten = (reason: string | null) => reason === null ? null : briefText(reason, 110);
       const brief = {
         issue: briefIssue(issue, this.issueTitle(issue)),
@@ -295,10 +305,14 @@ export class Workflow {
           ? { ...designBrief, decision: { ...designBrief.decision, reason: shorten(designBrief.decision.reason) } }
           : designBrief,
         lastRejection: lastRejection ? { ...lastRejection, reason: shorten(lastRejection.reason) } : null,
-        defects: defectCounts,
+        defects: {
+          ...defectCounts, topBlocking,
+          expand: { operation: 'defect_list', args: { workspaceId: workspace.id, issueId: issue.id } }
+        },
         view: 'summary' as const
       };
       while (brief.blockers.length > 1 && Buffer.byteLength(JSON.stringify(brief)) > 1990) brief.blockers.pop();
+      while (topBlocking.length && Buffer.byteLength(JSON.stringify(brief)) > 1990) topBlocking.pop();
       return brief;
     }
     const git = submission ? (() => {
