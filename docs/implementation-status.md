@@ -1,6 +1,8 @@
 # Implementation evidence and remaining work
 
-Updated: 2026-11-21. Main `0858b2e` includes accepted R2 through PR #14 and B23 role profiles through PR #16. Claude accepted B23 at `5d84831`; the main-based candidate preserves that runtime. B24 is the next implementation PR, with B25 and B26 published as separate branches for the following merges. Claude owns prototype round 3 and takes B27/B28 after B24. The accepted R2 deferrals and three overlapping R1 checkpoints stay parked.
+Updated: 2026-11-21. Main `0858b2e` includes accepted R2 through PR #14 and B23 role profiles through PR #16. B24 is open for acceptance in PR #17. The B25 and B26 branches are published separately and enter review in order after each predecessor merges. The accepted R2 deferrals remain in effect.
+
+Claude designs B27 and B28 in `prototype/index.html`, hands over the agreed prototype with a short implementation brief, adjusts design details and reviews acceptance. After B24 merges, Codex implements B27 and B28 in `web/` from that handoff. B29 remains last. Claude reconciles the specification tables and Codex generates the agent reference from the registry.
 
 ## Concurrent ownership, 2026-11-14
 
@@ -8,10 +10,12 @@ Workers hold isolated worktrees and do not edit another worker's checkout:
 
 | Slice | Owner | Working location |
 | --- | --- | --- |
-| B24 briefs and decision evidence | Codex implements; Claude reviews acceptance | `.agents/worktrees/r2-briefs`, published branch `codex/r2-briefs`. The NF05 follow-up claims the summary projection, focused tests and measurement evidence. Prior decision form compatibility stays frozen. Claude takes B27/B28 after B24 merges. |
+| B24 briefs and decision evidence | Codex implements; Claude reviews acceptance | `.agents/worktrees/r2-briefs`, published branch `codex/r2-briefs`, PR #17. The NF05 follow-up claims the summary projection, focused tests and measurement evidence. Prior decision form compatibility stays frozen. |
+| B27/B28 human workspace | Claude designs and reviews acceptance; Codex implements | Claude owns prototype round 3 in `prototype/index.html` and provides a short implementation brief. Codex owns the `web/` implementation after B24 merges and the prototype handoff is available. |
+| B29 reference reconciliation | Claude writes the specification tables; Codex generates the agent reference | Runs last from the final service registry. |
 | B23 role profiles and described MCP inputs | Codex implements; Claude reviews acceptance | `.agents/worktrees/r2-role-profiles`, branch `codex/r2-role-profiles`, PR #16 against main. The reviewed runtime `5d84831` is unchanged in the main-based integration `c00e306`. Claims the shared role registry, service/MCP enforcement, the managed claim call and focused compatibility tests. Claude accepted the runtime and PR #16 merged at `0858b2e`. |
 | Current package evidence reconciliation | Codex root; documentation only | `.agents/worktrees/current-package-evidence`, branch `codex/current-package-evidence`, from main `0062bbf`. Claims only this status document; no runtime, canonical specification, workflow, web, desktop or dependency edits. Independent evidence review precedes publication |
-| R2 specification | Claude; accepted by the user on 2026-11-14 | PR #14 merged at `b237d97`, following the independent re-review of `cd64c51`. Codex implements B23–B26. Claude reviews those slices and owns prototype round 3 and B27/B28. |
+| R2 specification | Claude; accepted by the user on 2026-11-14 | PR #14 merged at `b237d97`, following the independent re-review of `cd64c51`. Codex implements the planned slices. Claude owns design and acceptance. |
 | W3b defect verification checkpoint | Parked; no runtime lease | `.agents/worktrees/r1-defect-verification`, branch `codex/r1-defect-verification`, clean `5f6aa5c`. Ownership documentation only; no implementation, tests or active jobs. Deferred until after P5 by accepted R2 (D22) |
 | W3a batch helper checkpoint | Parked; no runtime lease | `.agents/worktrees/r1-batch`, branch `codex/r1-batch`, clean `395faa0`. Ownership documentation only; no implementation, tests or active jobs. Withdrawn by accepted R2 (D20); kept for history |
 | Iterations web checkpoint | Parked; no runtime lease | `.agents/worktrees/r1-iterations-web`, branch `codex/r1-iterations-web`, clean `3d30ffc`. Ownership documentation only; no implementation, tests or active jobs. Deferred until after P5 by accepted R2 (D21) |
