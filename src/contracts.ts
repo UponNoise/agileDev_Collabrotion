@@ -34,7 +34,10 @@ export interface CheckProfile { id: string; workspaceId: string; name: string; c
 export interface CheckRun { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; profileId: string; profileHash: string; state: 'QUEUED' | 'RUNNING' | 'PASSED' | 'FAILED' | 'UNCERTAIN'; criteria: string[]; testFiles: { path: string; hash: string }[]; createdAt: string; startedAt?: string; finishedAt?: string; command?: string; args?: string[]; pid?: number; exitCode?: number | null; stdout?: string; stderr?: string; errorCode?: string }
 export interface QaReport { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; verdict: 'PASS' | 'FAIL' | 'BLOCKED'; results: { criterionId: string; result: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_RUN'; evidenceIds: string[]; reason: string }[]; findings: { criterionId: string; severity: 'BLOCKER' | 'MAJOR' | 'MINOR' | 'INFO'; expected: string; actual: string; reproduce: string }[]; summary: string; messageIds?: string[] }
 export const liveRunStates = ['QUEUED', 'STARTING', 'RUNNING', 'STOPPING', 'UNCERTAIN'] as const;
-export interface RunModelValue { value: string; source: 'launch' | 'profile' | 'harness' }
+export interface RunModelValue {
+  value: string | null;
+  source: 'launch' | 'profile' | 'harness' | 'codex-cache' | 'managed-default' | 'harness-default';
+}
 export interface RunModelSettings { provider?: RunModelValue; model?: RunModelValue; reasoningEffort?: RunModelValue }
 interface RunFields {
   id: string; issueId: string; workspaceId: string; actorId: string; harness: Harness;

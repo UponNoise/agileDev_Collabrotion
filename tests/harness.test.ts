@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { probeHarness } from '../src/harness.js';
 import { inside } from '../src/workflow.js';
-import { declaredDshRoute, decodeNativeEvent, NativeAdapter } from '../src/adapters.js';
+import { decodeNativeEvent, NativeAdapter } from '../src/adapters.js';
 import type { RunModelSettings } from '../src/contracts.js';
 import { consultLauncherIdentity, loadConsultVerifications, readConsultVerification, recordConsultVerification } from '../src/consult-verification.js';
 
@@ -40,17 +40,6 @@ test('artifact paths cannot escape through traversal or directory junctions', ()
   } finally { rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
 });
 
-test('DSH route detection reads the declared profile default without evaluating code or choosing another route', () => {
-  const profile = "- id: agent-default-model\n  name: '@deepseek-ai/dsh-agent-default-model'\n  config:\n    provider: deepseek-official\n    model: 'deepseek-flash'\n- id: tools\n  name: tools\n";
-  assert.deepEqual(declaredDshRoute(profile), { provider: 'deepseek-official', model: 'deepseek-flash' });
-  const effort = profile.replace('    model:', '    reasoningEffort: "high"\n    model:');
-  assert.equal(declaredDshRoute(effort)?.reasoningEffort, 'high');
-  assert.equal(declaredDshRoute(profile.replace("'deepseek-flash'", '"@provider/fixture\\u002dmodel"'))?.model, '@provider/fixture-model');
-  assert.equal(declaredDshRoute(profile.replace('deepseek-official', '!!js process.env.PROVIDER')), null);
-  assert.equal(declaredDshRoute(profile.replace('  config:', '  disabled: true\n  config:')), null);
-  assert.equal(declaredDshRoute('- id: unrelated\n  config:\n    provider: other\n    model: other'), null);
-});
-
 test('native terminal events distinguish completed work from failure and idle notifications', () => {
   assert.equal(decodeNativeEvent('codex', { type: 'turn.failed', error: { message: 'Provider rejected request' } }).terminal, 'failed');
   assert.equal(decodeNativeEvent('claude-code', { type: 'result', is_error: true, subtype: 'error_during_execution', session_id: 'fixture' }).terminal, 'failed');
@@ -59,13 +48,62 @@ test('native terminal events distinguish completed work from failure and idle no
   assert.equal(decodeNativeEvent('dsh', { method: 'session.event', params: { event: { type: 'turn/end', data: { reason: { kind: 'error' } } } } }).terminal, 'failed');
 });
 
-test('DSH SDK composes the owner overlay before resolving the default and forwards selected reasoning effort', { timeout: 10000 }, async () => {
+test('Codex chooses the newest visible Sol and records when it inherits the harness default', { timeout: 10000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agiledev-codex-model-'));
+  const previousEnv = process.env;
+  process.env = { ...previousEnv };
+  delete process.env.AGILEDEV_CODEX_MODEL;
+  delete process.env.AGILEDEV_CODEX_REASONING_EFFORT;
+  try {
+    const cache = join(root, 'models_cache.json');
+    writeFileSync(cache, JSON.stringify({ models: [
+      { slug: 'gpt-6.2-sol', visibility: 'list' },
+      { slug: 'gpt-7-sol', visibility: 'hide' },
+      { slug: 'gpt-6.10-sol', visibility: 'list' },
+      { slug: 'gpt-8-astra', visibility: 'list' },
+      null,
+    ] }));
+    const script = join(root, 'codex.mjs');
+    writeFileSync(script, [
+      "import { writeFileSync } from 'node:fs';",
+      'writeFileSync("codex-args.json", JSON.stringify(process.argv.slice(2)));',
+      'console.log(JSON.stringify({ type:"thread.started", thread_id:"fixture" }));',
+      'console.log(JSON.stringify({ type:"turn.completed" }));',
+    ].join('\n'));
+    const adapter = new NativeAdapter(() => [{ id: 'codex', command: process.execPath, args: [script], env: { CODEX_HOME: root } }]);
+    let settings: RunModelSettings = {};
+    const launch = {
+      harness: 'codex' as const, cwd: root, directory: root, prompt: 'Fixture', endpoint: 'http://127.0.0.1:1', token: 'fixture',
+      bridgeScript: join(root, 'bridge.mjs'), onPid() {}, onProvider() {}, onOutput() {},
+      onModelSettings(observed: RunModelSettings) { settings = observed; },
+    };
+    assert.equal((await (await adapter.start(launch)).result).outcome, 'succeeded');
+    const args = () => JSON.parse(readFileSync(join(root, 'codex-args.json'), 'utf8')) as string[];
+    assert.ok(args().includes('model="gpt-6.10-sol"'));
+    assert.ok(args().includes('model_reasoning_effort="high"'));
+    assert.deepEqual(settings, { model: { value: 'gpt-6.10-sol', source: 'codex-cache' }, reasoningEffort: { value: 'high', source: 'managed-default' } });
+    writeFileSync(cache, '{broken');
+    assert.equal((await (await adapter.start(launch)).result).outcome, 'succeeded');
+    assert.ok(!args().some(value => /^(model|model_reasoning_effort)=/.test(value)));
+    assert.deepEqual(settings, { model: { value: null, source: 'harness-default' }, reasoningEffort: { value: null, source: 'harness-default' } });
+    process.env.AGILEDEV_CODEX_REASONING_EFFORT = 'low';
+    assert.equal((await (await adapter.start(launch)).result).outcome, 'succeeded');
+    assert.ok(args().includes('model_reasoning_effort="low"'));
+    assert.deepEqual(settings.reasoningEffort, { value: 'low', source: 'launch' });
+  } finally {
+    process.env = previousEnv;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('DSH SDK defaults to DeepSeek Flash and supports the selected Gemini route and owner overrides', { timeout: 10000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-sdk-model-'));
   const patch = join(root, 'owner overlay.yml');
   const previousEnv = process.env;
-  process.env = { ...previousEnv, AGILEDEV_DSH_PATCH: patch, AGILEDEV_DSH_REASONING_EFFORT: 'high' };
+  process.env = { ...previousEnv, AGILEDEV_DSH_PATCH: patch };
   delete process.env.AGILEDEV_DSH_PROVIDER;
   delete process.env.AGILEDEV_DSH_MODEL;
+  delete process.env.AGILEDEV_DSH_REASONING_EFFORT;
   try {
     writeFileSync(patch, '[]');
     const script = join(root, 'sdk.mjs');
@@ -73,11 +111,6 @@ test('DSH SDK composes the owner overlay before resolving the default and forwar
       "import { writeFileSync } from 'node:fs';",
       "import { createInterface } from 'node:readline';",
       'const args = process.argv.slice(2);',
-      "if (args.includes('--dump-config')) {",
-      "  writeFileSync('dump-args.json', JSON.stringify(args));",
-      "  console.log('- id: agent-default-model\\n  config:\\n    provider: overlay-provider\\n    model: overlay-model\\n    reasoningEffort: low');",
-      '  process.exit(0);',
-      '}',
       "writeFileSync('sdk-args.json', JSON.stringify(args));",
       'const print = value => console.log(JSON.stringify(value));',
       'for await (const line of createInterface({ input: process.stdin })) {',
@@ -88,21 +121,36 @@ test('DSH SDK composes the owner overlay before resolving the default and forwar
       '}',
     ].join('\n'));
     const adapter = new NativeAdapter(() => [{ id: 'dsh', command: process.execPath, args: [script] }]);
+    let settings: RunModelSettings = {};
     const launch = {
       harness: 'dsh' as const, cwd: root, directory: root, prompt: 'Fixture prompt', endpoint: 'http://127.0.0.1:1', token: 'fixture',
       bridgeScript: join(root, 'bridge.mjs'), onPid() {}, onProvider() {}, onOutput() {},
+      onModelSettings(observed: RunModelSettings) { settings = observed; },
     };
     const session = await adapter.start(launch);
     assert.equal((await session.result).outcome, 'succeeded');
     const readFixture = (file: string) => JSON.parse(readFileSync(join(root, file), 'utf8'));
-    const dump = readFixture('dump-args.json');
     const sdk = readFixture('sdk-args.json');
-    assert.equal(dump[1], 'sdk');
-    assert.equal(basename(dump[3]), 'owner overlay.yml');
-    assert.deepEqual(sdk.slice(0, 4), dump.slice(0, 4));
-    assert.match(readFileSync(sdk[5], 'utf8'), /reasoningEffort: "high"/);
+    assert.equal(sdk[1], 'sdk');
+    assert.equal(basename(sdk[3]), 'owner overlay.yml');
+    assert.match(readFileSync(sdk[5], 'utf8'), /reasoningEffort: "max"/);
     const { provider, model, reasoningEffort } = readFixture('initialize.json');
-    assert.deepEqual({ provider, model, reasoningEffort }, { provider: 'overlay-provider', model: 'overlay-model', reasoningEffort: 'high' });
+    assert.deepEqual({ provider, model, reasoningEffort }, { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
+    assert.deepEqual(settings.reasoningEffort, { value: 'max', source: 'managed-default' });
+    process.env.AGILEDEV_DSH_PROVIDER = 'google';
+    process.env.AGILEDEV_DSH_MODEL = 'gemini-4-hydrogen';
+    delete process.env.AGILEDEV_DSH_PATCH;
+    await assert.rejects(adapter.start(launch), { code: 'DSH_PATCH_REQUIRED' });
+    process.env.AGILEDEV_DSH_PATCH = patch;
+    assert.equal((await (await adapter.start(launch)).result).outcome, 'succeeded');
+    assert.equal(readFixture('initialize.json').reasoningEffort, 'high');
+    assert.deepEqual(settings.reasoningEffort, { value: 'high', source: 'managed-default' });
+    process.env.AGILEDEV_DSH_REASONING_EFFORT = 'medium';
+    assert.equal((await (await adapter.start(launch)).result).outcome, 'succeeded');
+    assert.equal(readFixture('initialize.json').reasoningEffort, 'medium');
+    assert.deepEqual(settings.reasoningEffort, { value: 'medium', source: 'launch' });
+    process.env.AGILEDEV_DSH_REASONING_EFFORT = 'xhigh';
+    await assert.rejects(adapter.start(launch), { code: 'INVALID_MODEL_SETTING' });
     process.env.AGILEDEV_DSH_PATCH = 'relative.yml';
     await assert.rejects(adapter.start(launch), { code: 'INVALID_DSH_PATCH' });
   } finally {
@@ -169,7 +217,7 @@ test('fresh consult adapters preserve capability gates and parse all three nativ
         assert.equal(args[args.indexOf('--tools') + 1], '');
         assert.ok(args.includes('--strict-mcp-config'));
         assert.equal(args[args.indexOf('--model') + 1], 'fixture-alias');
-        assert.deepEqual(settings, { model: { value: 'fixture-resolved-model', source: 'harness' } });
+        assert.deepEqual(settings, { model: { value: 'fixture-resolved-model', source: 'harness' }, reasoningEffort: { value: null, source: 'harness-default' } });
       } else {
         assert.equal(args[args.indexOf('--profile') + 1], 'headless');
         assert.equal(args[args.indexOf('--permission-mode') + 1], 'read-only');

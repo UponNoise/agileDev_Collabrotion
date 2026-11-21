@@ -204,7 +204,7 @@ The matrix below records the original plugin-first proposal. The user's 2026-11-
 | Embedded overview/review view | P1 surface probe; P5 result required | P1 surface probe; browser baseline | P1 surface probe; P5 result required |
 | Native or managed dispatch/start/observe/interrupt | Required | Required | Required |
 | Owner-installed dependencies in managed worker and QA roots | Optional local node_modules link | Optional local node_modules link | Optional local node_modules link |
-| Managed model settings | Optional model and effort overrides | Optional model override; report the session model when available | Optional provider, model and effort overrides; owner overlay for SDK and headless |
+| Managed model settings | Newest cached Sol with high effort; optional owner overrides; inherit when no Sol is available | Harness default or optional owner model; report session model when available | DeepSeek Flash/max by default; selected Gemini Hydrogen/high with Google overlay; optional owner overrides in SDK and headless |
 | Reconcile after unknown execution | Required or explicit operator recovery | Required or explicit operator recovery | Required or explicit operator recovery |
 | Resume same provider session | Optional, capability-reported | Optional, capability-reported | Provider-specific, capability-reported |
 | Reconnect to an owner-started daemon across Windows launch contexts | Shared data directory or explicit endpoint | Shared data directory or explicit endpoint; verify packaged launch contexts separately | Shared data directory or explicit endpoint |

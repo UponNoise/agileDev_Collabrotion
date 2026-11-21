@@ -1,10 +1,10 @@
-import { execFile, spawn } from 'node:child_process';
-import { mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
-import { promisify } from 'node:util';
-import { Harness, DomainError, type RunModelSettings } from './contracts.js';
+import { Harness, DomainError, type RunModelSettings, type RunModelValue } from './contracts.js';
 import { HarnessEntry, discoverHarnesses, harnessEnvironment } from './harness.js';
 import { consultLauncherIdentity, matchesConsultVerification, type ConsultVerification } from './consult-verification.js';
 import { terminateTree } from './execution.js';
@@ -31,23 +31,26 @@ function ownerSetting(name: string) {
   return value;
 }
 
-export function declaredDshRoute(profile: string): DshRoute | null {
-  const lines = profile.split(/\r?\n/); const start = lines.findIndex(line => line === '- id: agent-default-model');
-  if (start < 0) return null;
-  let end = lines.findIndex((line, index) => index > start && line.startsWith('- id: ')); if (end < 0) end = lines.length;
-  const section = lines.slice(start, end).join('\n');
-  const scalar = (name: string) => {
-    const raw = section.match(new RegExp(`^    ${name}: (.+)$`, 'm'))?.[1]?.trim();
-    if (!raw) return null;
-    try {
-      const value = raw.startsWith('"') && raw.endsWith('"') ? JSON.parse(raw) : raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1) : raw;
-      return typeof value === 'string' && settingPattern.test(value) ? value : null;
-    } catch { return null; }
+function cachedCodexSol(entry: HarnessEntry) {
+  const home = entry.env?.CODEX_HOME ?? process.env.CODEX_HOME ?? join(homedir(), '.codex');
+  try {
+    const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8'));
+    if (!Array.isArray(cache?.models)) return undefined;
+    const models: ({ slug?: unknown; visibility?: unknown } | null)[] = cache.models;
+    return models.flatMap(record => {
+      const slug = record?.slug;
+      const visibility = record?.visibility;
+      return typeof slug === 'string' && slug.endsWith('-sol') && settingPattern.test(slug) &&
+        (visibility === undefined || visibility === 'list') ? [slug] : [];
+    }).sort((a, b) => b.localeCompare(a, 'en', { numeric: true }))[0];
+  } catch { return undefined; }
+}
+
+function selectedSetting(override?: string, fallback?: string, source: 'managed-default' | 'codex-cache' = 'managed-default'): RunModelValue {
+  return {
+    value: override ?? fallback ?? null,
+    source: override !== undefined ? 'launch' : fallback !== undefined ? source : 'harness-default',
   };
-  if (/^  disabled: true$/m.test(section)) return null;
-  const provider = scalar('provider'); const model = scalar('model');
-  const reasoningEffort = scalar('reasoningEffort');
-  return provider && model ? { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } : null;
 }
 export function decodeNativeEvent(harness: Harness, event: any) {
   if (harness === 'codex') {
@@ -124,16 +127,16 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
   };
   return { child, result, interrupt, setListener: (fn: (event: any) => void) => { listener = fn; }, complete: settle, setSession: (id: string) => { sessionId = id; context.onProvider(id); }, setTerminal: (state: 'succeeded' | 'failed') => { terminal = state; } };
 }
-function writeDshMcpPatch(c: AdapterContext, route?: DshRoute) {
+function writeDshMcpPatch(c: AdapterContext, route: DshRoute) {
   const patch = join(c.directory, 'dsh.patch.yml');
-  const selection = route ? [
+  const selection = [
     '- id: agent-default-model',
     '  config:',
     `    provider: ${JSON.stringify(route.provider)}`,
     `    model: ${JSON.stringify(route.model)}`,
     ...(route.reasoningEffort ? [`    reasoningEffort: ${JSON.stringify(route.reasoningEffort)}`] : []),
     '',
-  ].join('\n') : '';
+  ].join('\n');
   writeFileSync(patch, `${selection}- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`, { mode: 0o600 });
   return patch;
 }
@@ -148,22 +151,26 @@ function ownerDshPatchArgs() {
   }
   throw new DomainError('INVALID_DSH_PATCH', 'AGILEDEV_DSH_PATCH must name an accessible absolute patch file');
 }
-async function dshLaunch(entry: HarnessEntry, c: AdapterContext, profile: 'sdk' | 'headless') {
-  const provider = ownerSetting('AGILEDEV_DSH_PROVIDER');
-  const model = ownerSetting('AGILEDEV_DSH_MODEL');
-  const effort = ownerSetting('AGILEDEV_DSH_REASONING_EFFORT');
+function dshLaunch(c: AdapterContext, profile: 'sdk' | 'headless') {
+  const ownerProvider = ownerSetting('AGILEDEV_DSH_PROVIDER');
+  const ownerModel = ownerSetting('AGILEDEV_DSH_MODEL');
+  const ownerEffort = ownerSetting('AGILEDEV_DSH_REASONING_EFFORT');
   const extras = ownerDshPatchArgs();
-  if (!!provider !== !!model) throw new DomainError('PROVIDER_CONFIGURATION_REQUIRED', 'Set AGILEDEV_DSH_PROVIDER and AGILEDEV_DSH_MODEL together');
-  const args = ['--profile', profile, ...extras];
-  let route = provider && model ? { provider, model, reasoningEffort: effort } : null;
-  if (!route && (profile === 'sdk' || effort || extras.length)) {
-    const { stdout } = await promisify(execFile)(entry.command, [...entry.args, ...args, '--dump-config'], { cwd: c.cwd, env: harnessEnvironment(entry.env), windowsHide: true, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
-    const declared = declaredDshRoute(stdout);
-    if (declared) route = { ...declared, reasoningEffort: effort ?? declared.reasoningEffort };
+  if (!!ownerProvider !== !!ownerModel) throw new DomainError('PROVIDER_CONFIGURATION_REQUIRED', 'Set AGILEDEV_DSH_PROVIDER and AGILEDEV_DSH_MODEL together');
+  const provider = ownerProvider ?? 'deepseek-official';
+  const model = ownerModel ?? 'deepseek-flash';
+  const gemini = provider === 'google' && model === 'gemini-4-hydrogen';
+  const deepseek = provider === 'deepseek-official' && model === 'deepseek-flash';
+  if (gemini && !extras.length) throw new DomainError('DSH_PATCH_REQUIRED', 'Set AGILEDEV_DSH_PATCH to the Google provider overlay for Gemini Hydrogen');
+  const effort = selectedSetting(ownerEffort, gemini ? 'high' : deepseek ? 'max' : undefined);
+  const allowedEfforts = gemini ? ['low', 'medium', 'high'] : deepseek ? ['off', 'low', 'high', 'max'] : undefined;
+  if (allowedEfforts && effort.value && !allowedEfforts.includes(effort.value)) {
+    throw new DomainError('INVALID_MODEL_SETTING', `AGILEDEV_DSH_REASONING_EFFORT for the selected model must be one of ${allowedEfforts.join(', ')}`);
   }
-  if (!route && (profile === 'sdk' || effort)) throw new DomainError('PROVIDER_CONFIGURATION_REQUIRED', 'The DSH profile has no readable static default route. Set AGILEDEV_DSH_PROVIDER and AGILEDEV_DSH_MODEL.');
-  const override = provider || effort ? route ?? undefined : undefined;
-  return { args: [...args, '--patch', writeDshMcpPatch(c, override)], route, source: profile === 'sdk' || override ? 'launch' as const : 'profile' as const };
+  const route = { provider, model, reasoningEffort: effort.value ?? undefined };
+  const args = ['--profile', profile, ...extras, '--patch', writeDshMcpPatch(c, route)];
+  c.onModelSettings?.({ provider: selectedSetting(ownerProvider, provider), model: selectedSetting(ownerModel, model), reasoningEffort: effort });
+  return { args, route };
 }
 async function dshSdk(entry: HarnessEntry, c: AdapterContext, args: string[], route: DshRoute): Promise<RunningSession> {
   const p = processSession(entry, args, c);
@@ -232,39 +239,26 @@ export class NativeAdapter implements ExecutionAdapter {
     mkdirSync(c.directory, { recursive: true });
     let args: string[];
     if (c.harness === 'dsh') {
-      const launch = await dshLaunch(entry, c, consult ? 'headless' : 'sdk');
-      c.checkBeforeSpawn?.();
-      if (launch.route) {
-        const { provider, model, reasoningEffort } = launch.route;
-        c.onModelSettings?.({
-          provider: { value: provider, source: launch.source },
-          model: { value: model, source: launch.source },
-          ...(reasoningEffort ? { reasoningEffort: { value: reasoningEffort, source: launch.source } } : {}),
-        });
-        if (!consult) return dshSdk(entry, c, launch.args, launch.route);
-      }
+      const launch = dshLaunch(c, consult ? 'headless' : 'sdk');
+      if (!consult) return dshSdk(entry, c, launch.args, launch.route);
       args = [...launch.args, '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
     } else if (c.harness === 'codex') {
       args = ['exec', '--json', '--sandbox', consult ? 'read-only' : 'workspace-write', '--cd', c.cwd, '--skip-git-repo-check', '-c', `mcp_servers.agiledev.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.agiledev.args=${JSON.stringify([c.bridgeScript, 'mcp'])}`, '-c', 'mcp_servers.agiledev.env_vars=["AGILEDEV_TOKEN","AGILEDEV_ENDPOINT"]', '-c', 'mcp_servers.agiledev.required=true', '-c', 'mcp_servers.agiledev.default_tools_approval_mode="approve"'];
-      const model = ownerSetting('AGILEDEV_CODEX_MODEL');
-      const effort = ownerSetting('AGILEDEV_CODEX_REASONING_EFFORT');
-      if (model) args.push('-c', `model=${JSON.stringify(model)}`);
-      if (effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(effort)}`);
-      if (model || effort) c.onModelSettings?.({
-        ...(model ? { model: { value: model, source: 'launch' } } : {}),
-        ...(effort ? { reasoningEffort: { value: effort, source: 'launch' } } : {}),
-      });
+      const override = ownerSetting('AGILEDEV_CODEX_MODEL');
+      const model = selectedSetting(override, override ? undefined : cachedCodexSol(entry), 'codex-cache');
+      const effort = selectedSetting(ownerSetting('AGILEDEV_CODEX_REASONING_EFFORT'), model.value ? 'high' : undefined);
+      if (model.value) args.push('-c', `model=${JSON.stringify(model.value)}`);
+      if (effort.value) args.push('-c', `model_reasoning_effort=${JSON.stringify(effort.value)}`);
+      c.onModelSettings?.({ model, reasoningEffort: effort });
       if (consult) args.push('-c', 'approval_policy="never"');
       args.push('-');
     } else {
       const config = join(c.directory, 'mcp.json');
       writeFileSync(config, JSON.stringify({ mcpServers: { agiledev: { type: 'stdio', command: process.execPath, args: [c.bridgeScript, 'mcp'], env: { AGILEDEV_ENDPOINT: c.endpoint, AGILEDEV_TOKEN: '${AGILEDEV_TOKEN}' } } } }), { mode: 0o600 });
       args = ['--print', '--verbose', '--output-format', 'stream-json', '--permission-mode', consult ? 'dontAsk' : 'acceptEdits', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', config, '--session-id', randomUUID(), '--allowedTools', 'mcp__agiledev__*'];
-      const model = ownerSetting('AGILEDEV_CLAUDE_MODEL');
-      if (model) {
-        args.push('--model', model);
-        c.onModelSettings?.({ model: { value: model, source: 'launch' } });
-      }
+      const model = selectedSetting(ownerSetting('AGILEDEV_CLAUDE_MODEL'));
+      if (model.value) args.push('--model', model.value);
+      c.onModelSettings?.({ model, reasoningEffort: selectedSetting() });
       if (consult) args.push('--tools', '', '--disable-slash-commands');
     }
     const p = processSession(entry, args, c); p.child.stdin.end(c.prompt);
