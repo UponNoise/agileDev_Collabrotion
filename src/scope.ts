@@ -30,5 +30,5 @@ export function scopeState(store: Store, issue: Issue): ScopeState {
   }
 }
 export function inScopeChildren(store: Store, root: Issue) {
-  return store.list<Issue>('issue',root.workspaceId).filter(i => i.parentId === root.id && scopeState(store,i).status !== 'EXCLUDED');
+  return store.issueChildren(root.workspaceId, root.id).filter(i => scopeState(store,i).status !== 'EXCLUDED');
 }

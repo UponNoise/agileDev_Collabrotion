@@ -3,7 +3,7 @@ import { Store, canonical, hash } from './store.js';
 import { scopeState } from './scope.js';
 
 export function planChildren(store: Store, root: Issue) {
-  return store.list<Issue>('issue', root.workspaceId).filter((i) => i.parentId === root.id);
+  return store.issueChildren(root.workspaceId, root.id);
 }
 export function currentPlan(store: Store, root: Issue) {
   return root.planId ? store.get<Plan>('plan', root.planId) : null;
