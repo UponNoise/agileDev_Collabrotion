@@ -205,10 +205,13 @@ The matrix below records the original plugin-first proposal. The user's 2026-11-
 | Native or managed dispatch/start/observe/interrupt | Required | Required | Required |
 | Reconcile after unknown execution | Required or explicit operator recovery | Required or explicit operator recovery | Required or explicit operator recovery |
 | Resume same provider session | Optional, capability-reported | Optional, capability-reported | Provider-specific, capability-reported |
+| Reconnect to an owner-started daemon across Windows launch contexts | Shared data directory or explicit endpoint | Shared data directory or explicit endpoint; verify packaged launch contexts separately | Shared data directory or explicit endpoint |
 
 The user requirement for a plugin with a visual interface is met by a native entry opening the shared web experience plus verified embedded views where the host supports them. D10 must be accepted if browser fallback is necessary on a target the user expects to be fully embedded.
 
 Do not equate Codex local clients with every hosted Codex surface, or Claude Code with Claude Desktop/web. A release lists exact tested host versions, OS, transports, UI mode, execution mode, and limitations. No marketplace approval or public directory publication is assumed.
+
+The AC29/AC38 host drill must use the same owner service from both launch contexts. A packaged Windows process can see a different version of AppData. Set a shared private directory explicitly or use the owner's loopback endpoint with an agent credential. The controlled EXDEV metadata test covers publication and reconnect in one filesystem view. Cross-context discovery from Claude Desktop and a Claude Code bridge launched by it requires separate evidence. See [local development](local-development.md) for connection details.
 
 ## 8. Host integration plans
 

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from './http.js';
@@ -10,6 +10,19 @@ import { GitVerifier } from './git-verifier.js';
 import { NativeAdapter } from './adapters.js';
 import { loadConsultVerifications } from './consult-verification.js';
 import { processExists, readDescriptor, ServiceError } from './service-launcher.js';
+
+function publishMetadata(file: string, instance: string, value: object) {
+  const temporary = `${file}.${instance}.tmp`;
+  const json = JSON.stringify(value);
+  try {
+    writeFileSync(temporary, json, { mode: 0o600 });
+    try { renameSync(temporary, file); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+      writeFileSync(file, json, { mode: 0o600 });
+    }
+  } finally { rmSync(temporary, { force: true }); }
+}
 
 export async function serve(dataDir: string) {
   mkdirSync(dataDir, { recursive: true });
@@ -25,9 +38,7 @@ export async function serve(dataDir: string) {
       const legacy = existsSync(lockFile) ? JSON.parse(readFileSync(lockFile, 'utf8')) as { pid: number } : null;
       if ((held && processExists(held.pid)) || (legacy && processExists(legacy.pid))) throw new ServiceError('SERVICE_LOCKED', 'A live process owns the service lock. Attach to it or reconcile it before restarting.');
       control.prepare('INSERT OR REPLACE INTO daemon(id,pid,instance) VALUES(1,?,?)').run(process.pid, instance);
-      const temporary = `${lockFile}.${instance}.tmp`;
-      writeFileSync(temporary, JSON.stringify({ pid: process.pid, instance }), { mode: 0o600 });
-      renameSync(temporary, lockFile);
+      publishMetadata(lockFile, instance, { pid: process.pid, instance });
     }).immediate();
   } catch (error) { control.close(); throw error; }
   let store: Store | undefined;
@@ -58,9 +69,7 @@ export async function serve(dataDir: string) {
     let ownerToken = old?.ownerToken;
     try { if (!ownerToken || store!.authenticate(ownerToken).role !== 'human') ownerToken = undefined; } catch { ownerToken = undefined; }
     ownerToken ??= store!.bootstrap().token;
-    const temporary = `${descriptorFile}.${instance}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ endpoint, ownerToken, pid: process.pid, instance }), { mode: 0o600 });
-    renameSync(temporary, descriptorFile);
+    publishMetadata(descriptorFile, instance, { endpoint, ownerToken, pid: process.pid, instance });
     verifier = new GitVerifier(store!); verifier.start();
     if (verification) {
       const adapter = new NativeAdapter(undefined, verification);
