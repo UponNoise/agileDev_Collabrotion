@@ -19,12 +19,12 @@ export async function connectMcp(client: LocalClient) {
     name, description: toolDescription(name), inputSchema: describedInput(schemas[name]) as any,
     annotations: { readOnlyHint: isReadOperation(name), destructiveHint: !isReadOperation(name), idempotentHint: true, openWorldHint: false }
   })) }));
-  server.setRequestHandler(CallToolRequestSchema, async request => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     try {
       const name = request.params.name;
       if (!Object.hasOwn(schemas, name)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
       if (!operations.includes(name as Operation)) throw new DomainError('ROLE_DENIED', 'Operation is outside this role profile', 403);
-      const result = await client.command(name, request.params.arguments ?? {});
+      const result = await client.command(name, request.params.arguments ?? {}, name === 'message_wait' ? extra.signal : undefined);
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result };
     } catch (error) {
       const code = error instanceof DomainError ? error.code : 'SERVICE_UNAVAILABLE';

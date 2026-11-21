@@ -25,6 +25,8 @@ export class Store {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, workspace_id TEXT, data TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE INDEX IF NOT EXISTS records_workspace ON records(kind,workspace_id);
+      CREATE INDEX IF NOT EXISTS issue_message_thread ON records(workspace_id,json_extract(data,'$.issueId')) WHERE kind='issue_message';
+      CREATE INDEX IF NOT EXISTS issue_message_reply ON records(workspace_id,json_extract(data,'$.replyTo')) WHERE kind='issue_message' AND json_extract(data,'$.kind')='REPLY';
       CREATE TABLE IF NOT EXISTS credentials (hash TEXT PRIMARY KEY, actor_id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS receipts (actor_id TEXT NOT NULL, key TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(actor_id,key));
       CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, actor_id TEXT NOT NULL, operation TEXT NOT NULL, target_id TEXT, data TEXT NOT NULL, at TEXT NOT NULL);

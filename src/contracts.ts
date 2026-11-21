@@ -1,6 +1,7 @@
 import { advertisedOperations } from './agent-profiles.js';
 import { defectCoreSchemas, defectFindingSchema } from './defect-contracts.js';
 import { iterationSchemas, iterationMembershipPreconditionSchema } from './iteration-contracts.js';
+import { messageSchemas } from './message-contracts.js';
 import { z } from 'zod';
 
 export const roles = ['human', 'lead', 'pm', 'worker', 'qa'] as const;
@@ -9,7 +10,7 @@ export const harnesses = ['codex', 'claude-code', 'dsh'] as const;
 export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];
-export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED'] as const;
+export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED', 'AGENT_QUESTION', 'DEFECT_TRIAGE'] as const;
 export type InboxKind = typeof inboxKinds[number];
 export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string }
 export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null; gitBindingId?: string }
@@ -31,7 +32,7 @@ export interface Candidate { id: string; workerId: string; sessionId: string; de
 export interface Snapshot { id: string; workspaceId: string; issueId: string; candidateId: string; root: string; files: { path: string; hash: string; bytes: number; mode: string; blob?: string }[]; hash: string; createdAt: string }
 export interface CheckProfile { id: string; workspaceId: string; name: string; command: string; args: string[]; criteria: string[]; timeoutMs: number; hash: string }
 export interface CheckRun { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; profileId: string; profileHash: string; state: 'QUEUED' | 'RUNNING' | 'PASSED' | 'FAILED' | 'UNCERTAIN'; criteria: string[]; testFiles: { path: string; hash: string }[]; createdAt: string; startedAt?: string; finishedAt?: string; command?: string; args?: string[]; pid?: number; exitCode?: number | null; stdout?: string; stderr?: string; errorCode?: string }
-export interface QaReport { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; verdict: 'PASS' | 'FAIL' | 'BLOCKED'; results: { criterionId: string; result: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_RUN'; evidenceIds: string[]; reason: string }[]; findings: { criterionId: string; severity: 'BLOCKER' | 'MAJOR' | 'MINOR' | 'INFO'; expected: string; actual: string; reproduce: string }[]; summary: string }
+export interface QaReport { id: string; workspaceId: string; issueId: string; runId: string; actorId: string; sessionId: string; candidateId: string; snapshotId: string; verdict: 'PASS' | 'FAIL' | 'BLOCKED'; results: { criterionId: string; result: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_RUN'; evidenceIds: string[]; reason: string }[]; findings: { criterionId: string; severity: 'BLOCKER' | 'MAJOR' | 'MINOR' | 'INFO'; expected: string; actual: string; reproduce: string }[]; summary: string; messageIds?: string[] }
 export const liveRunStates = ['QUEUED', 'STARTING', 'RUNNING', 'STOPPING', 'UNCERTAIN'] as const;
 export interface Run {
   id: string; issueId: string; workspaceId: string; actorId: string; harness: Harness;
@@ -41,6 +42,7 @@ export interface Run {
   providerSessionId?: string; pid?: number; startedAt?: string; finishedAt?: string;
   budgetMs?: number; coordinatorConcurrency?: number;
   kind?: 'implementation' | 'qa'; candidateId?: string; snapshotId?: string; reportId?: string; checkProfileIds?: string[];
+  messageIds?: string[];
   lastHeartbeatAt?: string; summary?: string; errorCode?: string; stopReason?: string;
 }
 export interface Issue {
@@ -77,6 +79,7 @@ const deliveryDecisionSchema = z.union([
 ]);
 export const schemas = {
   ...iterationSchemas,
+  ...messageSchemas,
   defect_propose: defectCoreSchemas.propose.extend(mutation),
   defect_report: defectCoreSchemas.report.extend(mutation),
   defect_triage: defectCoreSchemas.triage.extend(mutation),
