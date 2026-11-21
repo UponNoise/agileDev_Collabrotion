@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:web",
-    "build:web": "vite build --config vite.config.ts",
+    "build:web": "vite build --config vite.config.ts --configLoader native",
+    "build:qa": "tsc -p tsconfig.json --outDir .qa/build && npm run build:web -- --outDir ../.qa/build/web",
     "check": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "npm run build && node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "start": "node --import tsx src/cli.ts serve",

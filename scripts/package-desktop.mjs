@@ -16,7 +16,7 @@ const service = join(stage, 'service');
 const compiled = join(stage, 'dist');
 for (const args of [
   [join(root, 'node_modules/typescript/bin/tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', compiled],
-  [join(root, 'node_modules/vite/bin/vite.js'), 'build', '--config', join(root, 'vite.config.ts'), '--outDir', join(compiled, 'web')]
+  [join(root, 'node_modules/vite/bin/vite.js'), 'build', '--config', join(root, 'vite.config.ts'), '--configLoader', 'native', '--outDir', join(compiled, 'web')]
 ]) execFileSync(process.execPath, args, { cwd: root, stdio: 'inherit', windowsHide: true });
 mkdirSync(join(app, 'dist'), { recursive: true });
 mkdirSync(join(service, 'runtime'), { recursive: true });
