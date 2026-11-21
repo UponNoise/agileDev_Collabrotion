@@ -73,7 +73,11 @@ export async function serve(dataDir: string) {
     verifier = new GitVerifier(store!); verifier.start();
     if (verification) {
       const adapter = new NativeAdapter(undefined, verification);
-      coordinator = new Coordinator(store!, { endpoint, directory: join(dataDir, 'runs'), bridgeScript: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), adapter, concurrency: Number(process.env.AGILEDEV_CONCURRENCY ?? 2), maxRunMs: Number(process.env.AGILEDEV_MAX_RUN_MS ?? 1800000) });
+      coordinator = new Coordinator(store!, {
+        endpoint, directory: join(dataDir, 'runs'), bridgeScript: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), adapter,
+        concurrency: Number(process.env.AGILEDEV_CONCURRENCY ?? 2), maxRunMs: Number(process.env.AGILEDEV_MAX_RUN_MS ?? 1800000),
+        executionDependencies: process.env.AGILEDEV_EXECUTION_DEPENDENCIES,
+      });
       await coordinator.start();
     }
     console.log(JSON.stringify({ endpoint, pid: process.pid, dataDir }));

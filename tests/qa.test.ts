@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -29,8 +29,13 @@ class ProviderDouble implements ExecutionAdapter {
     return { result: new Promise<AdapterResult>(done => this.finish.set(context.cwd,done)), interrupt: async () => { this.finish.get(context.cwd)?.({ outcome: 'cancelled' }); return true; } };
   }
 }
-async function fixture(mode: 'artifact' | 'git' = 'artifact') {
+async function fixture(mode: 'artifact' | 'git' = 'artifact', provisionDependencies = false) {
   const root = mkdtempSync(join(tmpdir(),'agiledev-qa-')); const source = join(root,'source'); mkdirSync(source);
+  const dependencies = provisionDependencies ? join(root, 'owner-dependencies') : undefined;
+  if (dependencies) {
+    mkdirSync(join(dependencies, 'fixture-dependency'), { recursive: true });
+    writeFileSync(join(dependencies, 'fixture-dependency', 'index.js'), 'module.exports = "installed by owner";');
+  }
   writeFileSync(join(source,'source.txt'),'original'); writeFileSync(join(source,'contract.txt'),'preserve this independent file');
   const git = (...args: string[]) => execFileSync('git',args,{ cwd: source, windowsHide: true, stdio: 'ignore' });
   git('init'); git('add','.'); git('-c','user.name=Test','-c','user.email=test@example.invalid','-c','core.hooksPath=/dev/null','commit','-m','fixture');
@@ -54,7 +59,7 @@ async function fixture(mode: 'artifact' | 'git' = 'artifact') {
   const dispatch = () => change('work_dispatch',issue.id,{ designId: current(parent.id).designId,scopeRevision: current(issue.id).scopeRevision }).run as Run;
   dispatch();
   const app = createServer(store); const endpoint = await app.listen({ host: '127.0.0.1',port: 0 }); const adapter = new ProviderDouble();
-  const coordinator = new Coordinator(store,{ endpoint,directory: join(root,'runs'),bridgeScript: resolve('dist/cli.js'),adapter }); await coordinator.start();
+  const coordinator = new Coordinator(store,{ endpoint,directory: join(root,'runs'),bridgeScript: resolve('dist/cli.js'),adapter,executionDependencies: dependencies }); await coordinator.start();
   const context = async (index: number) => { await until(() => adapter.contexts.length > index); return adapter.contexts[index]!; };
   const complete = async (ctx: AdapterContext) => {
     const actor = store.authenticate(ctx.token); adapter.finish.get(ctx.cwd)!({ outcome: 'succeeded' });
@@ -78,9 +83,49 @@ async function fixture(mode: 'artifact' | 'git' = 'artifact') {
   const report = (ctx: AdapterContext, checkId: string, verdict: QaReport['verdict'] = 'PASS', findings?: QaReport['findings']) => new LocalClient(endpoint,ctx.token).command('qa_report_submit',{ workspaceId: workspace.id,issueId: issue.id,expectedVersion: current(issue.id).version,candidateId: current(issue.id).candidate!.id,verdict,summary: 'Independent fixture result',results: [{ criterionId: 'FILE',result: verdict === 'BLOCKED' ? 'NOT_RUN' : verdict,evidenceIds: checkId ? [checkId] : [],reason: 'Observed exact-content behavior' }],findings: findings ?? (verdict === 'FAIL' ? [{ criterionId: 'FILE',severity: 'MAJOR',expected: 'source.txt contains delivered',actual: 'source.txt contains incorrect output',reproduce: 'Run the captured .qa/check.mjs command on this snapshot' }] : []),idempotencyKey: randomUUID() });
   const finalReview = () => change('review_submit',issue.id,{ candidateId: current(issue.id).candidate!.id,verdict: 'PASS',reason: 'Final requirement-fit fixture review' },lead);
   const delivery = (decision = 'ACCEPT',digest?: string) => change('delivery_decide',issue.id,{ candidateId: current(issue.id).candidate!.id,digest: digest ?? (flow.execute(human,'issue_get',{ workspaceId: workspace.id,issueId: issue.id }) as any).deliveryDigest,decision,reason: 'Automated test fixture decision, not real user delivery acceptance' });
-  const close = async () => { await coordinator.close(); await app.close(); store.close(); rmSync(root,{ recursive: true,force: true }); };
-  return { root,source,workspace,issue,parent,store,flow,human,lead,qa,worker,adapter,coordinator,current,change,dispatch,context,complete,submit,initialReview,check,report,finalReview,delivery,close };
+  const close = async () => {
+    await coordinator.close();
+    await app.close();
+    store.close();
+    if (dependencies) for (const context of adapter.contexts) {
+      const link = join(context.cwd, 'node_modules');
+      if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
+    }
+    rmSync(root,{ recursive: true,force: true });
+  };
+  return { root,source,dependencies,workspace,issue,parent,store,flow,human,lead,qa,worker,adapter,coordinator,current,change,dispatch,context,complete,submit,initialReview,check,report,finalReview,delivery,close };
 }
+
+test('managed worktree and independent QA use owner dependencies and unlink them before retaining evidence', { timeout: 20000 }, async () => {
+  const f = await fixture('artifact', true);
+  const packageSource = 'module.exports = "installed by owner";';
+  try {
+    const worker = await f.context(0);
+    const workerLink = join(worker.cwd, 'node_modules');
+    assert.ok(lstatSync(workerLink).isSymbolicLink());
+    assert.equal(readFileSync(join(workerLink, 'fixture-dependency', 'index.js'), 'utf8'), packageSource);
+    await f.submit(worker, 'delivered');
+    assert.equal(lstatSync(workerLink, { throwIfNoEntry: false }), undefined);
+    const candidate = f.current(f.issue.id).candidate!;
+    const snapshot = f.store.get<Snapshot>('snapshot', candidate.snapshotId!);
+    assert.deepEqual(snapshot.files.map(file => file.path), ['contract.txt', 'source.txt']);
+    assert.equal(lstatSync(join(snapshot.root, 'node_modules'), { throwIfNoEntry: false }), undefined);
+
+    f.initialReview();
+    const qa = await f.context(1);
+    const qaLink = join(qa.cwd, 'node_modules');
+    assert.notEqual(qa.cwd, worker.cwd);
+    assert.ok(lstatSync(qaLink).isSymbolicLink());
+    const check = await f.check(qa, 'import assert from "node:assert/strict"; import { readFileSync } from "node:fs"; import dependency from "fixture-dependency"; assert.equal(dependency, "installed by owner"); assert.equal(readFileSync("source.txt", "utf8"), "delivered");');
+    assert.equal(check.state, 'PASSED');
+    await f.report(qa, check.id);
+    assert.equal((await f.complete(qa)).state, 'SUCCEEDED');
+    assert.equal(lstatSync(qaLink, { throwIfNoEntry: false }), undefined);
+    assert.equal(readFileSync(join(f.dependencies!, 'fixture-dependency', 'index.js'), 'utf8'), packageSource);
+    assert.equal(readFileSync(join(f.source, 'source.txt'), 'utf8'), 'original');
+    assert.equal(readFileSync(join(qa.cwd, 'source.txt'), 'utf8'), 'delivered');
+  } finally { await f.close(); }
+});
 
 test('independent QA executes a real check on a sealed full snapshot before final and human gates', { timeout: 20000 },async () => {
   const f = await fixture();

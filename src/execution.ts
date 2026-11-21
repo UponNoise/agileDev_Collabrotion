@@ -1,12 +1,47 @@
 import { execFile } from 'node:child_process';
 import { cp, lstat, mkdir, realpath } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { DomainError, Workspace } from './contracts.js';
 
 const exec = promisify(execFile);
 export interface ExecutionDirectory { root: string; baseSha?: string; mode: 'git-worktree' | 'copy' }
+
+export function resolveExecutionDependencies(path?: string) {
+  if (path === undefined) return undefined;
+  if (isAbsolute(path)) {
+    try {
+      const resolved = realpathSync(path);
+      if (statSync(resolved).isDirectory()) return resolved;
+    } catch {}
+  }
+  throw new DomainError('INVALID_EXECUTION_DEPENDENCIES', 'AGILEDEV_EXECUTION_DEPENDENCIES must name an accessible absolute dependency directory');
+}
+
+export function linkExecutionDependencies(root: string, source: string) {
+  const preparedRoot = realpathSync(root);
+  const link = join(preparedRoot, 'node_modules');
+  try {
+    if (!statSync(source).isDirectory()) throw new Error();
+    symlinkSync(source, link, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new DomainError('DEPENDENCY_LINK_CONFLICT', 'The prepared root already contains node_modules');
+    throw new DomainError('DEPENDENCY_LINK_FAILED', 'Could not link the configured dependencies into the prepared root');
+  }
+  return () => {
+    try {
+      if (realpathSync(preparedRoot) !== preparedRoot) throw new Error();
+      const entry = lstatSync(link, { throwIfNoEntry: false });
+      if (!entry) return;
+      if (!entry.isSymbolicLink()) throw new Error();
+      unlinkSync(link);
+    } catch {
+      throw new DomainError('DEPENDENCY_LINK_CLEANUP_FAILED', 'Could not safely unlink node_modules from the retained execution root');
+    }
+  };
+}
+
 export async function prepareExecution(workspace: Workspace, runId: string, runDirectory: string): Promise<ExecutionDirectory> {
   if (!/^[a-f0-9-]{36}$/i.test(runId)) throw new DomainError('RUN_ID_INVALID', 'Execution storage requires an immutable UUID run identifier');
   const source = await realpath(workspace.root);

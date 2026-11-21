@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -12,7 +12,7 @@ import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter, NativeAdapter } from '../src/adapters.js';
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
-import { prepareExecution } from '../src/execution.js';
+import { linkExecutionDependencies, prepareExecution, resolveExecutionDependencies } from '../src/execution.js';
 import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 async function waitFor(check: () => boolean, timeout = 10000) {
@@ -196,4 +196,30 @@ test('Git source changes are never silently discarded and nested workspace roots
     assert.equal(readFileSync(join(isolated.root, 'nested.txt'), 'utf8'), 'scoped');
     assert.match(isolated.root, /nested$/);
   } finally { await f.close(); }
+});
+
+test('dependency configuration requires an absolute directory and preserves conflicting entries', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agiledev-dependency-conflict-'));
+  const source = join(root, 'owner');
+  const destination = join(root, 'execution');
+  const replacement = join(root, 'replacement');
+  mkdirSync(source);
+  mkdirSync(join(destination, 'node_modules'), { recursive: true });
+  mkdirSync(replacement);
+  const original = join(destination, 'node_modules', 'keep.txt');
+  writeFileSync(original, 'existing directory');
+  try {
+    assert.throws(() => resolveExecutionDependencies('owner'), { code: 'INVALID_EXECUTION_DEPENDENCIES' });
+    assert.throws(() => resolveExecutionDependencies(original), { code: 'INVALID_EXECUTION_DEPENDENCIES' });
+    assert.throws(() => linkExecutionDependencies(destination, resolveExecutionDependencies(source)!), { code: 'DEPENDENCY_LINK_CONFLICT' });
+    assert.equal(readFileSync(original, 'utf8'), 'existing directory');
+    const release = linkExecutionDependencies(replacement, source);
+    const replacedLink = join(replacement, 'node_modules');
+    unlinkSync(replacedLink);
+    mkdirSync(replacedLink);
+    const retained = join(replacedLink, 'keep.txt');
+    writeFileSync(retained, 'replacement directory');
+    assert.throws(release, { code: 'DEPENDENCY_LINK_CLEANUP_FAILED' });
+    assert.equal(readFileSync(retained, 'utf8'), 'replacement directory');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
