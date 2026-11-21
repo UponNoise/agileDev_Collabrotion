@@ -177,6 +177,27 @@ test('recovery retains captured QA message evidence without advancing the gate',
   } finally { await f.close(); }
 });
 
+test('initial lead approval queues independent QA while an advisory consult is queued', { timeout: 20000 }, async () => {
+  const f = await fixture();
+  try {
+    await f.submit(await f.context(0), 'delivered');
+    const flow = new Workflow(f.store, Date.now, () => true);
+    const workspaceId = f.workspace.id;
+    flow.execute(f.human, 'wake_settings_update', {
+      workspaceId, expectedVersion: 0, enabled: true, idempotencyKey: randomUUID()
+    });
+    const { delivery } = flow.execute(f.lead, 'message_send', {
+      workspaceId, issueId: f.issue.id, recipient: { kind: 'role', role: 'qa' },
+      kind: 'QUESTION', body: 'Fixture consult alongside QA', wake: true, idempotencyKey: randomUUID()
+    }) as any;
+    assert.equal(delivery.state, 'QUEUED');
+    f.initialReview();
+    assert.equal(f.current(f.issue.id).state, 'QA_TEST');
+    assert.equal(f.store.get<Run>('run', delivery.runId).state, 'QUEUED');
+    assert.ok(f.store.list<Run>('run', workspaceId).some(run => run.kind === 'qa' && run.state === 'QUEUED'));
+  } finally { await f.close(); }
+});
+
 test('exact completion delegation records the human grantor and executing agent without bypassing QA', { timeout: 20000 },async () => {
   const f = await fixture();
   try {

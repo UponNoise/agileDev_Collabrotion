@@ -227,3 +227,24 @@ test('service shutdown cancels an outstanding logical actor HTTP wait', { timeou
   const [result] = await Promise.all([pending, app.close()]);
   assert.deepEqual(result, { status: 'CANCELLED', reply: null });
 });
+
+test('wake is off by default and only the owner can change the exact workspace policy', t => {
+  const f = fixture(t);
+  const { workspaceId } = f.thread;
+  const read = (id = workspaceId) => (f.flow.execute(f.owner.actor, 'wake_settings_get', { workspaceId: id }) as any).settings;
+  assert.deepEqual(read(), { workspaceId, enabled: false, version: 0 });
+  for (const agent of [f.lead.actor, f.pm.actor, f.worker.actor, f.qa.actor]) {
+    assert.throws(() => f.flow.execute(agent, 'wake_settings_update', {}), failure('ROLE_DENIED'));
+  }
+  const message = { kind: 'QUESTION', wake: true, idempotencyKey: randomUUID() };
+  assert.equal(f.send(f.lead.actor, role('worker'), message).delivery.reason, 'WAKE_DISABLED');
+  const input = { workspaceId, expectedVersion: 0, enabled: true, idempotencyKey: randomUUID() };
+  assert.equal((f.flow.execute(f.owner.actor, 'wake_settings_update', input) as any).settings.enabled, true);
+  assert.equal((f.flow.execute(f.owner.actor, 'wake_settings_update', input) as any).replayed, true);
+  assert.deepEqual(read(), { workspaceId, enabled: true, version: 1 });
+  assert.equal(read(f.otherWorkspace.id).enabled, false);
+  assert.throws(() => f.flow.execute(f.owner.actor, 'wake_settings_update', { ...input, enabled: false, idempotencyKey: randomUUID() }), failure('VERSION_CONFLICT'));
+  assert.equal(f.send(f.lead.actor, role('worker'), message).delivery.reason, 'WAKE_DISABLED');
+  assert.equal(f.send(f.lead.actor, role('worker'), { kind: 'QUESTION', wake: true }).delivery.reason, 'WAKE_UNAVAILABLE');
+  assert.equal(f.store.list('run').length, 0);
+});
