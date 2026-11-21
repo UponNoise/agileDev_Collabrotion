@@ -51,6 +51,10 @@ export function queueQa(store: Store, issue: Issue) {
   const run: Run = { id: randomUUID(), issueId: issue.id, workspaceId: issue.workspaceId, actorId: issue.qaAssignee, harness: issue.qaHarness, kind: 'qa', candidateId: issue.candidate!.id, snapshotId: snapshot.id, state: 'QUEUED', version: 1, createdAt: new Date().toISOString(), designId: issue.candidate!.designId, scopeRevision: issue.scopeRevision, checkProfileIds: [...issue.checkProfileIds] };
   store.put('run',run,issue.workspaceId); return run;
 }
+export function qaChecksPending(checks: Pick<CheckRun, 'state'>[]) {
+  return checks.some(check => ['QUEUED','RUNNING','UNCERTAIN'].includes(check.state));
+}
+
 export function validateQaReport(store: Store, issue: Issue, actor: Actor, report: QaReport) {
   const snapshot = candidateSnapshot(store,issue);
   validateIntegration(store,issue);
@@ -59,7 +63,7 @@ export function validateQaReport(store: Store, issue: Issue, actor: Actor, repor
   verifySnapshot(snapshot,run.executionRoot!,true);
   if (new Set(report.results.map(r => r.criterionId)).size !== issue.criteria.length || report.results.length !== issue.criteria.length || report.results.some(r => !issue.criteria.includes(r.criterionId))) throw new DomainError('QA_COVERAGE_REQUIRED','Report every assigned criterion exactly once');
   const checks = store.list<CheckRun>('check',issue.workspaceId).filter(c => c.runId === run.id);
-  if (checks.some(c => ['QUEUED','RUNNING','UNCERTAIN'].includes(c.state))) throw new DomainError('CHECKS_PENDING','All checks must be settled before reporting');
+  if (qaChecksPending(checks)) throw new DomainError('CHECKS_PENDING','All checks must be settled before reporting');
   for (const result of report.results) {
     for (const id of result.evidenceIds) {
       const check = store.get<CheckRun>('check',id);
@@ -71,7 +75,7 @@ export function validateQaReport(store: Store, issue: Issue, actor: Actor, repor
   }
   if (report.findings.some(f => !issue.criteria.includes(f.criterionId))) throw new DomainError('QA_COVERAGE_REQUIRED','Findings must identify an assigned criterion');
   const referenced = new Set(report.results.flatMap(r => r.evidenceIds));
-  if (report.verdict === 'PASS' && (report.results.some(r => r.result !== 'PASS') || report.findings.some(f => f.severity !== 'INFO') || (run.checkProfileIds ?? []).some(id => !checks.some(c => c.profileId === id && c.state === 'PASSED' && referenced.has(c.id))))) throw new DomainError('EVIDENCE_MISSING','QA cannot pass with missing checks, failed criteria, or unresolved findings');
+  if (report.verdict === 'PASS' && (report.results.some(r => r.result !== 'PASS') || report.findings.some(f => f.severity === 'BLOCKER' || f.severity === 'MAJOR') || (run.checkProfileIds ?? []).some(id => !checks.some(c => c.profileId === id && c.state === 'PASSED' && referenced.has(c.id))))) throw new DomainError('EVIDENCE_MISSING','QA cannot pass with missing checks, failed criteria, or BLOCKER/MAJOR findings');
   if (report.verdict === 'FAIL' && (!report.findings.length || !report.results.some(r => r.result === 'FAIL'))) throw new DomainError('FINDING_REQUIRED','QA rejection requires a failed criterion and reproducible finding');
 }
 export function acceptanceDigest(store: Store, issue: Issue) {

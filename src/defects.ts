@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { type Actor, type Design, type Issue, type QaReport, type Snapshot, type Workspace, DomainError } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
+import type { DecisionRiskView } from './defect-contracts.js';
 import { defectCoreSchemas, defectFindingSchema, defectOrigins, defectRejectionSchema, defectSeverities, defectStates, type DefectFinding, type DefectListInput, type DefectObservation, type DefectProposalInput, type DefectRecord, type DefectRejectionInput, type DefectRejectionRecord, type DefectReportInput, type DefectSet, type DefectSource, type DefectTriageInput, type DefectWithdrawInput } from './defect-contracts.js';
 
 interface HistoricalDefect {
@@ -119,13 +120,15 @@ export class DefectRegistry {
 
   observe(issue: Issue): DefectObservation {
     const scope = this.scopeObservation(issue);
+    const snapshot = issue.candidate?.snapshotId ? maybe<Snapshot>(this.store, 'snapshot', issue.candidate.snapshotId) : null;
+    const sealed = snapshot && snapshot.workspaceId === issue.workspaceId && snapshot.issueId === issue.id &&
+      snapshot.candidateId === issue.candidate?.id ? snapshot : null;
     if (issue.state === 'DONE' && issue.acceptedDigest) {
       const approval = this.store.list<DeliveryApproval>('delivery_approval', issue.workspaceId).find(record => record.issueId === issue.id && record.decision === 'ACCEPT' && record.digest === issue.acceptedDigest && (!issue.candidate || record.candidateId === issue.candidate.id) && this.store.get<Actor>('actor', record.actorId).role === 'human');
-      if (approval) return { ...scope, kind: 'DELIVERY', candidateId: approval.candidateId, snapshotId: issue.candidate?.snapshotId ?? null, snapshotHash: issue.candidate?.hash ?? null, digest: approval.digest };
+      if (approval) return { ...scope, kind: 'DELIVERY', candidateId: approval.candidateId, snapshotId: sealed?.id ?? null, snapshotHash: sealed?.hash ?? null, digest: approval.digest };
     }
-    const snapshot = issue.candidate?.snapshotId ? maybe<Snapshot>(this.store, 'snapshot', issue.candidate.snapshotId) : null;
-    if (!snapshot || snapshot.workspaceId !== issue.workspaceId || snapshot.issueId !== issue.id || snapshot.candidateId !== issue.candidate?.id || snapshot.hash !== issue.candidate.hash) return scope;
-    const observed = { ...scope, kind: 'SNAPSHOT' as const, candidateId: snapshot.candidateId, snapshotId: snapshot.id, snapshotHash: snapshot.hash };
+    if (!sealed) return scope;
+    const observed = { ...scope, kind: 'SNAPSHOT' as const, candidateId: sealed.candidateId, snapshotId: sealed.id, snapshotHash: sealed.hash };
     if (issue.state !== 'USER_ACCEPTANCE') return observed;
     try { return { ...observed, kind: 'DELIVERY', digest: this.effects.deliveryDigest(issue) }; }
     catch (error) { if (error instanceof DomainError) return observed; throw error; }
@@ -321,7 +324,8 @@ export class DefectRegistry {
         return existing;
       }
       const requirement = issue.parentId ? this.store.get<Issue>('issue', issue.parentId) : issue;
-      const defects = a.classification === 'DEFECT' ? this.recordRejection(actor, workspaceId, issueId, approvalId, a.findings) : [];
+      const defects = a.classification === 'DEFECT' && a.findings?.length
+        ? this.recordRejection(actor, workspaceId, issueId, approvalId, a.findings) : [];
       this.store.event(workspaceId, actor, 'delivery_rejection_classified', issue.id, { approvalId, classification: a.classification, requirementId: requirement.id, designId: requirement.designId, defectIds: defects.map(value => value.id) });
       const event = this.store.db.prepare('SELECT last_insert_rowid() AS sequence').get() as { sequence: number };
       const record: DefectRejectionRecord = { id: approvalId, workspaceId, issueId, requirementId: requirement.id, actorId: actor.id, classification: a.classification, candidateId: approval.candidateId, digest: approval.digest, designId: requirement.designId, scopeRevision: requirement.scopeRevision, defectIds: defects.map(value => value.id), requestHash, eventSequence: event.sequence, at: approval.at };
@@ -404,5 +408,30 @@ export class DefectRegistry {
     const current = this.currentSets(workspaceId, issueId)[kind];
     const value = maybe<SetRevision>(this.store, 'defect_set', issueId);
     return { revision: value?.[kind].revision ?? 0, ...current };
+  }
+
+  visibleDecisionRisks(issue: Issue): DecisionRiskView {
+    const defects = this.all(issue.workspaceId, new Set([issue.id]))
+      .filter(record => record.state === 'OPEN' || record.state === 'PROPOSED')
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map(({ id, key, version, state, origin, severity, criterionIds, reproduce, expected, actual, source }) =>
+        ({ id, key, version, state, origin, severity, criterionIds, reproduce, expected, actual, source }));
+    const review = issue.qaReview ? maybe<{
+      issueId: string; stage: string; verdict: string; candidateId: string; snapshotId: string; reportId?: string
+    }>(this.store, 'review', issue.qaReview) : null;
+    const report = issue.candidate?.snapshotId && review?.stage === 'QA' && review.verdict === 'PASS' && review.issueId === issue.id &&
+      review.candidateId === issue.candidate.id && review.snapshotId === issue.candidate.snapshotId && review.reportId
+      ? maybe<QaReport>(this.store, 'qa_report', review.reportId) : null;
+    const currentReport = report && report.workspaceId === issue.workspaceId && report.issueId === issue.id &&
+      report.verdict === 'PASS' && report.snapshotId === issue.candidate?.snapshotId &&
+      (report.candidateId === undefined || report.candidateId === issue.candidate.id) ? report : null;
+    const qaReport = currentReport ? {
+      id: currentReport.id,
+      findings: (currentReport.findings ?? []).map((finding, index) => ({
+        ...finding, id: `${currentReport.id}:${index}`, version: 1
+      }))
+    } : null;
+    const digest = hash(canonical({ policy: 'visible-decision-risks/v1', issueId: issue.id, defects, qaReport }));
+    return { hash: digest, defects, qaReport };
   }
 }

@@ -66,6 +66,14 @@ export interface DefectSet {
   hash: string;
   members: { id: string; version: number }[];
 }
+export interface DecisionRiskView {
+  hash: string;
+  defects: Pick<DefectRecord, 'id' | 'key' | 'version' | 'state' | 'origin' | 'severity' | 'criterionIds' | 'reproduce' | 'expected' | 'actual' | 'source'>[];
+  qaReport: {
+    id: string;
+    findings: { id: string; version: number; criterionId: string; severity: DefectSeverity; expected: string; actual: string; reproduce: string }[];
+  } | null;
+}
 export interface DefectRejectionRecord {
   id: string;
   workspaceId: string;
@@ -95,7 +103,7 @@ const finding = {
 };
 export const defectFindingSchema = z.object(finding).strict();
 export const defectRejectionSchema = z.discriminatedUnion('classification', [
-  z.object({ classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).min(1).max(20) }).strict(),
+  z.object({ classification: z.literal('DEFECT'), findings: z.array(defectFindingSchema).max(20).optional() }).strict(),
   z.object({ classification: z.literal('SCOPE_CHANGE') }).strict(),
   z.object({ classification: z.literal('CLARIFICATION') }).strict()
 ]);
@@ -112,7 +120,7 @@ export const defectObservationSchema = z.object({
 export const defectCoreSchemas = {
   propose: z.object({ workspaceId: id, issueId: id, expectedVersion: version, ...finding }).strict(),
   report: z.object({ workspaceId: id, issueId: id, expectedVersion: version, observation: defectObservationSchema, ...finding }).strict(),
-  list: z.object({ workspaceId: id, issueId: id.optional(), state: z.enum(defectStates).optional(), severity: z.enum(defectSeverities).optional(), origin: z.enum(defectOrigins).optional(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(20) }).strict(),
+  list: z.object({ workspaceId: id, issueId: id.optional(), state: z.enum(defectStates).optional(), severity: z.enum(defectSeverities).optional(), origin: z.enum(defectOrigins).optional(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(20), view: z.enum(['summary','full']).default('summary') }).strict(),
   get: z.object({ workspaceId: id, defectId: id }).strict(),
   triage: z.object({
     workspaceId: id, defectId: id, expectedVersion: version, expectedIssueVersion: version,

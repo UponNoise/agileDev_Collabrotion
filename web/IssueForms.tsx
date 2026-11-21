@@ -1,12 +1,15 @@
 import { useDateText } from './Preferences';
 import { useText } from './Preferences';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Grant, Issue } from '../src/contracts';
 import { ApiError, command, errorText, formKey, harnessName, lines, mutation } from './api';
 import type { IssueData, WorkspaceData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
 import { PlanningForm } from './Planning';
 import { ScopeReview } from './ScopeReview';
+
+type ReviewedMutation = (operation: string, input: object) => Promise<unknown>;
 
 export type IssueDialog = {
   id: string;
@@ -27,6 +30,7 @@ export type IssueDialog = {
     | 'execution-recovery'
     | 'plan';
   packet?: IssueData;
+  refreshed?: boolean;
   parent?: Issue;
   action?: 'hold' | 'resume' | 'abandon' | 'reopen';
 };
@@ -34,12 +38,14 @@ export function IssueForm({
   dialog,
   workspace,
   onClose,
-  onSaved
+  onSaved,
+  onReload
 }: {
   dialog: IssueDialog;
   workspace: WorkspaceData;
   onClose(): void;
   onSaved(): void;
+  onReload(packet: IssueData): void;
 }) {
   const t = useText();
   const packet = dialog.packet;
@@ -51,6 +57,20 @@ export function IssueForm({
   const done = () => {
     onSaved();
     onClose();
+  };
+  const reloadNotice = dialog.refreshed ? (
+    <p className="notice" role="status">{t('Review the updated evidence before deciding again.')}</p>
+  ) : null;
+  const reviewedMutation: ReviewedMutation = async (operation, input) => {
+    try {
+      return await mutation(operation, input);
+    } catch (error) {
+      if (issue && error instanceof ApiError && ['VERSION_CONFLICT', 'APPROVAL_STALE', 'DECISION_RISKS_STALE'].includes(error.code)) {
+        const current = await command<IssueData>('ui_issue', { workspaceId: issue.workspaceId, issueId: issue.id });
+        onReload(current);
+      }
+      throw error;
+    }
   };
   const footer = (label: string) => (
     <footer className="form-footer">
@@ -206,7 +226,7 @@ export function IssueForm({
       </Modal>
     );
   if (dialog.kind === 'grants')
-    return <GrantForm packet={packet} workspace={workspace} onClose={onClose} onSaved={onSaved} />;
+    return <GrantForm packet={packet} workspace={workspace} onClose={onClose} onSaved={onSaved} reviewedMutation={reviewedMutation} reloadNotice={reloadNotice} />;
   if (dialog.kind === 'scope')
     return (
       <Modal title={t('Edit requirement scope')} subtitle={issue.key} onClose={onClose}>
@@ -370,18 +390,21 @@ export function IssueForm({
         <AsyncForm
           onDone={done}
           onSave={(data) =>
-            mutation('design_decide', {
+            reviewedMutation('design_decide', {
               workspaceId: issue.workspaceId,
               issueId: root.id,
               expectedVersion: root.version,
               ...formKey(data),
               designId: packet.design!.id,
+              designHash: packet.design!.hash,
+              riskHash: packet.designRisks?.hash,
               decision: String(data.get('decision')),
-              reason: String(data.get('reason'))
+              reason: String(data.get('reason')).trim() || undefined
             })
           }
         >
           <div className="form-body">
+            {reloadNotice}
             <p className="notice">{t('Your decision applies only to this revision.')}</p>
             <dl className="metadata">
               <dt>{t('Revision')}</dt>
@@ -404,8 +427,9 @@ export function IssueForm({
                 <li key={c}>{c}</li>
               ))}
             </ul>
+            <RiskEvidence risks={packet.designRisks} />
             <Field label={t('Decision reason')}>
-              <textarea name="reason" required rows={4} placeholder={t('Explain your decision')} />
+              <textarea name="reason" rows={4} placeholder={t('Required when requesting changes')} />
             </Field>
           </div>
           <footer className="form-footer">
@@ -413,10 +437,10 @@ export function IssueForm({
               {t('Cancel')}
             </button>
             <span className="footer-actions">
-              <button type="submit" name="decision" value="CHANGES_REQUESTED">
+              <button type="submit" name="decision" value="CHANGES_REQUESTED" disabled={!packet.designRisks}>
                 {t('Request changes')}
               </button>
-              <button className="primary" type="submit" name="decision" value="APPROVED">
+              <button className="primary" type="submit" name="decision" value="APPROVED" disabled={!packet.designRisks}>
                 {t('Approve design')}
               </button>
             </span>
@@ -425,7 +449,7 @@ export function IssueForm({
       </Modal>
     );
   if (dialog.kind === 'delivery')
-    return <DeliveryReview packet={packet} onClose={onClose} onSaved={onSaved} />;
+    return <DeliveryReview packet={packet} onClose={onClose} onSaved={onSaved} reviewedMutation={reviewedMutation} reloadNotice={reloadNotice} />;
   if (dialog.kind === 'assignment')
     return (
       <Modal title={t('Assign worker')} subtitle={issue.key} onClose={onClose}>
@@ -666,12 +690,18 @@ interface RejectionFinding {
 }
 const emptyFinding = (): RejectionFinding => ({ id: crypto.randomUUID(), severity: '', criterionIds: [], reproduce: '', expected: '', actual: '' });
 
-function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClose(): void; onSaved(): void }) {
+function DeliveryReview({ packet, onClose, onSaved, reviewedMutation, reloadNotice }: {
+  packet: IssueData;
+  onClose(): void;
+  onSaved(): void;
+  reviewedMutation: ReviewedMutation;
+  reloadNotice: ReactNode;
+}) {
   const t = useText();
   const issue = packet.issue;
   const [rejecting, setRejecting] = useState(false);
   const [classification, setClassification] = useState<typeof rejectionClasses[number] | ''>('');
-  const [findings, setFindings] = useState<RejectionFinding[]>(() => [emptyFinding()]);
+  const [findings, setFindings] = useState<RejectionFinding[]>([]);
   const [reason, setReason] = useState('');
   const classificationInput = useRef<HTMLSelectElement>(null);
   const acceptButton = useRef<HTMLButtonElement>(null);
@@ -685,18 +715,21 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
   return <Modal title={t('Review delivery')} subtitle={`${issue.key} · ${issue.title}`} onClose={onClose}>
     <AsyncForm onDone={() => { onSaved(); onClose(); }} onSave={data => {
       const decision = String(data.get('decision'));
-      const base = { workspaceId: issue.workspaceId, issueId: issue.id, expectedVersion: issue.version, ...formKey(data), candidateId: issue.candidate?.id, digest: packet.deliveryDigest, decision, reason: String(data.get('reason')) };
-      if (decision === 'ACCEPT') return mutation('delivery_decide', base);
+      const base = { workspaceId: issue.workspaceId, issueId: issue.id, expectedVersion: issue.version, ...formKey(data), candidateId: issue.candidate?.id, digest: packet.deliveryDigest, riskHash: packet.decisionRisks?.hash, decision, reason: String(data.get('reason')).trim() || undefined };
+      if (decision === 'ACCEPT') return reviewedMutation('delivery_decide', base);
       if (decision !== 'REJECT' || !classification || !rejectionClasses.includes(classification)) throw new ApiError('REJECTION_CLASS_REQUIRED', 'Choose a rejection classification explicitly.', 400);
-      if (classification !== 'DEFECT') return mutation('delivery_decide', { ...base, classification });
-      if (findings.length < 1 || findings.length > 20 || findings.some(finding => !finding.severity || !findingSeverities.includes(finding.severity) || !finding.reproduce.trim() || !finding.expected.trim() || !finding.actual.trim())) throw new ApiError('DEFECT_INPUT_REQUIRED', 'Provide 1 to 20 defects with severity, reproduction, expected and actual behavior.', 400);
+      if (classification !== 'DEFECT') return reviewedMutation('delivery_decide', { ...base, classification });
+      if (findings.length > 20 || findings.some(finding => !finding.severity || !findingSeverities.includes(finding.severity) || !finding.reproduce.trim() || !finding.expected.trim() || !finding.actual.trim())) throw new ApiError('DEFECT_INPUT_REQUIRED', 'For every defect you add, provide severity, reproduction, expected and actual behavior.', 400);
       if (findings.some(finding => finding.criterionIds.some(id => !issue.criteria.includes(id)))) throw new ApiError('CRITERIA_UNMAPPED', 'Select only criteria from this issue.', 400);
-      return mutation('delivery_decide', { ...base, classification, findings: findings.map(({ severity, criterionIds, reproduce, expected, actual }) => ({ severity, criterionIds, reproduce: reproduce.trim(), expected: expected.trim(), actual: actual.trim() })) });
+      return reviewedMutation('delivery_decide', { ...base, classification, findings: findings.map(({ severity, criterionIds, reproduce, expected, actual }) => ({ severity, criterionIds, reproduce: reproduce.trim(), expected: expected.trim(), actual: actual.trim() })) });
     }}>
       <div className="form-body">
+        {reloadNotice}
         <p className="notice">{t('Your decision applies only to this reviewed snapshot. Acceptance is saved if closure is still blocked.')}</p>
         <DeliveryEvidence packet={packet} />
-        <Field label={t('Decision reason')}><textarea name="reason" aria-label={t('Decision reason')} required rows={4} value={reason} onChange={event => setReason(event.target.value)} placeholder={t('Explain your acceptance or requested changes')} /></Field>
+        {!rejecting && packet.decisionRisks?.defects.some(defect => defect.state === 'OPEN' && defect.severity === 'MINOR')
+          ? <p className="notice">{t('Accepting acknowledges the open minor findings shown above.')}</p> : null}
+        <Field label={t('Decision reason')}><textarea name="reason" aria-label={t('Decision reason')} required={rejecting} rows={4} value={reason} onChange={event => setReason(event.target.value)} placeholder={t('Required when requesting changes')} /></Field>
         {rejecting ? <section aria-labelledby="rejection-heading">
           <h3 id="rejection-heading">{t('Classify requested rework')}</h3>
           <Field label={t('Rejection classification')}>
@@ -708,7 +741,7 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
             </select>
           </Field>
           {classification === 'SCOPE_CHANGE' ? <p className="notice">{t('Rework will require a different current design approved after this rejection. This does not create or approve a design.')}</p> : classification === 'CLARIFICATION' ? <p className="muted">{t('This records actionable feedback without creating a defect or requiring a new design approval.')}</p> : classification === 'DEFECT' ? <>
-            <p className="muted">{t('Record 1 to 20 defects observed on this exact delivery. Affected criteria are optional; select only criteria listed on this issue.')}</p>
+            <p className="muted">{t('Add up to 20 defects if you want to record structured findings.')}</p>
             {findings.map((finding, index) => <fieldset className="rejection-finding" key={finding.id}>
               <legend>{t('Defect {number}').replace('{number}', String(index + 1))}</legend>
               <Field label={t('Severity')}><select aria-label={t('Severity')} required value={finding.severity} onChange={event => updateFinding(finding.id, { severity: event.target.value as RejectionFinding['severity'] })}>
@@ -721,7 +754,7 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
               <Field label={t('Reproduction steps')}><textarea aria-label={t('Reproduction steps')} required maxLength={65536} rows={3} value={finding.reproduce} onChange={event => updateFinding(finding.id, { reproduce: event.target.value })} /></Field>
               <Field label={t('Expected behavior')}><textarea aria-label={t('Expected behavior')} required maxLength={65536} rows={3} value={finding.expected} onChange={event => updateFinding(finding.id, { expected: event.target.value })} /></Field>
               <Field label={t('Actual behavior')}><textarea aria-label={t('Actual behavior')} required maxLength={65536} rows={3} value={finding.actual} onChange={event => updateFinding(finding.id, { actual: event.target.value })} /></Field>
-              <button type="button" disabled={findings.length === 1} aria-label={t('Remove defect {number}').replace('{number}', String(index + 1))} onClick={() => setFindings(previous => previous.filter(value => value.id !== finding.id))}>{t('Remove defect')}</button>
+              <button type="button" aria-label={t('Remove defect {number}').replace('{number}', String(index + 1))} onClick={() => setFindings(previous => previous.filter(value => value.id !== finding.id))}>{t('Remove defect')}</button>
             </fieldset>)}
             <button type="button" disabled={findings.length >= 20} onClick={() => setFindings(previous => [...previous, emptyFinding()])}>{t('Add defect')}</button>
           </> : null}
@@ -732,14 +765,37 @@ function DeliveryReview({ packet, onClose, onSaved }: { packet: IssueData; onClo
         <button type="button" onClick={onClose}>{t('Cancel')}</button>
         <span className="footer-actions">{rejecting ? <>
           <button type="button" onClick={() => setRejecting(false)}>{t('Back to acceptance')}</button>
-          <button type="submit" name="decision" value="REJECT" disabled={!packet.deliveryDigest}>{t('Confirm rejection')}</button>
+          <button type="submit" name="decision" value="REJECT" disabled={!packet.deliveryDigest || !packet.decisionRisks?.qaReport}>{t('Confirm rejection')}</button>
         </> : <>
           <button type="button" onClick={() => setRejecting(true)}>{t('Request rework')}</button>
-          <button ref={acceptButton} type="submit" className="primary" name="decision" value="ACCEPT" disabled={!packet.deliveryDigest}>{t('Accept delivery')}</button>
+          <button ref={acceptButton} type="submit" className="primary" name="decision" value="ACCEPT" disabled={!packet.deliveryDigest || !packet.decisionRisks?.qaReport}>{t('Accept delivery')}</button>
         </>}</span>
       </footer>
     </AsyncForm>
   </Modal>;
+}
+
+function RiskEvidence({ risks }: { risks?: IssueData['decisionRisks'] }) {
+  const t = useText();
+  if (!risks) return null;
+  const findings = risks.qaReport?.findings ?? [];
+  if (!risks.defects.length && !findings.length) return null;
+  return (
+    <section aria-label={t('Risks included in this decision')}>
+      <h3>{t('Risks included in this decision')}</h3>
+      {[...risks.defects, ...findings].map(risk => (
+        <section className="evidence-block" key={risk.id}>
+          <h4>{'key' in risk ? `${risk.key} · ${t(risk.state)}` : t('Independent QA')} · {t(risk.severity)}</h4>
+          <dl className="metadata">
+            <dt>{t('Acceptance criteria')}</dt><dd>{'criterionIds' in risk ? risk.criterionIds.join(', ') : risk.criterionId}</dd>
+            <dt>{t('Expected behavior')}</dt><dd>{risk.expected}</dd>
+            <dt>{t('Actual behavior')}</dt><dd>{risk.actual}</dd>
+            <dt>{t('Reproduction steps')}</dt><dd>{risk.reproduce}</dd>
+          </dl>
+        </section>
+      ))}
+    </section>
+  );
 }
 
 function DeliveryEvidence({ packet }: { packet: IssueData }) {
@@ -747,6 +803,7 @@ function DeliveryEvidence({ packet }: { packet: IssueData }) {
   const issue = packet.issue;
   return (
     <>
+      <RiskEvidence risks={packet.decisionRisks} />
       <dl className="metadata">
         <dt>{t('Digest')}</dt>
         <dd className="mono">{packet.deliveryDigest}</dd>
@@ -858,12 +915,16 @@ function GrantForm({
   packet,
   workspace,
   onClose,
-  onSaved
+  onSaved,
+  reviewedMutation,
+  reloadNotice
 }: {
   packet: IssueData;
   workspace: WorkspaceData;
   onClose(): void;
   onSaved(): void;
+  reviewedMutation: ReviewedMutation;
+  reloadNotice: ReactNode;
 }) {
   const dateText = useDateText();
   const t = useText();
@@ -929,7 +990,7 @@ function GrantForm({
         <AsyncForm
           onDone={done}
           onSave={(data) =>
-            mutation('grant_create', {
+            (action === 'complete' ? reviewedMutation : mutation)('grant_create', {
               workspaceId: issue.workspaceId,
               issueId: issue.id,
               expectedVersion: issue.version,
@@ -941,12 +1002,13 @@ function GrantForm({
               maxUses: Number(data.get('uses')),
               reason: String(data.get('reason')),
               ...(action === 'complete'
-                ? { candidateId: issue.candidate?.id, digest: packet.deliveryDigest }
+                ? { candidateId: issue.candidate?.id, digest: packet.deliveryDigest, riskHash: packet.decisionRisks?.hash }
                 : {})
             })
           }
         >
           <div className="form-body">
+            {reloadNotice}
             <p className="notice">
               {t(
                 'Authorize one agent and one action on this exact issue. A parent hold also pauses descendant work; direct child actions require separate grants. Scope changes invalidate unused authority.'
@@ -1016,6 +1078,8 @@ function GrantForm({
                   )}
                 </p>
                 <DeliveryEvidence packet={packet} />
+                {packet.decisionRisks?.defects.some(defect => defect.state === 'OPEN' && defect.severity === 'MINOR')
+                  ? <p className="notice">{t('This authorization acknowledges the open minor findings shown above.')}</p> : null}
               </>
             ) : null}
             <Field label={t('Authorization reason')}>
@@ -1029,7 +1093,7 @@ function GrantForm({
             <button
               className="primary"
               type="submit"
-              disabled={action === 'complete' && !packet.deliveryDigest}
+              disabled={action === 'complete' && (!packet.deliveryDigest || !packet.decisionRisks?.qaReport)}
             >
               {t('Create authorization')}
             </button>

@@ -43,7 +43,12 @@ test('real SQLite service shares one issue across three independent MCP processe
     assert.equal((changed.structuredContent as any).issue.version, 2);
     const conflict = await clients[2]!.callTool({ name: 'issue_update', arguments: { workspaceId: workspace.id, issueId: issue.id, expectedVersion: 1, priority: 4, idempotencyKey: 'stale-update' } });
     assert.equal(conflict.isError, true);
-    assert.match(JSON.stringify(conflict.content), /VERSION_CONFLICT/);
+    const conflictText = (conflict.content as { type: string; text: string }[])[0]!.text;
+    const failure = JSON.parse(conflictText).error;
+    assert.equal(failure.code, 'VERSION_CONFLICT');
+    assert.equal(failure.details.currentVersion, 2);
+    assert.equal(failure.remedy.role, 'caller');
+    assert.match(failure.remedy.action, /current version/);
     const forbidden = await clients[2]!.callTool({ name: 'issue_transition', arguments: { workspaceId: workspace.id, issueId: issue.id, expectedVersion: 2, action: 'abandon', reason: 'No human grant', idempotencyKey: 'unauthorized' } });
     assert.equal(forbidden.isError, true); assert.match(JSON.stringify(forbidden.content), /ROLE_DENIED/);
   } finally {

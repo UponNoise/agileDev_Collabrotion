@@ -13,7 +13,7 @@ import { AdapterContext, AdapterResult, ExecutionAdapter, NativeAdapter } from '
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
 import { prepareExecution } from '../src/execution.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 async function waitFor(check: () => boolean, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -33,7 +33,7 @@ async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapte
   const git = (...args: string[]) => execFileSync('git', args, { cwd: source, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   git('init'); git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fixture');
   const store = new Store(join(root, 'service.sqlite')); const flow = new Workflow(store); const owner = store.bootstrap();
-  const call = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
+  const call = (actor: Actor, operation: string, input: object) => executeFixture(flow, actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(owner.actor, 'workspace_register', { root: source, name: 'Runner fixture', prefix: 'RUN' }).workspace;
   const run = (op: string, input: object) => call(owner.actor, op, { workspaceId: workspace.id, ...input });
   const parent = run('issue_create', { title: 'Isolated delivery', description: 'Deliver reviewed changes', criteria: ['AC-1'] }).issue;
@@ -100,7 +100,11 @@ test('logical workers cannot claim and every heartbeat/submission binds the exac
     const job = f.jobs[0]!; const principal = f.store.get<Actor>('actor',job.actorId);
     const change = (actor: Actor,op: string,extra: object = {}) => { const issue = f.store.get<Issue>('issue',job.issueId); return f.flow.execute(actor,op,{ workspaceId: f.workspace.id,issueId: issue.id,expectedVersion: issue.version,designId: job.designId,scopeRevision: job.scopeRevision,...extra,idempotencyKey: randomUUID() }); };
     assert.throws(() => change(principal,'work_claim'),(e: any) => e.code === 'ROLE_DENIED');
-    assert.deepEqual((f.flow.execute(principal,'issue_get',{ workspaceId: f.workspace.id,issueId: job.issueId }) as any).nextActions,['defect_propose']);
+    const brief = f.flow.execute(principal,'issue_get',{ workspaceId: f.workspace.id, issueId: job.issueId }) as any;
+    assert.deepEqual(brief.nextActions, [{ operation: 'defect_propose', args: {
+      workspaceId: f.workspace.id, issueId: job.issueId, expectedVersion: brief.issue.version
+    } }]);
+    assert.equal(brief.waitingOn.role, 'coordinator');
     await f.coordinator.tick(); await waitFor(() => adapter.contexts.length === 1);
     const context = adapter.contexts[0]!; const actor = f.store.authenticate(context.token);
     const baseline = f.store.get<Run>('run',job.id);

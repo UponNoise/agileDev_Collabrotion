@@ -11,7 +11,7 @@ import { Iteration, MembershipPrecondition } from '../src/iteration-contracts.js
 import { Store, canonical, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { createServer } from '../src/http.js';
-import { bindFixtureImplementation } from './fixtures.js';
+import { bindFixtureImplementation, executeFixture } from './fixtures.js';
 import { acceptanceDigest } from '../src/qa-policy.js';
 import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
@@ -22,7 +22,7 @@ function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'iterations-api-')); const source = join(directory,'source'); mkdirSync(source);
   const store = new Store(':memory:'); let now = Date.parse('2026-11-12T12:00:00Z'); const flow = new Workflow(store, () => now);
   const { actor: human, token } = store.bootstrap();
-  const execute = (actor: Actor, op: string, input: object) => (op === 'work_claim' ? flow.claimReservedWork(actor,input) : flow.execute(actor,op,input)) as any;
+  const execute = (actor: Actor, op: string, input: object) => (op === 'work_claim' ? flow.claimReservedWork(actor,input) : executeFixture(flow,actor,op,input)) as any;
   const workspace = execute(human,'workspace_register',{ root: source,name: 'Iteration API fixture',prefix: 'ITA',idempotencyKey: randomUUID() }).workspace;
   const readOps = new Set(['iteration_list','iteration_get','issue_get','gap_list','plan_get']);
   const cmd = (op: string,input: any = {},actor = human) => execute(actor,op,{ workspaceId: workspace.id,...(readOps.has(op) ? {} : { idempotencyKey: randomUUID() }),...input });

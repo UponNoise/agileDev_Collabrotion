@@ -15,6 +15,7 @@ import type {
   Snapshot,
   Workspace
 } from '../src/contracts';
+import type { DecisionRiskView } from '../src/defect-contracts';
 
 export type DisplayIssue = Issue & { url: string; titleSuffix: string; iterationId?: string | null; legacyIterationLabel?: string | null; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
 export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings' | 'decisions';
@@ -48,6 +49,8 @@ export interface IssueData {
   revision: number | null;
   designHistory: Design[];
   deliveryDigest: string | null;
+  decisionRisks?: DecisionRiskView;
+  designRisks?: DecisionRiskView;
   authorizationScopeHash: string;
   git: GitSubmissionView | null;
   closureBlocked: string[];
@@ -60,7 +63,7 @@ export interface IssueData {
     blocking: string[];
     children: Coverage['children'];
   } | null;
-  nextActions: string[];
+  nextActions: { operation: string; args: Record<string, unknown> }[];
   history: {
     sequence: number;
     actorId: string;

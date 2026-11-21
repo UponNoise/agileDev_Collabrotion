@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { Actor, DomainError, Issue, Run, agentOperations } from '../src/contracts.js';
 import { Store, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
-import { applyFixturePlan, bindFixtureImplementation } from './fixtures.js';
+import { applyFixturePlan, bindFixtureImplementation, executeFixture } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
@@ -18,7 +18,7 @@ function setup() {
   const human = store.bootstrap();
   let clock = Date.now();
   const workflow = new Workflow(store, () => clock);
-  const call = (actor: Actor, op: string, input: object = {}) => (op === 'work_claim' ? workflow.claimReservedWork.bind(workflow,actor) : workflow.execute.bind(workflow,actor,op))( { ...(['workspace_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'grant_list'].includes(op) ? {} : { idempotencyKey: randomUUID() }), ...input }) as any;
+  const call = (actor: Actor, op: string, input: object = {}) => (op === 'work_claim' ? workflow.claimReservedWork.bind(workflow,actor) : executeFixture.bind(null,workflow,actor,op))( { ...(['workspace_list', 'issue_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list', 'grant_list'].includes(op) ? {} : { idempotencyKey: randomUUID() }), ...input }) as any;
   const workspace = call(human.actor, 'workspace_register', { root, name: 'Test workspace', prefix: 'TEST' }).workspace;
   const enroll = (role: string) => call(human.actor, 'actor_enroll', { workspaceId: workspace.id, role, name: `${role} test` });
   const lead = enroll('lead'); const pm = enroll('pm'); const worker = enroll('worker'); const qa = enroll('qa');
@@ -118,6 +118,52 @@ test('draft creation, immutable IDs and rendered parent-title lineage', () => {
   assert.equal(read.key, task.key);
   const brief = f.run(f.lead.actor, 'issue_get', { issueId: task.id });
   assert.match(brief.issue.title, /^Reliable workspace binding——/);
+});
+
+test('issue brief reports the responsible party and binds a dispatchable action to the approved scope', () => {
+  const f = setup();
+  const task = f.task();
+  f.assign(task);
+  const blocked = f.run(f.worker.actor, 'issue_get', { issueId: task.id });
+  const approval = blocked.blockers.find((item: any) => item.code === 'DESIGN_APPROVAL_REQUIRED');
+  assert.equal(approval.remedy.role, 'lead');
+  assert.equal(approval.remedy.operation, 'design_set');
+  assert.deepEqual(approval.subjects, [f.parent.id]);
+  assert.equal(blocked.waitingOn.role, 'lead');
+  assert.equal(blocked.nextActions.some((item: any) => item.operation === 'work_claim'), false);
+  const expandedBlockers = f.run(f.worker.actor, 'issue_get', { issueId: task.id, view: 'full' }).blockers;
+  const planBlocker = expandedBlockers.find((item: any) => item.remedy.operation === 'plan_apply');
+  assert.deepEqual(planBlocker.subjects, [f.parent.id]);
+
+  f.approve();
+  const planned = f.run(f.pm.actor, 'issue_get', { issueId: task.id });
+  const dispatch = planned.nextActions.find((item: any) => item.operation === 'work_dispatch');
+  assert.equal(dispatch.args.designId, planned.design.id);
+  assert.equal(dispatch.args.scopeRevision, planned.issue.scopeRevision);
+  assert.equal(dispatch.args.expectedVersion, planned.issue.version);
+  assert.equal(planned.design.decision.reason, 'Approve this exact test design');
+  assert.equal(planned.waitingOn, null);
+  const result = f.run(f.pm.actor, dispatch.operation, dispatch.args);
+  assert.equal(result.run.state, 'QUEUED');
+  assert.equal(result.run.issueId, task.id);
+});
+
+test('agent issue and list defaults omit unbounded content and allow scoped expansion', () => {
+  const f = setup();
+  const task = f.task();
+  f.assign(task);
+  const description = 'Long acceptance requirement 窗口自适应🚀\r\n'.repeat(800);
+  f.change(f.lead.actor, 'issue_update', task.id, { description });
+  const brief = f.run(f.worker.actor, 'issue_get', { issueId: task.id });
+  const expanded = f.run(f.worker.actor, 'issue_get', { issueId: task.id, view: 'full' });
+  const page = f.run(f.worker.actor, 'issue_list');
+  assert.equal(brief.view, 'summary');
+  assert.ok(Buffer.byteLength(JSON.stringify(brief)) <= 2000);
+  assert.equal(Object.hasOwn(brief.issue, 'description'), false);
+  assert.equal(page.issues[0].id, task.id);
+  assert.equal(Object.hasOwn(page.issues[0], 'description'), false);
+  assert.equal(expanded.issue.description, description);
+  assert.equal(f.run(f.human.actor, 'issue_get', { issueId: task.id }).issue.description, description);
 });
 
 test('schema and role boundaries prevent injected state, human decisions and enrollment', () => {
@@ -235,6 +281,10 @@ test('legacy reset cannot clear uncertain managed execution or rewrite completio
 test('ancestor holds stop submission and material design changes invalidate active ownership', () => {
   const f = setup(); const task = f.task(); f.approve(); f.assign(task); f.claim(task);
   f.change(f.human.actor, 'issue_transition', f.parent.id, { action: 'hold', reason: 'Pause requirement' });
+  const brief = f.run(f.worker.actor, 'issue_get', { issueId: task.id });
+  const hold = brief.blockers.find((item: any) => item.code === 'ON_HOLD');
+  assert.deepEqual(hold.subjects, [f.parent.id]);
+  assert.equal(hold.remedy.operation, 'issue_transition');
   assert.throws(() => f.change(f.execution(task.id).actor, 'work_heartbeat', task.id, { fence: f.current(task.id).fence }), rejects('NOT_READY'));
   f.change(f.human.actor, 'issue_transition', f.parent.id, { action: 'resume', reason: 'Continue requirement' });
   f.execution(task.id).stop(f.human.actor);

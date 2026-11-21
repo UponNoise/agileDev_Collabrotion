@@ -5,6 +5,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+export function fixtureDecisionInput(flow: Workflow, actor: Actor, operation: string, input: object) {
+  const { workspaceId, issueId, action } = input as Record<string, unknown>;
+  if (actor.role !== 'human' ||
+      !(operation === 'design_decide' || operation === 'delivery_decide' || (operation === 'grant_create' && action === 'complete'))) return input;
+  const packet = flow.execute(actor, 'issue_get', { workspaceId, issueId }) as {
+    design: { hash: string } | null; designRisks?: { hash: string }; decisionRisks?: { hash: string }
+  };
+  const bindings = operation === 'design_decide'
+    ? { designHash: packet.design?.hash, riskHash: packet.designRisks?.hash }
+    : { riskHash: packet.decisionRisks?.hash };
+  return { ...bindings, ...input };
+}
+
+export function executeFixture(flow: Workflow, actor: Actor, operation: string, input: object) {
+  return flow.execute(actor, operation, fixtureDecisionInput(flow, actor, operation, input));
+}
+
 export function bindFixtureImplementation(flow: Workflow, dispatcher: Actor, principal: Actor, issueId: string) {
   const issue = flow.store.get<Issue>('issue',issueId);
   const queued = flow.execute(dispatcher,'work_dispatch',{ workspaceId: issue.workspaceId,issueId,expectedVersion: issue.version,designId: flow.design(issue)!.id,scopeRevision: issue.scopeRevision,idempotencyKey: randomUUID() }) as { run: Run };

@@ -522,6 +522,12 @@ export function App() {
             dialog={dialog}
             workspace={current}
             onSaved={saved}
+            onReload={(packet) => {
+              setDialog((previous) => previous?.id === dialog.id
+                ? { ...previous, id: crypto.randomUUID(), packet, refreshed: true }
+                : previous);
+              saved();
+            }}
             onClose={() => setDialog((previous) => (previous?.id === dialog.id ? null : previous))}
           />
         ) : null}

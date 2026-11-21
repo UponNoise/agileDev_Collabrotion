@@ -13,7 +13,7 @@ import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/adapters.js';
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
-import { applyFixturePlan } from './fixtures.js';
+import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 async function until(check: () => boolean) {
   const deadline = Date.now() + 12000;
@@ -50,7 +50,7 @@ test(
     const flow = new Workflow(store);
     const human = store.bootstrap().actor;
     const call = (actor: Actor, op: string, input: object) =>
-      flow.execute(actor, op, {
+      executeFixture(flow, actor, op, {
         ...input,
         ...(['issue_get', 'plan_get', 'integration_get', 'artifact_read'].includes(op)
           ? {}
@@ -283,7 +283,13 @@ test(
       assert.equal(store.list<Run>('run').filter((r) => r.issueId === parent.id).length, 0);
       change('issue_assign', parent.id, { actorId: workers[2].actor.id, harness: 'dsh' });
       change('qa_configure', parent.id, { actorId: qa.id, harness: 'codex', checkProfileIds: [profiles[2].id] });
-      dispatch(parent.id);
+      const parentBrief = flow.execute(pm, 'issue_get', { workspaceId: workspace.id, issueId: parent.id }) as any;
+      const integrationAction = parentBrief.nextActions.find((action: any) => action.operation === 'work_dispatch');
+      assert.ok(integrationAction);
+      assert.equal(parentBrief.waitingOn, null);
+      assert.equal(integrationAction.args.designId, current(parent.id).designId);
+      assert.equal(integrationAction.args.scopeRevision, current(parent.id).scopeRevision);
+      flow.execute(pm, integrationAction.operation, { ...integrationAction.args, idempotencyKey: randomUUID() });
       await until(() => adapter.contexts.length === 5);
       const integration = adapter.contexts[4]!;
       assert.match(integration.prompt, /parent integration assignment/);

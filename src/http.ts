@@ -4,6 +4,7 @@ import { Actor, DomainError } from './contracts.js';
 import { Store } from './store.js';
 import { Workflow } from './workflow.js';
 import { WebSessions,browserCookie } from './web-session.js';
+import { commandFailure } from './issue-brief.js';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { dirname,resolve } from 'node:path';
@@ -37,10 +38,10 @@ export function createServer(store: Store, lifecycle?: { instance: string; stop(
     }
   });
   app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof DomainError) return reply.code(error.statusCode).send({ ok: false, error: { code: error.code, message: error.message, details: error.details } });
-    if (error instanceof ZodError) return reply.code(400).send({ ok: false, error: { code: 'INVALID_INPUT', message: 'Invalid request' } });
+    if (error instanceof DomainError) return reply.code(error.statusCode).send({ ok: false, error: commandFailure(error.code, error.message, error.details) });
+    if (error instanceof ZodError) return reply.code(400).send({ ok: false, error: commandFailure('INVALID_INPUT', 'Invalid request') });
     const status = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
-    return reply.code(status >= 400 && status < 500 ? status : 500).send({ ok: false, error: { code: status === 400 ? 'INVALID_INPUT' : 'INTERNAL_ERROR', message: 'Request could not be completed' } });
+    return reply.code(status >= 400 && status < 500 ? status : 500).send({ ok: false, error: commandFailure(status === 400 ? 'INVALID_INPUT' : 'INTERNAL_ERROR', 'Request could not be completed') });
   });
   app.get('/health', () => ({ name: 'agiledev-collaboration', version: '0.1.0', ...(lifecycle ? { instance: lifecycle.instance, pid: process.pid } : {}) }));
   app.post('/api/service/stop', (request, reply) => {
