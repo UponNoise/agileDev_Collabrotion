@@ -70,7 +70,7 @@ All mutations require authenticated actor scope, `expected_version`, and an idem
 | `LEAD_REVIEW:FINAL` | Pass / assigned lead | `USER_ACCEPTANCE` | Initial review + QA still current; requirement fit and integration implications assessed |
 | `LEAD_REVIEW:FINAL` | Fail / assigned lead | `LEAD_REJECTED` | Recorded final-stage rejection; rework owner retained or explicitly reassigned |
 | `USER_ACCEPTANCE` | Reject / human | `USER_REJECTED` | Exact snapshot/revision and actionable feedback; classification `DEFECT` (creates defects on the rejected digest), `SCOPE_CHANGE` (rework blocked by `SCOPE_REVISION_REQUIRED` until a newer approved design), or `CLARIFICATION` |
-| `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest; optional MINOR waivers in the same transaction; batch acceptance per §5; all closure checks pass |
+| `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest and visible risk set; acknowledges open MINOR findings (§12); all closure checks pass |
 | `USER_ACCEPTANCE` | Complete / lead or PM | `DONE` | Exact-snapshot human close grant or prior current human acceptance; all closure checks still pass |
 | Any rework state | Claim rework / assigned worker | `IN_PROGRESS` | Valid assignment/binding, dependencies, fresh lease, required approved scope |
 | Nonterminal state | Hold / human or granted lead/PM | `ON_HOLD` | Reason, action scope, prior state/stage saved; cancellation/reconciliation of active runs requested |
@@ -121,6 +121,8 @@ A completion grant additionally binds the currently reviewed candidate and deliv
 For MVP, human decisions/grants originate in the authenticated web approval flow. A host adapter may later accept direct human events only after AC14 proves attribution; a model's statement that the user agreed is never such an event. Batch decisions enumerate exact item versions/digests; no hidden approval of unseen items is allowed.
 
 ### Decision inbox and batch acceptance, 2026-11-09
+
+R2 (§12) withdraws batch acceptance; the rest of this subsection stands.
 
 Accepted revision R1 (D11, D13, D14): the service derives the human decision inbox from current records. It lists designs `IN_REVIEW`, deliveries needing a current valid decision on the digest and applicable decision defect set, unresolved abandoned-child scope, uncertain/legacy-unbound execution, accepted deliveries still in `USER_ACCEPTANCE`, and defect proposals. Entries bind exact versions and revision hashes/digests. The existing `CLOSURE_BLOCKED` kind covers both guard-blocked and `READY_TO_COMPLETE` accepted deliveries: expose named blockers or an authorized `delivery_complete` action, and retain the entry until explicit completion. There is no separate mutable queue and no agent create/dismiss/resolve operation. `pendingSince` is the first unresolved pending event for that exact decision target; retries, reads, metadata edits, and guard recovery do not reset it. A genuinely replaced target or a completed-and-reopened decision cycle starts a new pending epoch. The default 24-hour workspace threshold produces `HUMAN_DECISION_AGING`.
 
@@ -181,6 +183,8 @@ The report cannot advance the issue until the native QA producer has stopped suc
 Final lead pass exposes an exact delivery digest. Human `delivery_decide` can accept/reject only that digest. Reviewed artifact mode can close after all guards; Git mode retains acceptance with closure blocked until remote commit verification matches that snapshot. These commands refine the existing gates and do not waive Git, parent integration, UI/human attribution, minor-risk waiver, or release acceptance requirements. The present implementation is stricter than the target waiver policy: any non-INFO current QA finding prevents a pass.
 
 ### Defect register, verification, and waivers, 2026-11-09
+
+R2 (§12) defers versioned defect sets, explicit per-defect QA verification and separate waivers until after P5; MINOR findings and rejection follow §12.
 
 Accepted revision R1 (D11, D15, D16) makes defects register records with a workspace-local key, origin (`QA`, `USER_ACCEPTANCE`, or `ESCAPED`), severity, criterion IDs, reproduction, expected and actual behavior, the observed snapshot or digest, reporter, owner, and source record. Their states are `PROPOSED`, `OPEN`, `RESOLVED`, `WAIVED`, `REJECTED`, `WITHDRAWN`, and proposal-only `CONVERTED`.
 
@@ -295,3 +299,38 @@ Accepted revision R1 (D12) makes iterations planning records, not issues. Each h
 Human, lead, and PM create, edit, start, and close iterations. Every membership mutation, including `plan_apply`/`issue_update` entry points, increments the affected source/destination iteration's `membershipRevision` and updates a canonical hash of the complete sorted member ID set. Close binds the iteration version, full membership revision/hash, all member issue versions, and every unfinished disposition; carry-over also binds each destination iteration version and complete membership revision/hash. Validate and update all touched sets/issues atomically: add/remove, transfer, or member-state races fail the whole command without partial carry-over. Legacy-label adoption binds and rechecks the complete eligible issue ID/version set, including newly eligible additions, and the destination set; it never adopts an unseen match. Nothing rolls over on a timer.
 
 Closing seals immutable historical membership and an event-derived summary. Finished members have no live iteration membership; unfinished members move only by their explicit carry-over/backlog disposition. A later authorized reopen of a former closed-iteration member starts in the current backlog, preserving the closed membership/summary and approval history; it never reactivates or rewrites the closed iteration. Existing labels remain read-only until explicit adoption. Iteration dates, forecasts, membership, and close affect planning metadata only, not artifact approval, grants, capacity, or issue lifecycle. An active overdue iteration yields advisory `ITERATION_OVERDUE`.
+
+## 12. Revision R2: decision presentation, agent messages, and consult sessions
+
+Status: accepted by the user on 2026-11-14 with D17–D24; not implemented. Rationale, details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md) §13. Where this section differs from sections 1–11, this section governs.
+
+### Human decisions
+
+Presentation changes no gate. A decision card submits the same design ID and hash, candidate ID and digest, and issue version that the commands require today, plus the hash of the visible risk set: the ID and version of every open or proposed defect on the issue and of every finding in the current QA report. Any change to these is a stale target and is presented again. A client never resubmits a decision for content the person has not seen, and resubmits once only when the issue version is the sole difference. A reason stays required to request changes, reject a delivery, abandon, change scope, and reconcile execution, and becomes optional for `APPROVED` and `ACCEPT`. A person rejects a delivery by choosing Needs fixes, Requirement changed or Needs clarification, which records `DEFECT`, `SCOPE_CHANGE` or `CLARIFICATION` with no default, and gives one reason. Structured findings are optional, and nobody reclassifies a rejection later. A person triages agent defect proposals on a Decisions card. Batch delivery acceptance is withdrawn.
+
+MINOR findings: a QA report may pass with MINOR and INFO findings; a BLOCKER or MAJOR finding, or any required criterion that is not PASS, still fails it. Accepting a delivery acknowledges the open MINOR findings shown and records their IDs and versions with the digest; this is the explicit human acceptance of residual risk that section 7 requires. Completion is blocked by an open BLOCKER or MAJOR defect, and by an open MINOR defect that the current acceptance did not acknowledge at its current version. Separate waiver commands, versioned defect sets and explicit per-defect QA verification are deferred until after P5.
+
+### Agent messages
+
+A message is an immutable record in an issue's thread. It has a sender taken from the credential, a recipient (a role on that issue, a named actor, or the owner), a kind (`QUESTION`, `REPLY`, `NOTE`), a bounded body, and an optional `replyTo`. Both parties must already have scope on the issue.
+
+- A message is information and never authority. No message approves, accepts, reviews, waives, completes, assigns or changes scope, whoever sends it, the owner included. No command accepts a message as evidence of a human decision or a QA result.
+- A message is visible to its sender, its addressees, and the owner, lead and PM of its issue. Workers and QA see only messages they sent or received, on every read path: list, wait, reply, brief and consult context.
+- The worker and the QA reviewer of the same issue cannot message each other in either direction. The service records the messages a QA run sent or received and attaches them to that run's report evidence.
+- Lead and PM may address a question to the owner. The inbox derives one entry from the unanswered message, and the owner's reply is a message. Workers and QA ask lead or PM.
+- A recipient treats message content as untrusted peer input within its own role and the approved scope.
+
+### Consult runs
+
+When a question requests it and the workspace allows it, the coordinator starts one bounded consult run for the recipient in the recipient's harness. It runs as a separate run-scoped actor that the service authorizes for read operations and `message_send` only, whatever its host lists, and its context holds only messages visible to the recipient. It cannot submit work, reviews or QA reports, and it changes no issue state. A final text answer without the tool call is not a reply.
+
+| Rule | Default |
+| --- | --- |
+| Workspace switch | Off until the owner turns it on |
+| Wakes per issue per day | 3 |
+| Consult run time limit | 10 minutes |
+| Concurrency | Counts toward the active-run cap |
+| Nesting | A consult run cannot wake; replies never wake |
+| Failure | An unavailable harness, failed authentication or exhausted budget stores the message and reports the reason; no retry |
+
+Wake modes `fresh`, `resume` and `queue` are capability-reported for each harness and offered only after verification. Rework and re-test prompts carry the previous rejection and its findings.

@@ -58,7 +58,7 @@ Priority `M` means mandatory for the P5 MVP; `L` means later. Acceptance IDs ref
 | FR12 | M | Bind implementation, test, lead, QA, and human acceptance evidence to the reviewed requirement/artifact revision | AC05, AC20 |
 | FR13 | M | Require a final immutable, repository-verified commit link before Git-backed work reaches `DONE`; preserve non-Git evidence without fabricated commits | AC21–AC23 |
 | FR14 | M | Give each item a stable direct URL, searchable key, parent links, documents, and complete transition/decision history | AC09, AC24 |
-| FR15 | M | Support backlog/dependencies, optional estimates/dates, optional iteration records with versioned complete membership and atomic close/carry-over/adoption dispositions, and bounded concurrency | AC08, AC25, AC40 |
+| FR15 | M | Support backlog/dependencies, optional estimates/dates, optional iteration records with versioned complete membership and atomic close/carry-over/adoption dispositions, and bounded concurrency. R2 defers iteration web views, charts, export and adoption UI until after P5 | AC08, AC25, AC40 |
 | FR16 | M | Visual web UI supports workspace switching, parent/task views, board/list, item details, design review, acceptance, and a gap panel | AC26, AC27 |
 | FR17 | M | Compact agent tools return scoped work packets, legal next actions, and concrete blocker reasons without requiring UI automation | AC28 |
 | FR18 | M | Codex, DSH, and Claude Code can all operate the same workspace data through documented installation/configuration paths | AC29, AC38 |
@@ -70,8 +70,11 @@ Priority `M` means mandatory for the P5 MVP; `L` means later. Acceptance IDs ref
 | FR24 | M | Keep issue data/evidence local and workspace-scoped by default; protect human approval channels and exclude private records from public repository sync | AC14, AC36 |
 | FR25 | L | Optional GitHub/Jira/Linear issue projection with explicit field ownership and synchronization policy | Separate P6 spec |
 | FR26 | L | Shared server, multiple human accounts, workspace membership, remote runners, and remote notification channels such as chat, email, or webhooks; local desktop signals belong to FR27 | Separate P6 spec |
-| FR27 | M | Derive the human inbox from exact authoritative targets with first-unresolved ages and accepted-ready completion actions; provide complete readable evidence and exact target/defect-set-bound batch acceptance; local signals never decide unseen/changed items | AC14, AC22, AC39 |
-| FR28 | M | Track QA/user/escaped defects with human triage of agent proposals, complete versioned QA/decision defect sets, explicit independent verification, and human MINOR waivers bound to the artifact digest and resulting defect evidence | AC19, AC20, AC41 |
+| FR27 | M | Derive the human inbox from exact authoritative targets with first-unresolved ages and accepted-ready completion actions; provide complete readable evidence for each decision; local signals never decide unseen/changed items. R2 withdraws batch acceptance and operating-system notifications | AC14, AC22, AC39 |
+| FR28 | M | Track QA/user/escaped defects with human triage of agent proposals on a Decisions card; let a QA pass carry MINOR findings that a person acknowledges by accepting the delivery digest; carry rejection reasons and findings into rework and re-test. R2 defers versioned QA/decision defect sets, explicit per-defect verification and separate MINOR waivers until after P5 | AC19, AC20, AC41 |
+| FR29 | M | Present each human decision on one card with the content it needs, in plain language, with exact identifiers under audit details; require a reason only for negative decisions; bind exact revisions, digests and the visible risk set, and present any change again | AC42, AC14, AC39 |
+| FR30 | M | Advertise tools by role, describe every operation and property, return briefs with remedies and exact next-action arguments, and make designs, decision reasons and prior rejections readable to the agents that need them | AC43, AC28 |
+| FR31 | M | Let agents exchange issue-scoped messages and, where the owner allows it, start bounded consult sessions in another harness; messages carry no authority, are visible per message, and never cross the worker–QA independence wall | AC44, AC11, AC14 |
 
 ## 5. User journeys
 
@@ -119,12 +122,12 @@ These are proposed release budgets, not measured results. Reference environment:
 
 | ID | Target | Verification |
 | --- | --- | --- |
-| NF01 | 10,000 issues and 100,000 audit events; list/summary reads p95 <500 ms and local mutations p95 <1 s, excluding provider/network time | AC37 |
+| NF01 | 1,000 issues and 10,000 audit events for the MVP, with 10,000 and 100,000 as the post-MVP target (R2); list/summary reads p95 <500 ms and local mutations p95 <1 s, excluding provider/network time | AC37 |
 | NF02 | Four concurrent active runs, atomic ownership, no lost accepted mutation, deterministic stale-version rejection | AC15, AC37 |
 | NF03 | Web reflects a committed update within 2 s on a healthy local connection; resync after reconnect produces current state | AC26, AC35 |
 | NF04 | Healthy-service retry/restart scenarios preserve committed records; backup/restore reproduces record counts and blob hashes | AC33, AC35 |
 | NF05 | Default agent brief <=2,000 tokens under a recorded tokenizer; default list page <=20 compact rows, with expandable evidence | AC28 |
-| NF06 | Keyboard-operable critical flows, visible focus, labeled status/errors, no color-only meaning, usable at 1280×720 and 390×844 | AC27 |
+| NF06 | Keyboard-operable critical flows, visible focus, labeled status/errors, no color-only meaning, usable at 1280×720 and from 50% to 200% zoom; R2 removes the separate 390×844 check | AC27 |
 | NF07 | No secrets in logs/exports by default, no workspace access outside authorized bindings, and no public listening interface in local mode | AC36 |
 
 ## 8. Scope boundaries
@@ -138,6 +141,8 @@ The user also requested Chinese/English interface selection in Settings, modifie
 Service ownership correction, 2026-11-09: persistent startup belongs to the desktop or an explicit local-owner launcher. MCP, ordinary commands, and connection generation attach to an already verified owner-running authority; an offline client reports `SERVICE_OWNER_START_REQUIRED`. Native Codex testing showed that a daemon born inside its MCP host can disappear with a graceful host exit, while an independently owner-prestarted daemon survives the same lifecycle. No process-isolation escape is part of the design. AC29/35/38 must exercise host disconnect, offline non-start, explicit owner recovery, and reconnect to retained data. This correction preserves the desktop-first product scope and does not waive any release gate or approve product-managed work.
 
 Accepted scope revision R1, 2026-11-09: the user accepted [revision R1](proposals/r1-inbox-iterations-defects.md) with every proposed default. FR27 and FR28 become mandatory, and FR15, FR22, and FR26 are refined as shown above. Local desktop attention signals are in MVP scope; operating-system notifications are capability-reported, and remote notification channels remain FR26. Git or CI events and automation may record facts, trigger verification, or send reminders, but never advance a gate. This revision does not approve any requirement or delivery managed inside the application.
+
+Accepted scope revision R2, 2026-11-14: the user accepted [revision R2](proposals/r2-surfaces-coordination-scope.md) with every proposed default. FR29–FR31 become mandatory, FR15, FR27 and FR28 are narrowed as shown above, and NF01 and NF06 are amended. Human decisions are presented on one card in plain language, agent tools are scoped and described by role, and agents may exchange issue-scoped messages and start bounded consult sessions in another harness where the owner allows it. An independent specification review asked for five clarifications, answered in R2 §13 without changing the accepted defaults. R2 relaxes no gate: human decisions stay human-only and exactly bound, independent QA is unchanged, and agent messages carry no authority. Nothing in R2 is implemented yet, and this revision approves no requirement or delivery managed by the product.
 
 The MVP includes real dispatch and independent QA, not only a board. Desktop packaging, common MCP access, and browser fallback must be proven in P1/P5. Optional native harness packages and embedded surfaces require their own evidence before being claimed as supported.
 
@@ -175,11 +180,24 @@ Revision R1 decisions, accepted by the user on 2026-11-09 with every proposed de
 
 R1 safety clarifications preserve D11–D16: Git/CI/verifier observations change facts/readiness only, while existing explicit scoped commands retain their authorization. Accepted pending work needs explicit completion without a fabricated second approval. Complete membership/defect-set snapshots are concurrency preconditions, not new approval roles or rewritten artifact digests. Closed history and unchanged pre-R1 evidence keep their original identities; affected fresh rounds/current decisions use the clarified contract.
 
+Revision R2 decisions, accepted by the user on 2026-11-14 with every proposed default. Details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md).
+
+| ID | Accepted decision | Effect |
+| --- | --- | --- |
+| D17 | One-card human decisions in plain language (H1–H9) are mandatory for P5; a reason is optional when approving a design or accepting a delivery; web changes follow prototype round 3 | Adds FR29; amends FR27 |
+| D18 | Role-scoped, fully described agent tools and briefs with remedies (G1–G7) are mandatory for P5; the NF05 brief budget stays | Adds FR30 |
+| D19 | Agent messages and `fresh` consult runs (C1–C9) are mandatory for P5; wake is off per workspace until the owner enables it; lead and PM may ask the owner through one inbox card; `resume` and `queue` follow a spike | Adds FR31 |
+| D20 | Withdraw batch delivery acceptance and operating-system notifications; remove the aging threshold from the UI | Narrows FR27; supersedes D14 and the batch part of D11 |
+| D21 | Freeze the merged iteration service; defer iteration web views, charts, export and adoption UI until after P5 | Narrows FR15 for the MVP; D12 stays |
+| D22 | Keep the defect register slice if its review passes; a person rejects with one reason; defer versioned defect sets, explicit per-defect QA verification and MINOR waivers until after P5 | Narrows FR28; supersedes D15 for the MVP; D16 stays |
+| D23 | Narrow P5 acceptance to 1280×720, 1,000 issues and 10,000 events, the portable package, and artifact or single-repository closure without reparenting | Amends NF01, NF06, AC27, AC37, AC38 |
+| D24 | One status page, one generated agent reference, dated evidence archived unchanged | Documentation only |
+
 ## 10. Definition of ready and done
 
 **Ready to implement:** user-approved applicable design revision; concrete task scope and acceptance mapping; assigned accountable worker; cleared blocking dependencies; valid execution binding; available concurrency/cost policy; no effective hold; no unresolved readiness blockers. Dates and estimates remain optional.
 
-**Task done:** current artifact/review/QA and applicable defect-set evidence; human acceptance of that snapshot or exact authorized delegation; non-INFO defects resolved or current MINOR waivers; required Git/non-Git proof; an explicit authorized acceptance/completion transaction with its audit event. Fact callbacks cannot supply that transition.
+**Task done:** current artifact/review/QA and applicable defect evidence; human acceptance of that snapshot or exact authorized delegation; non-INFO defects resolved, or open MINOR defects acknowledged by the current human acceptance (R2 §13.1); required Git/non-Git proof; an explicit authorized acceptance/completion transaction with its audit event. Fact callbacks cannot supply that transition.
 
 **Parent done:** applicable design approved; nonempty in-scope delivery; every in-scope child done; exclusions approved; all parent criteria passed; current integration, lead/QA, defect-set and human evidence. The service derives readiness from these facts; an explicit authorized parent acceptance/completion command records DONE. Neither an empty child set nor ABANDONED nor a callback alone completes it.
 

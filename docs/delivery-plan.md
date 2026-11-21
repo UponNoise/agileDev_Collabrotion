@@ -26,8 +26,8 @@ W1 clarifies accepted behavior only; no R1 runtime pass or product-managed appro
 | P1 Compatibility proof | Reproducible spike results for all target entries, workspace binding, scoped children, UI route, execution recovery, Windows packaging | AC01/02/14/17/29/30 feasibility probes; exact host/runtime versions and negotiated transports; chosen dependency pins; every failed mandatory capability resolved or explicitly rescoped | M, high uncertainty |
 | P2 Workflow authority | Domain model, migrations, guarded commands, approvals/grants, audit, idempotency, parent rules, local storage | AC03–16, AC20–24, AC31/32/35/36 domain/storage tests; no mock success for unimplemented provider verification | L |
 | P3 Human + agent vertical slice | Browser workspace and compact MCP tools with real daemon storage; design review through user acceptance using fixture evidence clearly labeled | AC01–09, AC14/24–30/34/36/39/40 and the AC41 register parts; actual MCP reads/writes from all three entries; keyboard/UI checks; every write shares domain enforcement | L |
-| P4 Managed collaboration | PM planning/dispatch, isolated workers, independent QA/rework, Git verification and recovery | AC10–23/25/31–35 plus AC39 callback/explicit-completion and AC41 set/waiver cases, using real runs and a disposable repository; four-run ownership; exact evidence with no callback-driven gate movement | XL |
-| P5 Packaged MVP | Desktop application, common MCP entry, installation/upgrade/recovery guidance, three-entry end-to-end acceptance, published source/release artifacts | All mandatory AC01–41 under the accepted amendments; recorded supported matrix; Windows fresh-install run; no unresolved blocking defects; human release acceptance | L |
+| P4 Managed collaboration | PM planning/dispatch, isolated workers, independent QA/rework, Git verification and recovery | AC10–23/25/31–35 plus AC39 callback/explicit-completion and AC41 register, triage and MINOR acknowledgement cases (R2), using real runs and a disposable repository; four-run ownership; exact evidence with no callback-driven gate movement | XL |
+| P5 Packaged MVP | Desktop application, common MCP entry, installation/upgrade/recovery guidance, three-entry end-to-end acceptance, published source/release artifacts | All mandatory AC01–44 under the accepted amendments; recorded supported matrix; Windows portable-package run; no unresolved blocking defects; human release acceptance | L |
 | P6 Shared team extension | Multi-human server, memberships, remote companions, optional external issue projections | New approved spec: tenant/workspace boundaries, synchronization, operations, privacy, migration and recovery acceptance | Unestimated |
 
 The sizes compare implementation scope, not elapsed time or guaranteed agent speed. After P1, PM estimates tasks against measured adapter complexity and available capacity, then sets optional dates/iterations. No fixed delivery date or token-cost promise is made in P0.
@@ -72,11 +72,18 @@ These are **planned records**, not GitHub issues and not approved/in-progress as
 | B15 | Managed collaboration——[Feature] Git: verify immutable commit evidence -> traceable closure | Git integration worker | B13 | AC21–23 |
 | B16 | Managed collaboration——[Test] Recovery: interrupt and restart runs -> no false completion or duplicate execution | Reliability worker | B13–B15 | AC18/33/35 |
 | B17 | Packaged MVP——[Feature] Desktop: package application and MCP entry -> installable shared workspace | Integration worker | P4 gate | AC29/30/38 |
-| B18 | Packaged MVP——[Test] Delivery: exercise complete workflow -> accepted three-harness release | Independent QA | B17, B19–B22 | AC01–41 |
+| B18 | Packaged MVP——[Test] Delivery: exercise complete workflow -> accepted three-harness release | Independent QA | B17, B19–B28 | AC01–44 |
 | B19 | Human attention——[Feature] Inbox: exact pending/ready targets -> complete batch evidence and explicit completion | Full-stack worker | B10/B12, W1 and Git callback integration | AC14/22/39 |
 | B20 | Iteration planning——[Feature] Membership: bind complete sets -> atomic close/carry-over/adoption | Backend worker | B08/B10 | AC40 |
 | B21 | Defect tracking——[Feature] Evidence: bind complete sets -> explicit QA and atomic human waiver | Domain worker | B14 | AC19/20/41 |
 | B22 | Human attention——[Feature] Desktop: signal new blocking decisions -> owner notices without polling | Desktop worker | B17/B19 | AC36/39 |
+| B23 | Agent surface——[Feature] MCP: scope tools by role and describe every field -> agents act without guessing | Integration worker | R2 acceptance | AC43/28 |
+| B24 | Agent surface——[Feature] Briefs: return remedies, designs and rejection context -> rework starts informed | Domain worker | B23 | AC43/12/19/41/42 |
+| B25 | Agent coordination——[Feature] Messages: store issue threads and bounded waits -> agents ask without a relay | Backend worker | B23 | AC44/11 |
+| B26 | Agent coordination——[Feature] Wake: start bounded consult runs -> cross-harness answers within budget | Runner worker | B25, wake spike | AC44/17/25 |
+| B27 | Human surface——[Feature] Decisions: decide on one card in plain language -> positive decisions in two steps | Frontend worker | Prototype round 3, B24 | AC42/39/41 |
+| B28 | Human surface——[Feature] Workspace: three destinations and audit details -> no internal codes by default | Frontend worker | B27 | AC42/26/27 |
+| B29 | Documentation——[Docs] Baseline: one status page and a generated agent reference -> current behavior stated once | Integration worker | B23 | None |
 
 PM can split these after P1; each final task still needs its own acceptance criteria, owned outputs, and approved mapping. Do not assign a single worker to implement and independently QA the same task.
 
@@ -100,7 +107,7 @@ At each gate provide: completed requirement IDs, change summary, test evidence, 
 
 Material requirement changes create a spec revision with affected FR/AC/phase IDs. Re-estimate impacted tasks and invalidate only relevant approvals. Implementers may resolve routine design details within the approved spec; they do not need repeated approval for every reversible implementation choice.
 
-P5 release policy: zero unresolved BLOCKER/MAJOR defects; mandatory scenarios pass; any MINOR residual risk has a named human waiver; restore and installation evidence exist; no secret/private-data findings remain. Performance/accessibility budgets are acceptance criteria, not optional screenshots.
+P5 release policy: zero unresolved BLOCKER/MAJOR defects; mandatory scenarios pass; any MINOR residual risk is acknowledged in the human acceptance of its delivery digest (R2 §13.1); restore and portable-package evidence exist; no secret/private-data findings remain. Performance/accessibility budgets are acceptance criteria, not optional screenshots.
 
 ## 7. Principal risks and responses
 
@@ -130,3 +137,13 @@ Planning artifacts were checked on 2026-11-04: local Markdown targets resolve, c
 The review also resolved parent aggregation versus execution ownership, scope acknowledgement before claim, same-execution lead self-review, approval invalidation after child-plan changes, and explicit embedded-UI fallback decisions.
 
 These checks validate document structure and planned coverage. They do not prove runtime behavior, harness compatibility, security isolation, performance, or QA correctness. No application tests, agent executions, plugin installs, or changes to the user's harness configurations occurred in P0. Product design acceptance remains pending; the public repository is a planning deliverable.
+
+## 10. Revision R2 plan
+
+Status: accepted by the user on 2026-11-14 with D17–D24. Work starts when ownership is agreed. Details are in [revision R2](proposals/r2-surfaces-coordination-scope.md). Tasks B23–B29 are in the seed backlog (§4).
+
+Order: B23, B24, then B25 and B26 in the service; prototype round 3 in parallel, then B27 and B28; B29 last. The clarifications in R2 §13 add service work to B24 (MINOR acknowledgement, visible-risk-set binding, optional rejection findings) and B25 (per-message visibility and QA message evidence), and the defect-triage card to B27. The wake spike reads CLI help and vendor documentation only. Any real model run needs the user's approval first.
+
+The remaining R1 work narrows: B19 drops batch acceptance, and its defect-triage entry becomes a B27 card; B20 keeps the merged service and drops web views, charts, export and adoption UI; B21 keeps the merged register slice and drops versioned defect sets, explicit per-defect verification and MINOR waivers; B22 drops operating-system notifications. The parked W3a batch, W3b defect verification and Iterations web checkpoints stay parked. B18 exercises AC01–AC44 as amended.
+
+Ownership is agreed before work starts. `workflow.ts`, `contracts.ts` and `mcp.ts` keep one integrator at a time; PR #13 has merged, so that lease is assigned again before B23 starts. One web owner takes B27 and B28 after B24 merges, because B24 also changes the web client's use of `nextActions`.
