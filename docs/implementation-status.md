@@ -10,7 +10,7 @@ Workers hold isolated worktrees and do not edit another worker's checkout:
 
 | Slice | Owner | Working location |
 | --- | --- | --- |
-| B25 scoped issue messages | Codex implements; Claude reviews acceptance | `.agents/worktrees/r2-messages`, branch `codex/r2-messages`, stacked on the earlier B24 runtime. Owns scoped message persistence, cancellable waits, QA message evidence, and the pending-question projection. Claude designs the later reply interaction, and Codex implements it in B27. |
+| B25 scoped issue messages | Codex implements; Claude reviews acceptance | `.agents/worktrees/r2-messages`, branch `codex/r2-messages`, based on main 7a096f3. Owns scoped message persistence, cancellable waits, QA message evidence, and the pending-question and defect-triage projections. Claude designs the later reply interaction, and Codex implements it in B27. |
 | B24 briefs and decision evidence | Codex implements; Claude reviews acceptance | `.agents/worktrees/r2-briefs`, published branch `codex/r2-briefs`, PR #17. The NF05 follow-up claims the summary projection, focused tests and measurement evidence. Prior decision form compatibility stays frozen. |
 | B27/B28 human workspace | Claude designs and reviews acceptance; Codex implements | Claude owns prototype round 3 in `prototype/index.html` and provides a short implementation brief. Codex owns the `web/` implementation after B24 merges and the prototype handoff is available. |
 | B29 reference reconciliation | Claude writes the specification tables; Codex generates the agent reference | Runs last from the final service registry. |
@@ -59,13 +59,13 @@ W2b private core checkpoint, 2026-11-11: the defect helper and pure feature cont
 
 ## Current evidence
 
-B25 integration against main starts from the tested detached runtime db2e4d7. The published B25 branch retained its previous runtime until B24 merged. The acceptance candidate uses the same scoped message and bounded brief resolutions as that trial.
+B25 integrates the scoped message and bounded brief resolutions from trial db2e4d7 onto accepted main 7a096f3. Runtime f0061f0 passes type checks, the production build and all 216 tests. The in-app browser at 1280×720 verified the Chinese pending-triage label, waiting status, attention count of one and navigation to the exact NOT_STARTED issue. The browser reported no warnings or errors.
 
 B25 also owns the B24 acceptance follow-up for the pending defect projection. The human inbox derives one nonblocking `DEFECT_TRIAGE` entry per current PROPOSED defect, with exact issue and defect versions, reporter, proposed severity and audited pending time. Existing inbox labels and navigation provide compatibility. Prototype-specific cards and triage interaction remain B27 work.
 
 The trial reproduced a crowded user-acceptance brief dropping every open blocking defect ID while retaining the defect count. Trial follow-up `db2e4d7` keeps the first blocking ID and prioritizes compacting secondary entries. On a synthetic fixture with 200 defects and long message previews, the four complete stdio MCP results use 1,565–1,575 tokens on a closed issue and 1,477–1,485 in user acceptance. The acceptance brief retains one open blocking defect ID, one pending question preview and exact totals for all four roles. Adding 200 QA-only messages leaves the worker's brief unchanged. Measurements use `tiktoken 0.12.0` with `o200k_base` and include text and structured tool content, excluding the JSON-RPC envelope. The default message page returns 20 compact rows. These are local transport and projection checks.
 
-The exact detached runtime `db2e4d7` passes type checks, production build and all 215 tests. The published B25 branch records the trial evidence and retains its prior runtime until PR #17 merges.
+The detached trial db2e4d7 passes type checks, the production build and all 215 tests. On the same synthetic fixture at the B25 runtime f0061f0, the four complete stdio MCP results measure 1,541–1,559 tokens on the closed issue and 1,477–1,485 in user acceptance. The blocking defect ID, question preview, exact totals and worker visibility control still pass.
 
 The first B25 slice stores immutable issue messages with authenticated sender identity, scoped recipient resolution, byte limits and existing idempotency receipts. The service enforces the worker–QA wall for direct sends, paging, cursors and reply references. Check/build and eight focused message/profile tests pass, including real loopback HTTP and stdio transport. This slice has no wake integration.
 
