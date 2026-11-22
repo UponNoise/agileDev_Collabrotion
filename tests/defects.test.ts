@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { type Actor, type Issue, type QaReport, type Snapshot, DomainError } from '../src/contracts.js';
-import { type DefectFinding, type DefectRecord } from '../src/defect-contracts.js';
+import { type DefectFinding, type DefectRecord, type DefectTriageInput } from '../src/defect-contracts.js';
 import { DefectRegistry } from '../src/defects.js';
 import { canonical, hash, Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
@@ -108,6 +108,47 @@ test('triage enforces human authority and exact issue and proposal versions with
   assert.deepEqual(f.store.db.prepare('SELECT COUNT(*) AS count FROM events').get(), before);
   const rejected = f.registry.triage(f.human, request).defect;
   assert.equal(rejected.state, 'REJECTED'); assert.equal(rejected.origin, null); assert.equal(rejected.version, 2);
+});
+
+test('triage requires a nonblank reason except when confirming without reopening', () => {
+  const f = fixture();
+  const cases: { action: DefectTriageInput['action']; disposition?: DefectTriageInput['disposition']; state?: 'DONE' | 'USER_ACCEPTANCE'; confirmed?: boolean; required: boolean; result: DefectRecord['state'] }[] = [
+    { action: 'CONFIRM', state: 'USER_ACCEPTANCE', required: false, result: 'OPEN' },
+    { action: 'CONFIRM', state: 'DONE', disposition: 'DEFER', required: false, result: 'OPEN' },
+    { action: 'CONFIRM', state: 'DONE', disposition: 'REOPEN', required: true, result: 'OPEN' },
+    { action: 'REJECT', required: true, result: 'REJECTED' },
+    { action: 'NEW_REQUIREMENT', required: true, result: 'CONVERTED' },
+    { action: 'REOPEN', state: 'DONE', confirmed: true, required: true, result: 'OPEN' },
+    { action: 'DEFER', state: 'DONE', confirmed: true, required: true, result: 'OPEN' },
+    { action: 'NEW_REQUIREMENT', state: 'DONE', confirmed: true, required: true, result: 'OPEN' }
+  ];
+  for (const { action, disposition, state, confirmed, required, result } of cases) {
+    for (const reason of [undefined, ' \t\n ', '  Recorded fixture reason  ']) {
+      const issue = f.issue();
+      if (state) f.seedDelivery(issue.id, state);
+      const target = f.current(issue.id);
+      const defect = confirmed ? f.report(target) : f.proposal(target);
+      const request: DefectTriageInput = {
+        workspaceId: f.workspace.id, defectId: defect.id, expectedVersion: defect.version, expectedIssueVersion: target.version, action,
+        ...(reason === undefined ? {} : { reason }), ...(disposition ? { disposition } : {}),
+        ...(action === 'CONFIRM' ? { severity: 'MAJOR' } : {}),
+        ...(action === 'CONFIRM' || confirmed ? { observation: f.registry.observe(target) } : {}),
+        ...(action === 'NEW_REQUIREMENT' ? { requirement: { title: 'Separate fixture scope', description: 'Explicit fixture requirement details', criteria: ['AC-2'] } } : {})
+      };
+      const context = `${action}/${disposition ?? 'none'}/${confirmed ?? false}/${JSON.stringify(reason)}`;
+      if (required && !reason?.trim()) {
+        const before = f.store.db.prepare('SELECT COUNT(*) AS count FROM events').get();
+        assert.throws(() => f.registry.triage(f.human, request), fails('INVALID_INPUT'), context);
+        assert.deepEqual(f.store.db.prepare('SELECT COUNT(*) AS count FROM events').get(), before, context);
+      } else {
+        const triaged = f.registry.triage(f.human, request).defect;
+        assert.equal(triaged.state, result, context);
+        const { data } = f.store.get<{ data: { reason?: string } }>('defect_source', triaged.triageId!);
+        assert.equal(Object.hasOwn(data, 'reason'), !!reason?.trim(), context);
+        assert.equal(data.reason, reason?.trim() || undefined, context);
+      }
+    }
+  }
 });
 
 test('confirmation records later immutable evidence without rewriting the original unsealed observation', () => {

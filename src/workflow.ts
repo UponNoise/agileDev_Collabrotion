@@ -460,7 +460,8 @@ export class Workflow {
         }
         catch (error) { return { digest: null,accepted: false,blockers: [error instanceof DomainError ? error.code : 'EVIDENCE_STALE'] }; }
       },
-      unmanaged: issue => this.unmanagedWork(issue)
+      unmanaged: issue => this.unmanagedWork(issue),
+      confirmable: issue => this.defects().confirmationObservation(issue) !== null
     };
   }
   readiness(i: Issue, admission = true) {

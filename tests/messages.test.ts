@@ -178,6 +178,7 @@ test('the owner inbox derives one card per unanswered lead or PM question', asyn
   assert.equal(first.entries[0].target.messageId, question.id);
   assert.equal(first.entries[0].question.body, input.body);
   assert.equal(first.entries[0].question.senderId, f.lead.actor.id);
+  assert.deepEqual(first.entries[0].pendingBy, { id: f.lead.actor.id, name: f.lead.actor.name });
   assert.equal(first.entries[0].ageProvenance, 'AUDIT_EVENT');
   assert.throws(() => f.flow.execute(f.lead.actor, 'inbox_list', { workspaceId }), failure('ROLE_DENIED'));
   assert.equal((f.flow.execute(f.worker.actor, 'issue_get', f.thread) as any).discussion, undefined);

@@ -12,18 +12,22 @@ export interface InboxSettings {
 }
 interface StoredSettings extends InboxSettings { id: string }
 interface AuditEvent {
-  sequence: number; targetId: string | null; operation: string; at: string; data: Record<string, any> | null;
+  sequence: number; actorId: string; targetId: string | null; operation: string; at: string; data: Record<string, any> | null;
 }
-interface Epoch { sequence: number; at: string | null }
+interface Epoch { sequence: number; at: string | null; actorId: string }
+type ActorIdentity = Pick<Actor, 'id' | 'name'>;
 export interface InboxPolicy {
   delivery(issue: Issue): { digest: string | null; accepted: boolean; blockers: string[]; unacknowledgedMinors?: AcknowledgedMinor[] };
   unmanaged(issue: Issue): boolean;
+  confirmable(issue: Issue): boolean;
 }
 export interface InboxEntry {
   id: string; kind: InboxKind; workspaceId: string; workspaceName: string; issueId: string; key: string; title: string; url: string;
   target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string; defectId?: string; defectVersion?: number };
   question?: { body: string; senderId: string; senderName: string };
-  defect?: { key: string; proposedSeverity: DefectSeverity; reporterId: string | null; reporterName: string | null; summary: string };
+  defect?: { key: string; proposedSeverity: DefectSeverity; reporterId: string | null; reporterName: string | null; summary: string; confirmable: boolean };
+  pendingBy: ActorIdentity | null;
+  abandonment?: { by: ActorIdentity; at: string; reason: string; granted: boolean } | null;
   blocking: boolean; status: 'WAITING' | 'BLOCKED' | 'READY_TO_COMPLETE'; blockers: string[]; nextAction: string;
   pendingSince: string | null; pendingSequence: number | null; ageMs: number | null; ageProvenance: 'AUDIT_EVENT' | 'UNAVAILABLE'; clockSkew: boolean;
 }
@@ -36,6 +40,10 @@ function human(actor: Actor) {
 function maybe<T>(store: Store, kind: string, id: string): T | null {
   try { return store.get<T>(kind, id); }
   catch (error) { if (error instanceof DomainError && error.code === 'NOT_FOUND') return null; throw error; }
+}
+function actorIdentity(store: Store, actorId: string | undefined): ActorIdentity | null {
+  const actor = actorId ? maybe<Actor>(store, 'actor', actorId) : null;
+  return actor ? { id: actor.id, name: actor.name } : null;
 }
 function iso(at: string) { const value = Date.parse(at); return Number.isFinite(value) ? new Date(value).toISOString() : null; }
 function issueFingerprint(issue: Issue) {
@@ -58,7 +66,7 @@ class History {
   private readonly bindingStarts: { id: string; sequence: number }[];
   constructor(readonly store: Store, readonly workspace: Workspace) {
     const starts = new Map<string, number>();
-    for (const row of store.db.prepare('SELECT sequence,target_id AS targetId,operation,data,at FROM events WHERE workspace_id=? ORDER BY sequence').all(workspace.id) as (Omit<AuditEvent, 'data'> & { data: string })[]) {
+    for (const row of store.db.prepare('SELECT sequence,actor_id AS actorId,target_id AS targetId,operation,data,at FROM events WHERE workspace_id=? ORDER BY sequence').all(workspace.id) as (Omit<AuditEvent, 'data'> & { data: string })[]) {
       let data: AuditEvent['data'] = null;
       try { const parsed: unknown = JSON.parse(row.data); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = parsed as Record<string, any>; } catch {}
       const event: AuditEvent = { ...row, data };
@@ -85,7 +93,7 @@ class History {
     }
     return this.bindingStarts[low - 1]?.id;
   }
-  epoch(event?: AuditEvent | null): Epoch | null { return event ? { sequence: event.sequence, at: iso(event.at) } : null; }
+  epoch(event?: AuditEvent | null): Epoch | null { return event ? { sequence: event.sequence, at: iso(event.at), actorId: event.actorId } : null; }
   design(issue: Issue, design: Design) {
     for (const event of this.for(issue.id).toReversed()) {
       if (!event.data) return null;
@@ -124,12 +132,15 @@ class History {
     }
     return state === 'UNCERTAIN' ? this.epoch(pending) : null;
   }
+  abandoned(issue: Issue, sequence = Infinity) {
+    return this.for(issue.id).findLast(event => event.sequence <= sequence && event.data?.changes?.state?.after === 'ABANDONED' && event.data.changes.state.before !== 'ABANDONED');
+  }
   scopePending(view: Store, issue: Issue, sequence = Infinity): boolean {
     const scope = scopeState(view, issue);
     if (scope.status === 'STALE') return true;
     if (issue.state !== 'ABANDONED' || scope.status !== 'INCLUDED') return false;
     if (!scope.decision) return true;
-    const abandoned = this.for(issue.id).findLast(event => event.sequence <= sequence && event.data?.changes?.state?.after === 'ABANDONED' && event.data.changes.state.before !== 'ABANDONED');
+    const abandoned = this.abandoned(issue, sequence);
     const decided = this.for(issue.id).findLast(event => event.sequence <= sequence && event.operation === 'scope_decide' && event.data?.decisionId === scope.decision!.id);
     return !!abandoned && (!decided || abandoned.sequence > decided.sequence);
   }
@@ -205,7 +216,7 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
   const append = (issue: Issue, kind: InboxKind, target: InboxEntry['target'], epoch: Epoch | null, blocking: boolean, nextAction: string, blockers: string[] = [], status: InboxEntry['status'] = 'WAITING') => {
     const since = epoch?.at ?? null; const clockSkew = since !== null && Date.parse(since) > now;
     const title = issue.parentId ? `${store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
-    const entry: InboxEntry = { id: hash(canonical({ workspaceId: workspace.id, issueId: issue.id, kind, identity: target.runId ?? target.messageId ?? target.defectId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue.id, key: issue.key, title, url: `/w/${workspace.id}/issues/${issue.id}`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew };
+    const entry: InboxEntry = { id: hash(canonical({ workspaceId: workspace.id, issueId: issue.id, kind, identity: target.runId ?? target.messageId ?? target.defectId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue.id, key: issue.key, title, url: `/w/${workspace.id}/issues/${issue.id}`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, pendingBy: actorIdentity(store, epoch?.actorId), ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew };
     entries.push(entry);
     return entry;
   };
@@ -232,7 +243,12 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
       const parent = store.get<Issue>('issue', issue.parentId);
       let revisionHash: string | null = null; let epoch: Epoch | null = null;
       try { revisionHash = history().scopeFingerprint(store, issue, scope); epoch = history().scope(issue, revisionHash); } catch {}
-      append(issue, 'SCOPE_DECISION', { issueVersion: issue.version, revisionHash, parentId: parent.id, parentVersion: parent.version, decisionId: scope.decision?.id ?? null }, epoch, true, 'scope_decide', scope.blocking);
+      const entry = append(issue, 'SCOPE_DECISION', { issueVersion: issue.version, revisionHash, parentId: parent.id, parentVersion: parent.version, decisionId: scope.decision?.id ?? null }, epoch, true, 'scope_decide', scope.blocking);
+      const abandoned = history().abandoned(issue);
+      const by = actorIdentity(store, abandoned?.actorId);
+      entry.abandonment = abandoned && by && typeof abandoned.data?.reason === 'string'
+        ? { by, at: abandoned.at, reason: abandoned.data.reason, granted: typeof abandoned.data.grantId === 'string' }
+        : null;
     }
     if (issue.state !== 'DONE' && policy.unmanaged(issue)) append(issue, 'RUN_RECONCILE', { issueVersion: issue.version, revisionHash: null, candidateId: issue.candidate?.id ?? null, fence: issue.fence }, history().own(issue, value => value.state !== 'DONE' && policy.unmanaged(value)), true, 'work_reconcile', ['UNMANAGED_EXECUTION']);
   }
@@ -261,7 +277,7 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
       const reporter = defect.reporterId ? maybe<Actor>(store, 'actor', defect.reporterId) : null;
       entry.defect = {
         key: defect.key, proposedSeverity: defect.severity, reporterId: defect.reporterId,
-        reporterName: reporter?.name ?? null, summary: briefText(defect.actual, 160)
+        reporterName: reporter?.name ?? null, summary: briefText(defect.actual, 160), confirmable: policy.confirmable(issue)
       };
     }
   }
@@ -281,7 +297,7 @@ export function inboxList(store: Store, actor: Actor, query: InboxQuery, policy:
   const counts = (entries: InboxEntry[]) => ({
     total: entries.length,
     blocking: entries.filter(entry => entry.blocking).length,
-    attention: entries.filter(entry => entry.blocking || entry.kind === 'AGENT_QUESTION' || entry.kind === 'DEFECT_TRIAGE').length,
+    attention: entries.filter(entry => entry.blocking || entry.kind === 'AGENT_QUESTION' || entry.defect?.confirmable === true).length,
     byKind: Object.fromEntries(inboxKinds.map(kind => [kind, entries.filter(entry => entry.kind === kind).length]))
   });
   const filtered = all.filter(entry => query.kind === undefined || entry.kind === query.kind).sort((a, b) => Number(b.blocking) - Number(a.blocking) || Number(a.pendingSince !== null) - Number(b.pendingSince !== null) || (a.pendingSince !== null && b.pendingSince !== null ? Date.parse(a.pendingSince) - Date.parse(b.pendingSince) : 0) || a.workspaceId.localeCompare(b.workspaceId) || a.id.localeCompare(b.id));

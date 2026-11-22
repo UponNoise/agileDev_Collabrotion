@@ -1,4 +1,4 @@
-import { Actor, CheckRun, Design, Issue, Run, Snapshot, Workspace } from './contracts.js';
+import { Actor, CheckRun, Design, Issue, Run, Snapshot, Workspace, liveRunStates } from './contracts.js';
 import { Store } from './store.js';
 
 export function workspaceView(
@@ -47,6 +47,9 @@ export function workspaceView(
       "SELECT json_extract(data,'$.state') AS state,COUNT(*) AS count FROM records WHERE kind='issue' AND workspace_id=? GROUP BY state"
     )
     .all(workspace.id) as { state: string; count: number }[];
+  const activeRuns = store.db.prepare(
+    `SELECT data FROM records WHERE kind='run' AND workspace_id=? AND json_extract(data,'$.state') IN (${liveRunStates.map(() => '?').join(',')}) ORDER BY rowid`
+  ).all(workspace.id, ...liveRunStates) as { data: string }[];
   return {
     workspace,
     cursor,
@@ -54,6 +57,10 @@ export function workspaceView(
     issues: rows.map((r) => display(JSON.parse(r.data))),
     nextOffset: a.offset + a.limit < total ? a.offset + a.limit : null,
     statusCounts: Object.fromEntries(counts.map((r) => [r.state, r.count])),
+    activeRuns: activeRuns.map(({ data }) => {
+      const { id, issueId, kind = 'implementation', state, actorId, harness, createdAt, startedAt = null } = JSON.parse(data) as Run;
+      return { id, issueId, kind, state, actorId, harness, createdAt, startedAt };
+    }),
     actors: store.list<Actor>('actor').filter((actor) => !actor.runId && actor.workspaceIds.includes(workspace.id)),
     profiles: store.list('check_profile', workspace.id),
     connections: store.list('connection', workspace.id),

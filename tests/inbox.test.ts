@@ -63,7 +63,7 @@ test('the human inbox tracks exact pending defect proposals until triage', t => 
   assert.equal(page.total, 2);
   assert.equal(page.nextOffset, 1);
   assert.equal(page.summary.byKind.DEFECT_TRIAGE, 2);
-  assert.equal(page.summary.attention, 2);
+  assert.equal(page.summary.attention, 0);
   assert.equal(page.summary.blocking, 0);
   const entry = page.entries[0];
   assert.equal(entry.issueId, issue.id);
@@ -73,8 +73,9 @@ test('the human inbox tracks exact pending defect proposals until triage', t => 
   assert.equal(entry.nextAction, 'defect_triage');
   assert.equal(entry.pendingSequence, sequence);
   assert.equal(entry.pendingSince, iso(now - day));
+  assert.deepEqual(entry.pendingBy, { id: reporter.id, name: reporter.name });
   assert.deepEqual(entry.defect, {
-    key: first.key, reporterId: reporter.id, reporterName: reporter.name, proposedSeverity: 'MAJOR', summary: finding.actual
+    key: first.key, reporterId: reporter.id, reporterName: reporter.name, proposedSeverity: 'MAJOR', summary: finding.actual, confirmable: false
   });
   const secondEntry = f.list({ ...query, offset: page.nextOffset, limit: 1 }).entries[0];
   assert.equal(secondEntry.target.defectId, second.id);
@@ -87,7 +88,7 @@ test('the human inbox tracks exact pending defect proposals until triage', t => 
   });
   const remaining = f.list(query);
   assert.deepEqual(remaining.entries.map((item: any) => item.target.defectId), [second.id]);
-  assert.equal(remaining.summary.attention, 1);
+  assert.equal(remaining.summary.attention, 0);
   assert.equal(canonical(f.current(issue.id)), before);
 });
 
@@ -107,13 +108,50 @@ function delivery(f: Fixture) {
   const ready = f.current(issue.id); ready.candidate = candidate; ready.initialReview = review('PRE_QA'); ready.qaReview = review('QA', { reportId }); ready.state = 'LEAD_REVIEW'; ready.stage = 'FINAL'; f.store.put('issue', ready, f.workspace.id);
   f.change('review_submit', issue.id, { candidateId: candidate.id, verdict: 'PASS', reason: 'Automated source fixture lead action' }, lead);
   const digest = () => acceptanceDigest(f.store, f.current(issue.id));
-  return { issueId: issue.id, candidate, snapshot, digest, accept: () => f.change('delivery_decide', issue.id, { candidateId: candidate.id, digest: digest(), decision: 'ACCEPT', reason: 'Explicit automated fixture acceptance, not user delivery approval' }) };
+  return { issueId: issue.id, candidate, snapshot, lead, digest, accept: () => f.change('delivery_decide', issue.id, { candidateId: candidate.id, digest: digest(), decision: 'ACCEPT', reason: 'Explicit automated fixture acceptance, not user delivery approval' }) };
 }
+
+test('triage attention follows current delivery evidence without hiding any pending report', t => {
+  const f = fixture(t);
+  const reporter = f.enroll('lead').actor as Actor;
+  const finding = { severity: 'MAJOR', criterionIds: ['C1'], reproduce: 'Open fixture', expected: 'Present', actual: 'Missing' };
+  const propose = (issueId: string) => f.change('defect_propose', issueId, finding, reporter).defect.id;
+  const early = propose(f.issue().id);
+  const acceptance = delivery(f);
+  const closed = delivery(f);
+  closed.accept();
+  assert.equal(f.current(closed.issueId).state, 'DONE');
+  const atAcceptance = propose(acceptance.issueId);
+  const afterClosure = propose(closed.issueId);
+  const unsealed = f.issue();
+  const withoutEvidence = propose(unsealed.id);
+  f.store.put('issue', { ...f.current(unsealed.id), state: 'USER_ACCEPTANCE' }, f.workspace.id);
+  const other = (f.flow.execute(f.owner, 'workspace_register', { root: f.directory, name: 'Other inbox fixture', prefix: 'ALT', idempotencyKey: randomUUID() }) as any).workspace;
+  const otherIssue = f.cmd('issue_create', { workspaceId: other.id, title: 'Other fixture issue', criteria: ['C1'] }).issue;
+  const otherReporter = f.cmd('actor_enroll', { workspaceId: other.id, role: 'lead', name: 'Other fixture lead' }).actor;
+  const otherEarly = f.cmd('defect_propose', { workspaceId: other.id, issueId: otherIssue.id, expectedVersion: otherIssue.version, ...finding }, otherReporter).defect.id;
+  const page = f.list({ kind: 'DEFECT_TRIAGE' });
+  assert.deepEqual(Object.fromEntries(page.entries.map((entry: any) => [entry.target.defectId, entry.defect.confirmable])), {
+    [early]: false, [atAcceptance]: true, [afterClosure]: true, [withoutEvidence]: false, [otherEarly]: false
+  });
+  const byKind = { DESIGN_REVIEW: 0, DELIVERY_ACCEPTANCE: 2, CLOSURE_BLOCKED: 0, SCOPE_DECISION: 0, RUN_RECONCILE: 0, AGENT_QUESTION: 0, DEFECT_TRIAGE: 5 };
+  assert.equal(page.total, 5);
+  assert.deepEqual(page.summary, { total: 7, blocking: 2, attention: 4, byKind });
+  const workspaceCounts = (workspaceId: string) => {
+    const { total, blocking, attention, byKind } = page.workspaces.find((entry: any) => entry.workspaceId === workspaceId);
+    return { total, blocking, attention, byKind };
+  };
+  assert.deepEqual(workspaceCounts(f.workspace.id), { total: 6, blocking: 2, attention: 4, byKind: { ...byKind, DEFECT_TRIAGE: 4 } });
+  assert.deepEqual(workspaceCounts(other.id), { total: 1, blocking: 0, attention: 0, byKind: { ...byKind, DELIVERY_ACCEPTANCE: 0, DEFECT_TRIAGE: 1 } });
+  const deliveryEntry = f.list().entries.find((entry: any) => entry.kind === 'DELIVERY_ACCEPTANCE' && entry.issueId === acceptance.issueId);
+  assert.deepEqual(deliveryEntry.pendingBy, { id: acceptance.lead.id, name: acceptance.lead.name });
+});
 
 test('human inbox derives current design target, preserves metadata age and resets a resubmission epoch', t => {
   const f = fixture(t); const issue = f.issue(); const design = f.design(issue.id); const first = f.pin(issue.id, 'design_submit', now - 3 * day);
   const before = database(f.store); const entry = f.list().entries[0];
   assert.equal(entry.kind, 'DESIGN_REVIEW'); assert.equal(entry.target.designId, design.id); assert.equal(entry.target.designHash, design.hash); assert.equal(entry.pendingSequence, first); assert.equal(entry.ageMs, 3 * day);
+  assert.deepEqual(entry.pendingBy, { id: f.owner.id, name: f.owner.name });
   assert.equal(database(f.store), before);
   f.change('issue_update', issue.id, { title: 'Renamed fixture', priority: 1 });
   assert.equal(f.list().entries[0].id, entry.id); assert.equal(f.list().entries[0].pendingSequence, first); assert.equal(f.list().entries[0].target.issueVersion, f.current(issue.id).version);
@@ -134,6 +172,7 @@ test('missing or malformed audit timestamps remain explicitly unknown', t => {
   const entry = f.list().entries[0]; assert.equal(entry.pendingSince, null); assert.equal(entry.ageMs, null); assert.equal(entry.ageProvenance, 'UNAVAILABLE');
   f.store.db.prepare("DELETE FROM events WHERE target_id=? AND operation='design_submit'").run(issue.id);
   assert.equal(f.list().entries[0].pendingSequence, null);
+  assert.equal(f.list().entries[0].pendingBy, null);
   assert.equal((f.flow.execute(f.owner, 'gap_list', { workspaceId: f.workspace.id }) as any).gaps.some((gap: any) => gap.code === 'HUMAN_DECISION_AGING'), false);
 });
 
@@ -141,6 +180,9 @@ test('abandoned-child scope stays pending through parent holds and metadata, the
   const f = fixture(t); const parent = f.issue(); f.design(parent.id, true); const child = f.issue(parent.id);
   f.change('issue_transition', child.id, { action: 'abandon', reason: 'Automated scope fixture' }); const first = f.pin(child.id, 'issue_transition', now - 2 * day);
   const pending = f.list().entries.find((entry: any) => entry.kind === 'SCOPE_DECISION'); assert.equal(pending.pendingSequence, first);
+  const owner = { id: f.owner.id, name: f.owner.name };
+  assert.deepEqual(pending.pendingBy, owner);
+  assert.deepEqual(pending.abandonment, { by: owner, at: iso(now - 2 * day), reason: 'Automated scope fixture', granted: false });
   f.change('issue_transition', parent.id, { action: 'hold', reason: 'Automated hold fixture' }); f.change('issue_update', parent.id, { title: 'Held parent renamed' });
   assert.equal(f.list().entries.find((entry: any) => entry.kind === 'SCOPE_DECISION').id, pending.id);
   const decide = (action: 'EXCLUDE' | 'RESTORE') => {
@@ -150,8 +192,15 @@ test('abandoned-child scope stays pending through parent holds and metadata, the
   decide('EXCLUDE'); assert.equal(f.list().entries.some((entry: any) => entry.kind === 'SCOPE_DECISION'), false);
   decide('RESTORE'); assert.equal(f.list().entries.some((entry: any) => entry.kind === 'SCOPE_DECISION'), false);
   f.change('issue_transition', child.id, { action: 'reopen', reason: 'Automated reopened scope fixture' });
-  f.change('issue_transition', child.id, { action: 'abandon', reason: 'New automated abandonment cycle' }); const second = f.pin(child.id, 'issue_transition', now - day);
-  assert.equal(f.list().entries.find((entry: any) => entry.kind === 'SCOPE_DECISION').pendingSequence, second);
+  const pm = f.enroll('pm').actor as Actor;
+  const { authorizationScopeHash } = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: child.id }) as any;
+  const { grant } = f.change('grant_create', child.id, { granteeId: pm.id, action: 'abandon', scopeHash: authorizationScopeHash, expiresAt: iso(now + day), reason: 'Fixture grants lifecycle authority' });
+  f.change('issue_transition', child.id, { action: 'abandon', reason: 'New automated abandonment cycle', grantId: grant.id }, pm);
+  const second = f.pin(child.id, 'issue_transition', now - day);
+  const current = f.list().entries.find((entry: any) => entry.kind === 'SCOPE_DECISION');
+  assert.equal(current.pendingSequence, second);
+  assert.deepEqual(current.pendingBy, { id: pm.id, name: pm.name });
+  assert.deepEqual(current.abandonment, { by: { id: pm.id, name: pm.name }, at: iso(now - day), reason: 'New automated abandonment cycle', granted: true });
 });
 
 test('a stale exclusion binds the new material scope without resetting on later metadata', t => {
@@ -242,9 +291,11 @@ test('uncertain execution uses the uncertainty event rather than run creation an
   f.store.put('run', run, f.workspace.id); f.store.event(f.workspace.id, f.owner, 'run_uncertain', id, { reason: 'Automated lost-coordinator fixture' }); const first = f.pin(id, 'run_uncertain', now - day);
   f.store.event(f.workspace.id, f.owner, 'run_uncertain', id, { reason: 'Repeated observation fixture' });
   const entry = f.list().entries[0]; assert.equal(entry.target.runId, id); assert.equal(entry.pendingSequence, first); assert.equal(entry.ageMs, day);
+  assert.deepEqual(entry.pendingBy, { id: f.owner.id, name: f.owner.name });
   f.cmd('run_reconcile', { runId: id, expectedVersion: 2, confirmStopped: true, reason: 'Automated fixture has no external process' }); assert.equal(f.list().total, 0);
   const orphan = { ...run, id: randomUUID(), version: 1 }; f.store.put('run', orphan, f.workspace.id);
   assert.equal(f.list().entries[0].pendingSince, null);
+  assert.equal(f.list().entries[0].pendingBy, null);
 });
 
 test('legacy work reconciliation is actionable while held but not on historical DONE records', t => {
@@ -260,6 +311,7 @@ test('current acceptance remains actionable through Git recovery and closes only
   const submission = f.change('git_submit', d.issueId, { candidateId: d.candidate.id, commitUrl: `https://github.com/fixture/inbox/commit/${'1'.repeat(40)}` }).git as GitSubmission;
   d.accept(); const acceptedAt = f.pin(d.issueId, 'delivery_decide', now - 3 * day);
   const accepted = f.list().entries.find((entry: any) => entry.kind === 'CLOSURE_BLOCKED'); assert.equal(accepted.pendingSequence, acceptedAt); assert.equal(accepted.status, 'BLOCKED');
+  assert.deepEqual(accepted.pendingBy, { id: f.owner.id, name: f.owner.name });
   const verifier = new GitVerifier(f.store, { resolve: async () => ({ rootTreeSha: snapshotGitTree(d.snapshot), treeSha: snapshotGitTree(d.snapshot) }), resolveEntry: async () => { throw new Error('No secondary entry in fixture'); } });
   try { verifier.tick(); for (let count = 0; count < 100 && f.store.get<GitSubmission>('git_submission', submission.id).state !== 'VERIFIED'; count++) await new Promise(resolve => setTimeout(resolve, 10)); }
   finally { await verifier.close(); }
