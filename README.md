@@ -32,6 +32,7 @@ See [local setup and commands](docs/local-development.md) for the executable sli
 | [Workflow specification](docs/workflow.md) | States, permissions, rejection loops, approvals, parent completion, and closure rules |
 | [Architecture](docs/architecture.md) | Components, storage, identity, concurrency, recovery, Git, and future sharing |
 | [Agent contract](docs/agent-contract.md) | Proposed tools, compact work packets, role behavior, and harness adapters |
+| [Agent guide](docs/agent-guide.md) | How an agent joins a running instance and uses it: connection, roles, messages, evidence, refusals |
 | [Research](docs/research.md) | Primary sources, compatibility evidence, alternatives, and unresolved feasibility questions |
 | [Delivery plan](docs/delivery-plan.md) | Phase boundaries, seed backlog, dependencies, and release gates |
 | [Acceptance catalogue](docs/acceptance.md) | Executable acceptance scenarios and the evidence each phase must produce |

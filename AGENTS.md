@@ -4,6 +4,7 @@
 - Prefer action and concise updates. Create files only when they serve the requested deliverable. Keep code comments to a strict minimum.
 - The user's 2026-11-06 active goal authorizes continued implementation through the local multi-harness product. Use the proposed specification as the working baseline, record deviations and verification honestly, and continue routine implementation without repeated permission requests. This authorization does not fabricate human approval of requirements managed by the product.
 - Read `docs/product-spec.md`, `docs/workflow.md`, and the relevant phase in `docs/delivery-plan.md` before implementation. Use `docs/acceptance.md` to determine completion.
+- Agents that join a running instance read `docs/agent-guide.md` first.
 - Keep workflow rules in the service. Skills, prompts, UI code, hooks, runner callbacks, and Git integrations must not bypass the same authorization and transition checks.
 - Preserve the distinction between initial lead review and final lead review, and between implemented, abandoned, merged, and deployed.
 - Never fabricate human approval, QA independence, test evidence, commit links, harness compatibility, or completion. Record unknown and unavailable capabilities explicitly.
