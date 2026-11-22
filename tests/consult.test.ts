@@ -11,6 +11,7 @@ import type { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/ada
 import { LocalClient } from '../src/client.js';
 import { DomainError, type Actor, type Harness, type Issue, type Run } from '../src/contracts.js';
 import { createServer } from '../src/http.js';
+import { commandFailure } from '../src/issue-brief.js';
 import { Coordinator } from '../src/runner.js';
 import { canonical, Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
@@ -180,6 +181,8 @@ test('a lead consult can send only one reply to the owner who asked', async t =>
   const duplicate = outcomes[1 - success]!;
   assert.ok(saved.status === 'fulfilled' && duplicate.status === 'rejected');
   assert.ok(fails('CONSULT_REPLY_ALREADY_SENT')(duplicate.reason));
+  const generic = commandFailure('UNLISTED_CODE', '').remedy.action;
+  for (const code of ['CONSULT_REPLY_ONLY', 'CONSULT_REPLY_ALREADY_SENT']) assert.notEqual(commandFailure(code, '').remedy.action, generic);
   const replay = await send({}, keys[success]!);
   assert.equal(replay.replayed, true);
   assert.equal(replay.message.id, saved.value.message.id);

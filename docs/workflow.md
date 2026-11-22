@@ -330,7 +330,7 @@ When a question requests it and the workspace allows it, the coordinator starts 
 | Wakes per issue per day | 3 |
 | Consult run time limit | 10 minutes |
 | Concurrency | Counts toward the active-run cap |
-| Nesting | The service rejects further questions from a consult run before storing them |
+| Nesting | The service rejects any question from a consult run before storing it, so a consult cannot wake anyone; replies never wake |
 | Failure | An unavailable harness, failed authentication or exhausted budget stores the message and reports the reason; no retry |
 
 Wake modes `fresh`, `resume` and `queue` are capability-reported for each harness and offered only after verification. Rework and re-test prompts carry the previous rejection and its findings.
