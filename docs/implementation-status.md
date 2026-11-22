@@ -1,8 +1,22 @@
 # Implementation evidence and remaining work
 
-Updated: 2026-11-22. Main `ac46f74` includes accepted B25 (PR #18), accepted B26 (PR #19) with its reply-only refinement (PR #22), the managed-runs package with AC37 (PR #20), and the release evidence (PR #21). The local hub uses Claude's portable release 0.1.0-98df618.
+Updated: 2026-11-22. Main includes accepted B25 (PR #18), accepted B26 (PR #19) with its reply-only refinement (PR #22), the managed-runs package with AC37 (PR #20), the release evidence (PR #21), the round 3 design (PR #23), the first two B27 tasks (PR #24, PR #26) and the [agent guide](agent-guide.md) (PR #25). The local hub runs the portable release 0.1.0-ac46f74.
 
-Prototype round 3 (`prototype/index.html`) and the [B27/B28 design](proposals/r2-human-surface-design.md) are proposed; the owner decides on them in the AgileDev hub as the design of ADC-0001. After approval the implementing worker builds B27 and B28 from them through the managed hub, and Claude adjusts design details and reviews acceptance. B29 remains last. Claude reconciles the specification tables and Codex generates the agent reference from the registry.
+The owner approved the [B27/B28 design](proposals/r2-human-surface-design.md) in the hub on 2026-11-22. It is split into ADC-0002 (T1, service), ADC-0003 (T2, web model), ADC-0004 (T3, decisions) and ADC-0005 (T4, workspace). Dispatch, reviews and QA run through the hub:
+
+| Task | State on 2026-11-22 | Evidence |
+| --- | --- | --- |
+| ADC-0002 | Done: merged (PR #24) and accepted by the owner in the hub | Codex in a managed run; the sealed snapshot equals commit `7a66884` (104 files); 244/244 tests in a separate checkout; DSH QA 13/13; final lead review; GitHub verification of the commit succeeded |
+| ADC-0003 | Merged (PR #26); owner acceptance in the hub pending | DSH in managed runs, nine deliveries; returned four times by the lead and four times by Codex QA before both passed; an audit by Gemini 4 Carbon contributed three findings. The sealed snapshot equals commit `9949f2e` (109 files); delivered tests 54/54; Codex QA 20/20; main with both tasks 298/298 |
+| ADC-0004, ADC-0005 | Not started | Wait for the owner's acceptance of ADC-0003 |
+
+What the first real dispatches showed, each filed in the hub without a design:
+
+- Managed DSH and Codex runs load the owner's other MCP servers (ADC-0006).
+- A rework starts from the workspace commit and lacks the rejected files; a temporary commit of the sealed candidate served as the base (ADC-0007).
+- DSH could not execute commands in a run directory where the user holds only Modify: its sandbox needs `WRITE_OWNER`. The owner granted full control on the run directory, after which type checks and in-process tests run; commands that start piped child processes are still refused by its sandbox (ADC-0008).
+- Agents have no way to ask to join, and a local process can act with the owner credential; agents need a join request that the owner approves, and human decisions need a visible source (ADC-0009). Design approval came from the paired desktop identity.
+- Seven usability gaps for agents and five places where the documents disagree with the source (ADC-0010).
 
 ## Concurrent ownership, 2026-11-14
 
