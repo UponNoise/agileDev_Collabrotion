@@ -59,7 +59,7 @@ The current product is inverted against the direction above: the human surface r
 
 **H8. One primary action.** An issue shows its status as a sentence and the one action its current state expects from a person, if any. Other actions are under More. Issue detail has Overview (requirement, rendered design, plan tree, delivery), History (a readable timeline; Audit details hold the raw records), and Discussion (C8).
 
-**H9. Prototype first.** The agreed prototype (`prototype/index.html`, rounds 1–2) is the visual baseline. Round 3 applies H1–H8 and is agreed with the user before `web/` changes.
+**H9. Prototype first.** The agreed prototype (`prototype/index.html`, rounds 1–2) is the visual baseline. Round 3 applies H1–H8 and is agreed with the user before `web/` changes. Its proposed design is [r2-human-surface-design.md](r2-human-surface-design.md).
 
 H1–H9 change no gate or permission. The stored human command contract changes only as H5 lists. Language selection, page zoom and adaptive layout stay as approved on 2026-11-09.
 
