@@ -263,11 +263,24 @@ export class IssueMessages {
   send(actor: Actor, input: MessageSend) {
     const issue = this.store.issue(actor, input.workspaceId, input.issueId);
     const run = this.requireActiveRun(actor);
-    if (run?.kind === 'consult' && run.issueId !== issue.id) throw new DomainError('SCOPE_DENIED', 'Consult messages belong to the question thread', 403);
+    const consult = run?.kind === 'consult' ? run : null;
+    if (consult && consult.issueId !== issue.id) throw new DomainError('SCOPE_DENIED', 'Consult messages belong to the question thread', 403);
+    if (consult && (input.kind !== 'REPLY' || input.replyTo !== consult.consult.questionId)) {
+      throw new DomainError('CONSULT_REPLY_ONLY', 'Reply to the question that started this consult', 403);
+    }
     const reference = input.replyTo ? this.visibleReference(actor, issue, input.replyTo).message : undefined;
     const ownerReply = input.kind === 'REPLY' && reference?.kind === 'QUESTION' && reference.sender.role === 'human' &&
       reference.recipient.kind === 'actor' && reference.recipient.actorId === (actor.principalId ?? actor.id);
     const recipient = this.resolveRecipient(issue, actor, input.recipient, ownerReply);
+    if (consult && reference) {
+      const sender = reference.sender;
+      const addressesSender = sender.role === 'human' ? recipient.kind === 'owner' :
+        recipient.kind === 'actor' && recipient.actorId === sender.principalId;
+      if (!addressesSender) throw new DomainError('CONSULT_REPLY_ONLY', 'Address the reply to the originating question’s sender', 403);
+      if (this.answeredQuestion(reference, actor.id)) {
+        throw new DomainError('CONSULT_REPLY_ALREADY_SENT', 'This consult already replied. Replay the original request with the same idempotency key', 409);
+      }
+    }
     if (input.replyTo) {
       if (recipient.kind === 'actor') this.visibleReference({ id: recipient.actorId, role: recipient.role }, issue, input.replyTo);
     }

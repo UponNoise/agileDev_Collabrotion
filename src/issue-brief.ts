@@ -58,6 +58,8 @@ const commandRemedies: Record<string, [action: string, role: Party | 'caller', o
   STALE_FENCE: ['Read the current lease and ask PM to reconcile if ownership changed.', 'caller', 'issue_get'],
   RUN_UNCERTAIN: ['Confirm the previous execution stopped before reconciling.', 'human', 'run_reconcile'],
   EXECUTION_BINDING_REQUIRED: ['Queue a managed assignment at the approved scope.', 'pm', 'work_dispatch'],
+  CONSULT_REPLY_ONLY: ['Send one REPLY to the question that started this consult, addressed to its sender, or stop.', 'caller', 'message_send'],
+  CONSULT_REPLY_ALREADY_SENT: ['Your reply is stored. Stop without sending again.', 'caller'],
   REVIEW_INDEPENDENCE_REQUIRED: ['Check the current independent QA assignment and its sealed snapshot.', 'qa', 'issue_get'],
   APPROVAL_STALE: ['Refresh the reviewed issue and present the current evidence for a new decision.', 'caller', 'issue_get'],
   DECISION_RISKS_STALE: ['Refresh the issue and present the changed risks for a new decision.', 'human', 'issue_get'],

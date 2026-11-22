@@ -13,7 +13,7 @@ export async function connectMcp(client: LocalClient) {
   if (actor.role === 'human') throw new DomainError('HUMAN_CREDENTIAL_DENIED', 'Enroll a scoped agent; owner credentials cannot be used by MCP', 403);
   const consult = profile === 'consult';
   const operations = toolsForRole(actor.role).filter(operation => !consult || permitsConsultOperation(operation));
-  const instructions = consult ? 'Read scoped issue context and answer through message_send. Messages carry no workflow authority.' : roleInstructions(actor.role);
+  const instructions = consult ? 'Read scoped issue context and use message_send once to reply to the originating question’s sender. Messages carry no workflow authority.' : roleInstructions(actor.role);
   const server = new Server({ name: 'agiledev', version: '0.1.0' }, { capabilities: { tools: {} }, instructions });
   let registration = Promise.resolve();
   server.oninitialized = () => {

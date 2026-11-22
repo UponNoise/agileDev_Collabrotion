@@ -47,7 +47,7 @@ export class Workflow {
     if (!Object.hasOwn(schemas, operation)) throw new DomainError('UNKNOWN_OPERATION', 'Unknown operation', 404);
     const op = operation as Operation;
     if (!permitsOperation(actor.role, op)) throw new DomainError('ROLE_DENIED', 'Operation is outside this role profile', 403);
-    if (this.consultRun(actor) && !permitsConsultOperation(op)) throw new DomainError('ROLE_DENIED', 'Consult credentials can only read scoped context and send messages', 403);
+    if (this.consultRun(actor) && !permitsConsultOperation(op)) throw new DomainError('ROLE_DENIED', 'Consult credentials can read scoped context and reply to their source question', 403);
     return this.executeAuthorized(actor, op, input, signal);
   }
   claimReservedWork(actor: Actor, input: unknown): unknown {
