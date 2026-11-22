@@ -11,6 +11,7 @@ import type { AdapterContext, AdapterResult, ExecutionAdapter } from '../src/ada
 import { LocalClient } from '../src/client.js';
 import { DomainError, type Actor, type Harness, type Issue, type Run } from '../src/contracts.js';
 import { createServer } from '../src/http.js';
+import { commandFailure } from '../src/issue-brief.js';
 import { Coordinator } from '../src/runner.js';
 import { canonical, Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
@@ -126,10 +127,9 @@ test('consult routes through real MCP and HTTP with a separately scoped credenti
     const catalog = (await recipient.listTools()).tools;
     assert.ok(catalog.some(tool => tool.name === 'message_send'));
     assert.ok(!catalog.some(tool => tool.name === 'work_submit'));
-    const nested = await direct.command('message_send', {
+    await assert.rejects(direct.command('message_send', {
       ...f.thread, idempotencyKey: randomUUID(), recipient: role('lead'), kind: 'QUESTION', wake: true, body: 'No nested launch'
-    });
-    assert.equal(nested.delivery.reason, 'WAKE_NESTED');
+    }), fails('CONSULT_REPLY_ONLY'));
     assert.equal(f.runs().length, 1);
     const waiting = lead.callTool({ name: 'message_wait', arguments: { ...f.thread, questionId: asked.message.id, timeoutMs: 4000 } });
     const sent = await recipient.callTool({ name: 'message_send', arguments: {
@@ -149,6 +149,54 @@ test('consult routes through real MCP and HTTP with a separately scoped credenti
     await recipient?.close();
     await lead.close();
   }
+});
+
+test('a lead consult can send only one reply to the owner who asked', async t => {
+  const f = await fixture(t);
+  const lead = new LocalClient(f.endpoint, f.lead.token);
+  await lead.request('/api/connection', { name: 'codex-mcp-client', version: 'fixture' });
+  const other = f.send(f.owner.actor, role('lead'), { wake: false, body: 'A different question' });
+  f.setting(true);
+  const originalIssue = canonical(f.current());
+  const asked = f.send(f.owner.actor, role('lead'));
+  await f.coordinator.tick();
+  const { context, finish } = f.adapter.calls[0]!;
+  const consult = new LocalClient(f.endpoint, context.token);
+  const reply = { ...f.thread, recipient: { kind: 'owner' }, kind: 'REPLY', replyTo: asked.message.id, body: 'Requested answer' };
+  const send = (input: object = {}, idempotencyKey = randomUUID()) =>
+    consult.command('message_send', { ...reply, ...input, idempotencyKey });
+
+  await assert.rejects(send({ kind: 'QUESTION', replyTo: undefined, wake: true }), fails('CONSULT_REPLY_ONLY'));
+  await assert.rejects(send({ kind: 'NOTE', replyTo: undefined }), fails('CONSULT_REPLY_ONLY'));
+  await assert.rejects(send({ replyTo: other.message.id }), fails('CONSULT_REPLY_ONLY'));
+  await assert.rejects(send({ recipient: actorTarget(f.pm.actor) }), fails('CONSULT_REPLY_ONLY'));
+  assert.equal(f.store.list('issue_message').length, 2);
+  assert.equal(f.runs().length, 1);
+
+  const keys = [randomUUID(), randomUUID()];
+  const outcomes = await Promise.allSettled(keys.map(key => send({}, key)));
+  const success = outcomes.findIndex(result => result.status === 'fulfilled');
+  assert.notEqual(success, -1);
+  const saved = outcomes[success]!;
+  const duplicate = outcomes[1 - success]!;
+  assert.ok(saved.status === 'fulfilled' && duplicate.status === 'rejected');
+  assert.ok(fails('CONSULT_REPLY_ALREADY_SENT')(duplicate.reason));
+  const generic = commandFailure('UNLISTED_CODE', '').remedy.action;
+  for (const code of ['CONSULT_REPLY_ONLY', 'CONSULT_REPLY_ALREADY_SENT']) assert.notEqual(commandFailure(code, '').remedy.action, generic);
+  const replay = await send({}, keys[success]!);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.message.id, saved.value.message.id);
+  assert.equal(f.store.list('issue_message').length, 3);
+  finish({ outcome: 'succeeded' });
+  await until(() => f.run(asked.delivery.runId).state === 'SUCCEEDED');
+  const response = await new LocalClient(f.endpoint, f.owner.token).command('message_wait', {
+    ...f.thread, questionId: asked.message.id, timeoutMs: 0
+  });
+  assert.equal(response.reply.id, saved.value.message.id);
+  assert.equal(canonical(f.current()), originalIssue);
+  assert.equal(await lead.command('message_send', {
+    ...f.thread, idempotencyKey: randomUUID(), recipient: { kind: 'owner' }, kind: 'QUESTION', body: 'Logical lead can still ask the owner'
+  }).then(result => result.delivery.state), 'STORED');
 });
 
 test('wake admission honors workspace settings, capability, day quota and active slots', async t => {
@@ -305,7 +353,7 @@ test('an admitted consult wait ends when its issue scope changes', async t => {
   const asked = f.send(f.lead.actor, role('worker'));
   await f.coordinator.tick();
   const actor = f.store.authenticate(f.adapter.calls[0]!.context.token);
-  const followup = f.send(actor, role('lead'), { wake: false });
+  const followup = f.send(f.worker.actor, role('lead'), { wake: false });
   const pending = f.flow.execute(actor, 'message_wait', { ...f.thread, questionId: followup.message.id, timeoutMs: 2000 }) as Promise<unknown>;
   const denied = assert.rejects(pending, fails('CONSULT_STALE'));
   f.write(f.owner.actor, 'issue_update', {

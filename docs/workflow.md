@@ -322,7 +322,7 @@ A message is an immutable record in an issue's thread. It has a sender taken fro
 
 ### Consult runs
 
-When a question requests it and the workspace allows it, the coordinator starts one bounded consult run for the recipient in the recipient's harness. It runs as a separate run-scoped actor that the service authorizes for read operations and `message_send` only, whatever its host lists, and its context holds only messages visible to the recipient. It cannot submit work, reviews or QA reports, and it changes no issue state. A final text answer without the tool call is not a reply.
+When a question requests it and the workspace allows it, the coordinator starts one bounded consult run for the recipient in the recipient's harness. The separate run-scoped actor can read scoped context and use `message_send` once to reply to the originating question's sender. The service applies this restriction regardless of the host's tool listing. Exact idempotent retries return the original reply without creating another message. A consult changes no issue state. Only the stored tool reply counts as an answer.
 
 | Rule | Default |
 | --- | --- |
@@ -330,7 +330,7 @@ When a question requests it and the workspace allows it, the coordinator starts 
 | Wakes per issue per day | 3 |
 | Consult run time limit | 10 minutes |
 | Concurrency | Counts toward the active-run cap |
-| Nesting | A consult run cannot wake; replies never wake |
+| Nesting | The service rejects any question from a consult run before storing it, so a consult cannot wake anyone; replies never wake |
 | Failure | An unavailable harness, failed authentication or exhausted budget stores the message and reports the reason; no retry |
 
 Wake modes `fresh`, `resume` and `queue` are capability-reported for each harness and offered only after verification. Rework and re-test prompts carry the previous rejection and its findings.

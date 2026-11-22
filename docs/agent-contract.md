@@ -245,7 +245,7 @@ Status: accepted by the user on 2026-11-14 with D17–D24; not implemented. Deta
 | QA | `issue_get`, `design_get`, `check_profile_list`, `qa_check_run`, `qa_check_get`, `qa_report_submit`, `integration_get`, `artifact_read`, `evidence_get`, message tools |
 | PM | Planning, dependency, assignment, QA configuration, dispatch, run, iteration, Git evidence, completion and read operations; message tools |
 | Lead | The PM profile plus `design_set`, `design_submit`, `review_submit` |
-| Consult run | Read operations of the recipient's role plus `message_send`, enforced by the service for its separate run-scoped actor |
+| Consult run | Scoped reads and exactly one `message_send` reply to the originating question's sender. The service denies other sends and preserves exact idempotent replay. |
 
 Every operation states its purpose, preconditions, effect and common rejections. Every input property states what it is and where its value comes from. The MCP `instructions` are the role's playbook.
 
