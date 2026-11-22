@@ -81,7 +81,7 @@ These are **planned records**, not GitHub issues and not approved/in-progress as
 | B24 | Agent surface——[Feature] Briefs: return remedies, designs and rejection context -> rework starts informed | Domain worker | B23 | AC43/12/19/41/42 |
 | B25 | Agent coordination——[Feature] Messages: store issue threads and bounded waits -> agents ask without a relay | Backend worker | B23 | AC44/11 |
 | B26 | Agent coordination——[Feature] Wake: start bounded consult runs -> cross-harness answers within budget | Runner worker | B25, wake spike | AC44/17/25 |
-| B27 | Human surface——[Feature] Decisions: decide on one card in plain language -> positive decisions in two steps | Frontend worker | Approved [round 3 design](proposals/r2-human-surface-design.md), B24 | AC42/39/41 |
+| B27 | Human surface——[Feature] Decisions: decide on one card in plain language -> positive decisions in two steps | Frontend worker | Owner-approved [round 3 design](proposals/r2-human-surface-design.md), B24 | AC42/39/41 |
 | B28 | Human surface——[Feature] Workspace: three destinations and audit details -> no internal codes by default | Frontend worker | B27 | AC42/26/27 |
 | B29 | Documentation——[Docs] Baseline: one status page and a generated agent reference -> current behavior stated once | Integration worker | B23 | None |
 
