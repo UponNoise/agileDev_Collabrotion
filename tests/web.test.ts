@@ -8,7 +8,7 @@ import { Store } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { createServer } from '../src/http.js';
 import { WebSessions } from '../src/web-session.js';
-import { agentOperations } from '../src/contracts.js';
+import { agentOperations, type Run } from '../src/contracts.js';
 
 test('human browser pairing is one-use, origin-bound, cookie-only, CSRF-protected and revocable', async () => {
   const store = new Store(':memory:');
@@ -214,7 +214,7 @@ test('web projections are human-only, scoped, searchable, bounded and cursor-awa
   try {
     const workspace = call('workspace_register', { root, name: 'Projection fixture', prefix: 'WEB' }).workspace;
     const other = call('workspace_register', { root: tmpdir(), name: 'Another project', prefix: 'ALT' }).workspace;
-    call('issue_create', { workspaceId: other.id, title: 'Other private scope' });
+    const otherIssue = call('issue_create', { workspaceId: other.id, title: 'Other private scope' }).issue;
     for (let index = 0; index < 25; index++)
       call('issue_create', {
         workspaceId: workspace.id,
@@ -222,6 +222,7 @@ test('web projections are human-only, scoped, searchable, bounded and cursor-awa
         description: index === 0 ? '<img src=x onerror=alert(1)>' : 'Fixture requirement'
       });
     const first = call('ui_workspace', { workspaceId: workspace.id });
+    assert.deepEqual(first.activeRuns, []);
     assert.equal(first.issues.length, 20);
     assert.equal(first.total, 25);
     assert.equal(first.nextOffset, 20);
@@ -232,6 +233,20 @@ test('web projections are human-only, scoped, searchable, bounded and cursor-awa
     const search = call('ui_workspace', { workspaceId: workspace.id, search: 'Requirement 24' });
     assert.equal(search.issues.length, 1);
     const issue = first.issues[0];
+    const initialRun = { workspaceId: workspace.id, issueId: first.issues[1].id, actorId: owner.id, harness: 'codex', version: 1, designId: 'fixture-design', scopeRevision: 1 } as const;
+    const runs: Run[] = [
+      { ...initialRun, id: randomUUID(), kind: 'implementation', state: 'QUEUED', createdAt: '2026-11-22T00:01:00Z' },
+      { ...initialRun, id: randomUUID(), kind: 'qa', state: 'STARTING', createdAt: '2026-11-22T00:02:00Z' },
+      { ...initialRun, id: randomUUID(), state: 'RUNNING', createdAt: '2026-11-22T00:03:00Z', startedAt: '2026-11-22T00:04:00Z' },
+      { ...initialRun, id: randomUUID(), kind: 'consult', designId: null, consult: { questionId: randomUUID(), mode: 'fresh' }, state: 'UNCERTAIN', createdAt: '2026-11-22T00:04:00Z', startedAt: '2026-11-22T00:05:00Z' },
+      { ...initialRun, id: randomUUID(), kind: 'implementation', state: 'STOPPING', createdAt: '2026-11-22T00:05:00Z' }
+    ];
+    for (const run of runs) store.put('run', run, workspace.id);
+    for (const state of ['SUCCEEDED', 'FAILED', 'CANCELLED'] as const)
+      store.put('run', { ...runs[0], id: randomUUID(), state }, workspace.id);
+    store.put('run', { ...runs[0], id: randomUUID(), workspaceId: other.id, issueId: otherIssue.id }, other.id);
+    assert.deepEqual(call('ui_workspace', { workspaceId: workspace.id, search: 'No matching title' }).activeRuns,
+      runs.map(({ id, issueId, kind = 'implementation', state, actorId, harness, createdAt, startedAt = null }) => ({ id, issueId, kind, state, actorId, harness, createdAt, startedAt })));
     const current = () => store.get<any>('issue', issue.id);
     call('issue_update', {
       workspaceId: workspace.id,

@@ -15,16 +15,21 @@ import type {
   Snapshot,
   Workspace
 } from '../src/contracts';
-import type { DecisionRiskView } from '../src/defect-contracts';
+import type { DecisionRiskView, DefectSeverity } from '../src/defect-contracts';
 
 export type DisplayIssue = Issue & { url: string; titleSuffix: string; iterationId?: string | null; legacyIterationLabel?: string | null; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
 export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings' | 'decisions';
 export interface InboxSettings {
   workspaceId: string; version: number; agingThresholdHours: number; updatedAt: string | null; updatedBy: string | null;
 }
+type ActorIdentity = Pick<Actor, 'id' | 'name'>;
 export interface InboxEntry {
   id: string; kind: InboxKind; workspaceId: string; workspaceName: string; issueId: string; key: string; title: string; url: string;
-  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null };
+  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string; defectId?: string; defectVersion?: number };
+  question?: { body: string; senderId: string; senderName: string };
+  defect?: { key: string; proposedSeverity: DefectSeverity; reporterId: string | null; reporterName: string | null; summary: string; confirmable: boolean };
+  pendingBy: ActorIdentity | null;
+  abandonment?: { by: ActorIdentity; at: string; reason: string; granted: boolean } | null;
   blocking: boolean; status: 'WAITING' | 'BLOCKED' | 'READY_TO_COMPLETE'; blockers: string[]; nextAction: string;
   pendingSince: string | null; pendingSequence: number | null; ageMs: number | null; ageProvenance: 'AUDIT_EVENT' | 'UNAVAILABLE'; clockSkew: boolean;
 }
@@ -37,6 +42,7 @@ export interface WorkspaceData {
   nextOffset: number | null;
   issues: DisplayIssue[];
   statusCounts: Record<string, number>;
+  activeRuns: (Pick<Run, 'id' | 'issueId' | 'state' | 'actorId' | 'harness' | 'createdAt'> & { kind: NonNullable<Run['kind']>; startedAt: string | null })[];
   actors: Actor[];
   profiles: CheckProfile[];
   designs: Pick<Design, 'id' | 'issueId' | 'status'>[];

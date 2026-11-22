@@ -134,6 +134,12 @@ export class DefectRegistry {
     catch (error) { if (error instanceof DomainError) return observed; throw error; }
   }
 
+  confirmationObservation(issue: Issue): DefectObservation | null {
+    if (issue.state !== 'USER_ACCEPTANCE' && issue.state !== 'DONE') return null;
+    const observation = this.observe(issue);
+    return observation.kind === 'DELIVERY' ? observation : null;
+  }
+
   private find(actor: Actor, workspaceId: string, defectId: string, expected: number) {
     const defect = this.get(actor, workspaceId, defectId);
     expectedVersion(defect.version, expected);
@@ -201,6 +207,7 @@ export class DefectRegistry {
   triage(actor: Actor, input: DefectTriageInput) {
     requireHuman(actor);
     const a = parsed(defectCoreSchemas.triage, input);
+    if (!a.reason && (a.action !== 'CONFIRM' || a.disposition === 'REOPEN')) throw new DomainError('INVALID_INPUT', 'A reason is required for this triage action', 400);
     return this.store.db.transaction(() => {
       const record = this.find(actor, a.workspaceId, a.defectId, a.expectedVersion);
       if (record.state !== 'PROPOSED' || record.origin !== null) return this.triageConfirmed(actor,record,a);
@@ -215,8 +222,8 @@ export class DefectRegistry {
       let confirmedOrigin: DefectRecord['origin'] = null;
       let requirement: Issue | undefined;
       if (a.action === 'CONFIRM') {
-        const current = this.observe(issue);
-        if (!['USER_ACCEPTANCE', 'DONE'].includes(issue.state) || current.kind !== 'DELIVERY' || !a.observation || canonical(current) !== canonical(a.observation)) throw new DomainError('DEFECT_OBSERVATION_REQUIRED', 'Confirmation requires current immutable evidence in an actual acceptance or closed context');
+        const current = this.confirmationObservation(issue);
+        if (!current || !a.observation || canonical(current) !== canonical(a.observation)) throw new DomainError('DEFECT_OBSERVATION_REQUIRED', 'Confirmation requires current immutable evidence in an actual acceptance or closed context');
         if (!a.severity) throw new DomainError('INVALID_INPUT', 'Confirmation requires an explicit severity');
         if (issue.state === 'DONE' && !a.disposition) throw new DomainError('INVALID_INPUT', 'A confirmed escaped defect requires REOPEN or DEFER');
         if (issue.state === 'USER_ACCEPTANCE' && a.disposition) throw new DomainError('INVALID_INPUT', 'Current acceptance confirmation cannot reopen or defer a closed delivery');
@@ -224,17 +231,17 @@ export class DefectRegistry {
         confirmedOrigin = issue.state === 'DONE' ? 'ESCAPED' : 'USER_ACCEPTANCE';
         if (a.disposition === 'REOPEN') {
           if (!this.effects.reopen) throw new DomainError('CAPABILITY_UNSUPPORTED', 'The workflow reopen integration is required', 501);
-          this.effects.reopen(actor, issue, a.reason);
+          this.effects.reopen(actor, issue, a.reason!);
           const reopened = this.store.get<Issue>('issue', issue.id);
           if (reopened.state !== 'NOT_STARTED' || reopened.version <= issue.version || reopened.candidate || reopened.acceptedDigest) throw new DomainError('DEFECT_EFFECT_INVALID', 'The reopen integration must apply the existing authorized reset');
         }
       } else if (a.action === 'NEW_REQUIREMENT') {
         if (!a.requirement || !this.effects.createRequirement) throw new DomainError('CAPABILITY_UNSUPPORTED', 'Explicit requirement details and workflow creation integration are required', 501);
-        requirement = this.effects.createRequirement(actor, issue, a.requirement, a.reason);
+        requirement = this.effects.createRequirement(actor, issue, a.requirement, a.reason!);
         const saved = this.store.get<Issue>('issue', requirement.id);
         if (saved.workspaceId !== issue.workspaceId || saved.parentId !== null || saved.state !== 'NOT_STARTED' || saved.designId || saved.assignee) throw new DomainError('DEFECT_EFFECT_INVALID', 'Converted proposals must create an unapproved unstarted requirement in the same workspace');
       }
-      const decision = this.source(actor, issue, 'HUMAN_TRIAGE', { defectId: record.id, expectedDefectVersion: record.version, expectedIssueVersion: issueVersion, action: a.action, severity: a.severity ?? null, disposition: a.disposition ?? null, reason: a.reason, initialObservation: record.initialObservation, confirmationObservation: nextObservation ?? null, requirementId: requirement?.id ?? null });
+      const decision = this.source(actor, issue, 'HUMAN_TRIAGE', { defectId: record.id, expectedDefectVersion: record.version, expectedIssueVersion: issueVersion, action: a.action, severity: a.severity ?? null, disposition: a.disposition ?? null, ...(a.reason === undefined ? {} : { reason: a.reason }), initialObservation: record.initialObservation, confirmationObservation: nextObservation ?? null, requirementId: requirement?.id ?? null });
       record.proposalSource = initialSource;
       record.source = { kind: 'HUMAN_TRIAGE', id: decision.id };
       record.triageId = decision.id;
@@ -261,13 +268,13 @@ export class DefectRegistry {
     let requirement: Issue | undefined;
     if (a.action === 'REOPEN') {
       if (!this.effects.reopen) throw new DomainError('CAPABILITY_UNSUPPORTED','The workflow reopen integration is required',501);
-      this.effects.reopen(actor,issue,a.reason);
+      this.effects.reopen(actor,issue,a.reason!);
       const reopened = this.store.get<Issue>('issue',issue.id);
       if (reopened.state !== 'NOT_STARTED' || reopened.version <= issue.version || reopened.candidate || reopened.acceptedDigest) throw new DomainError('DEFECT_EFFECT_INVALID','The reopen integration must apply the existing authorized reset');
     } else if (a.action === 'NEW_REQUIREMENT') {
       if (!a.requirement || !this.effects.createRequirement) throw new DomainError('INVALID_INPUT','A new requirement needs explicit requirement details');
       if (maybe(this.store,'defect_requirement',record.id)) throw new DomainError('INVALID_TRANSITION','This defect already has a linked requirement');
-      requirement = this.effects.createRequirement(actor,issue,a.requirement,a.reason);
+      requirement = this.effects.createRequirement(actor,issue,a.requirement,a.reason!);
       const saved = this.store.get<Issue>('issue',requirement.id);
       if (saved.workspaceId !== issue.workspaceId || saved.parentId !== null || saved.state !== 'NOT_STARTED' || saved.designId || saved.assignee) throw new DomainError('DEFECT_EFFECT_INVALID','A linked requirement must start unapproved and unassigned in this workspace');
     }

@@ -99,7 +99,7 @@ test('human decision risk reads bind visible defect versions and current QA find
   assert.equal(pending.defects[0].version, proposal.version);
   assert.equal(pending.defects[0].state, 'PROPOSED');
   const observed = f.observation(issue.id);
-  f.triage(proposal, 'CONFIRM', { observation: observed, severity: 'MINOR' });
+  f.triage(proposal, 'CONFIRM', { observation: observed, severity: 'MINOR', reason: undefined });
   const confirmed = packet();
   assert.notEqual(confirmed.hash, pending.hash);
   assert.equal(confirmed.defects[0].state, 'OPEN');
