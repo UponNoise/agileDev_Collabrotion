@@ -1,10 +1,10 @@
-import { execFile, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
-import { promisify } from 'node:util';
-import { Harness, DomainError } from './contracts.js';
+import { Harness, DomainError, type RunModelSettings, type RunModelValue } from './contracts.js';
 import { HarnessEntry, discoverHarnesses, harnessEnvironment } from './harness.js';
 import { consultLauncherIdentity, matchesConsultVerification, type ConsultVerification } from './consult-verification.js';
 import { terminateTree } from './execution.js';
@@ -14,6 +14,7 @@ export interface AdapterContext {
   harness: Harness; cwd: string; directory: string; prompt: string; endpoint: string; token: string; bridgeScript: string;
   kind?: 'consult';
   checkBeforeSpawn?(): void;
+  onModelSettings?(settings: RunModelSettings): void;
   onPid(pid: number): void; onProvider(id: string): void; onOutput(text: string): void;
 }
 export interface RunningSession { result: Promise<AdapterResult>; interrupt(): Promise<boolean> }
@@ -21,20 +22,35 @@ export interface ExecutionAdapter {
   start(context: AdapterContext): Promise<RunningSession>;
   supportsConsult?(harness: Harness): boolean;
 }
-export function declaredDshRoute(profile: string): { provider: string; model: string } | null {
-  const lines = profile.split(/\r?\n/); const start = lines.findIndex(line => line === '- id: agent-default-model');
-  if (start < 0) return null;
-  let end = lines.findIndex((line, index) => index > start && line.startsWith('- id: ')); if (end < 0) end = lines.length;
-  const section = lines.slice(start, end).join('\n');
-  const scalar = (name: string) => {
-    const raw = section.match(new RegExp(`^    ${name}: (.+)$`, 'm'))?.[1]?.trim();
-    if (!raw) return null;
-    const value = raw.startsWith('"') && raw.endsWith('"') ? JSON.parse(raw) : raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1) : raw;
-    return typeof value === 'string' && /^[A-Za-z0-9_.:/@-]+$/.test(value) ? value : null;
+const settingPattern = /^[A-Za-z0-9_@][A-Za-z0-9_.:/@+\[\]-]{0,159}$/;
+interface DshRoute { provider: string; model: string; reasoningEffort?: string }
+
+function ownerSetting(name: string) {
+  const value = process.env[name];
+  if (value !== undefined && !settingPattern.test(value)) throw new DomainError('INVALID_MODEL_SETTING', `${name} must be a model, provider or reasoning effort identifier`);
+  return value;
+}
+
+function cachedCodexSol(entry: HarnessEntry) {
+  const home = entry.env?.CODEX_HOME ?? process.env.CODEX_HOME ?? join(homedir(), '.codex');
+  try {
+    const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8'));
+    if (!Array.isArray(cache?.models)) return undefined;
+    const models: ({ slug?: unknown; visibility?: unknown } | null)[] = cache.models;
+    return models.flatMap(record => {
+      const slug = record?.slug;
+      const visibility = record?.visibility;
+      return typeof slug === 'string' && slug.endsWith('-sol') && settingPattern.test(slug) &&
+        (visibility === undefined || visibility === 'list') ? [slug] : [];
+    }).sort((a, b) => b.localeCompare(a, 'en', { numeric: true }))[0];
+  } catch { return undefined; }
+}
+
+function selectedSetting(override?: string, fallback?: string, source: 'managed-default' | 'codex-cache' = 'managed-default'): RunModelValue {
+  return {
+    value: override ?? fallback ?? null,
+    source: override !== undefined ? 'launch' : fallback !== undefined ? source : 'harness-default',
   };
-  if (/^  disabled: true$/m.test(section)) return null;
-  const provider = scalar('provider'); const model = scalar('model');
-  return provider && model ? { provider, model } : null;
 }
 export function decodeNativeEvent(harness: Harness, event: any) {
   if (harness === 'codex') {
@@ -44,7 +60,7 @@ export function decodeNativeEvent(harness: Harness, event: any) {
     if (event.type === 'item.completed' && event.item?.type === 'agent_message') return { text: String(event.item.text ?? '') };
   }
   if (harness === 'claude-code') {
-    if (event.type === 'system' && event.subtype === 'init') return { sessionId: event.session_id as string };
+    if (event.type === 'system' && event.subtype === 'init') return { sessionId: event.session_id as string, model: typeof event.model === 'string' && settingPattern.test(event.model) ? event.model : undefined };
     if (event.type === 'result') return { sessionId: event.session_id as string, terminal: event.is_error || event.subtype !== 'success' ? 'failed' as const : 'succeeded' as const, text: String(event.result ?? event.errors?.join('\n') ?? '') };
   }
   if (harness === 'dsh') {
@@ -85,6 +101,7 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
       sessionId = decoded.sessionId;
       context.onProvider(sessionId);
     }
+    if (decoded.model && decoded.sessionId && decoded.model !== context.token) context.onModelSettings?.({ model: { value: decoded.model, source: 'harness' } });
     if (decoded.terminal) terminal = decoded.terminal;
     if (decoded.text) { summary = redact(decoded.text).slice(-16000); context.onOutput(summary); }
     listener?.(event);
@@ -110,20 +127,53 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
   };
   return { child, result, interrupt, setListener: (fn: (event: any) => void) => { listener = fn; }, complete: settle, setSession: (id: string) => { sessionId = id; context.onProvider(id); }, setTerminal: (state: 'succeeded' | 'failed') => { terminal = state; } };
 }
-function writeDshMcpPatch(c: AdapterContext) {
+function writeDshMcpPatch(c: AdapterContext, route: DshRoute) {
   const patch = join(c.directory, 'dsh.patch.yml');
-  writeFileSync(patch, `- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`, { mode: 0o600 });
+  const selection = [
+    '- id: agent-default-model',
+    '  config:',
+    `    provider: ${JSON.stringify(route.provider)}`,
+    `    model: ${JSON.stringify(route.model)}`,
+    ...(route.reasoningEffort ? [`    reasoningEffort: ${JSON.stringify(route.reasoningEffort)}`] : []),
+    '',
+  ].join('\n');
+  writeFileSync(patch, `${selection}- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`, { mode: 0o600 });
   return patch;
 }
-async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSession> {
-  let provider = process.env.AGILEDEV_DSH_PROVIDER; let model = process.env.AGILEDEV_DSH_MODEL;
-  if (!provider && !model) {
-    const { stdout } = await promisify(execFile)(entry.command, [...entry.args, '--profile', 'sdk', '--dump-config'], { cwd: c.cwd, env: harnessEnvironment(entry.env), windowsHide: true, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
-    const declared = declaredDshRoute(stdout); provider = declared?.provider; model = declared?.model;
+function ownerDshPatchArgs() {
+  const path = process.env.AGILEDEV_DSH_PATCH;
+  if (path === undefined) return [];
+  if (isAbsolute(path)) {
+    try {
+      const resolved = realpathSync(path);
+      if (statSync(resolved).isFile()) return ['--patch', resolved];
+    } catch {}
   }
-  if (!provider || !model) throw new DomainError('PROVIDER_CONFIGURATION_REQUIRED', 'SDK profile has no readable static default route. Set both AGILEDEV_DSH_PROVIDER and AGILEDEV_DSH_MODEL; no substitute route is selected.');
-  const patch = writeDshMcpPatch(c);
-  const p = processSession(entry, ['--profile', 'sdk', '--patch', patch], c);
+  throw new DomainError('INVALID_DSH_PATCH', 'AGILEDEV_DSH_PATCH must name an accessible absolute patch file');
+}
+function dshLaunch(c: AdapterContext, profile: 'sdk' | 'headless') {
+  const ownerProvider = ownerSetting('AGILEDEV_DSH_PROVIDER');
+  const ownerModel = ownerSetting('AGILEDEV_DSH_MODEL');
+  const ownerEffort = ownerSetting('AGILEDEV_DSH_REASONING_EFFORT');
+  const extras = ownerDshPatchArgs();
+  if (!!ownerProvider !== !!ownerModel) throw new DomainError('PROVIDER_CONFIGURATION_REQUIRED', 'Set AGILEDEV_DSH_PROVIDER and AGILEDEV_DSH_MODEL together');
+  const provider = ownerProvider ?? 'deepseek-official';
+  const model = ownerModel ?? 'deepseek-flash';
+  const gemini = provider === 'google' && model === 'gemini-4-hydrogen';
+  const deepseek = provider === 'deepseek-official' && model === 'deepseek-flash';
+  if (gemini && !extras.length) throw new DomainError('DSH_PATCH_REQUIRED', 'Set AGILEDEV_DSH_PATCH to the Google provider overlay for Gemini Hydrogen');
+  const effort = selectedSetting(ownerEffort, gemini ? 'high' : deepseek ? 'max' : undefined);
+  const allowedEfforts = gemini ? ['low', 'medium', 'high'] : deepseek ? ['off', 'low', 'high', 'max'] : undefined;
+  if (allowedEfforts && effort.value && !allowedEfforts.includes(effort.value)) {
+    throw new DomainError('INVALID_MODEL_SETTING', `AGILEDEV_DSH_REASONING_EFFORT for the selected model must be one of ${allowedEfforts.join(', ')}`);
+  }
+  const route = { provider, model, reasoningEffort: effort.value ?? undefined };
+  const args = ['--profile', profile, ...extras, '--patch', writeDshMcpPatch(c, route)];
+  c.onModelSettings?.({ provider: selectedSetting(ownerProvider, provider), model: selectedSetting(ownerModel, model), reasoningEffort: effort });
+  return { args, route };
+}
+async function dshSdk(entry: HarnessEntry, c: AdapterContext, args: string[], route: DshRoute): Promise<RunningSession> {
+  const p = processSession(entry, args, c);
   const pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
   let sequence = 0;
   const send = (method: string, params: unknown): Promise<any> => new Promise((resolve, reject) => {
@@ -142,7 +192,7 @@ async function dshSdk(entry: HarnessEntry, c: AdapterContext): Promise<RunningSe
   const sessionId = randomUUID();
   void (async () => {
     try {
-      await send('initialize', { cwd: c.cwd, provider, model, approvalRequests: true, capabilities: { userQuestions: true } });
+      await send('initialize', { cwd: c.cwd, ...route, approvalRequests: true, capabilities: { userQuestions: true } });
       await send('session/prompt', { sessionId, contentBlocks: [{ type: 'text', text: c.prompt }] });
       p.setSession(sessionId);
       await send('session/wait', { sessionId });
@@ -187,18 +237,28 @@ export class NativeAdapter implements ExecutionAdapter {
       c.checkBeforeSpawn?.();
     }
     mkdirSync(c.directory, { recursive: true });
-    if (c.harness === 'dsh' && !consult) return dshSdk(entry, c);
     let args: string[];
     if (c.harness === 'dsh') {
-      args = ['--profile', 'headless', '--patch', writeDshMcpPatch(c), '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
+      const launch = dshLaunch(c, consult ? 'headless' : 'sdk');
+      if (!consult) return dshSdk(entry, c, launch.args, launch.route);
+      args = [...launch.args, '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
     } else if (c.harness === 'codex') {
       args = ['exec', '--json', '--sandbox', consult ? 'read-only' : 'workspace-write', '--cd', c.cwd, '--skip-git-repo-check', '-c', `mcp_servers.agiledev.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.agiledev.args=${JSON.stringify([c.bridgeScript, 'mcp'])}`, '-c', 'mcp_servers.agiledev.env_vars=["AGILEDEV_TOKEN","AGILEDEV_ENDPOINT"]', '-c', 'mcp_servers.agiledev.required=true', '-c', 'mcp_servers.agiledev.default_tools_approval_mode="approve"'];
+      const override = ownerSetting('AGILEDEV_CODEX_MODEL');
+      const model = selectedSetting(override, override ? undefined : cachedCodexSol(entry), 'codex-cache');
+      const effort = selectedSetting(ownerSetting('AGILEDEV_CODEX_REASONING_EFFORT'), model.value ? 'high' : undefined);
+      if (model.value) args.push('-c', `model=${JSON.stringify(model.value)}`);
+      if (effort.value) args.push('-c', `model_reasoning_effort=${JSON.stringify(effort.value)}`);
+      c.onModelSettings?.({ model, reasoningEffort: effort });
       if (consult) args.push('-c', 'approval_policy="never"');
       args.push('-');
     } else {
       const config = join(c.directory, 'mcp.json');
       writeFileSync(config, JSON.stringify({ mcpServers: { agiledev: { type: 'stdio', command: process.execPath, args: [c.bridgeScript, 'mcp'], env: { AGILEDEV_ENDPOINT: c.endpoint, AGILEDEV_TOKEN: '${AGILEDEV_TOKEN}' } } } }), { mode: 0o600 });
       args = ['--print', '--verbose', '--output-format', 'stream-json', '--permission-mode', consult ? 'dontAsk' : 'acceptEdits', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', config, '--session-id', randomUUID(), '--allowedTools', 'mcp__agiledev__*'];
+      const model = selectedSetting(ownerSetting('AGILEDEV_CLAUDE_MODEL'));
+      if (model.value) args.push('--model', model.value);
+      c.onModelSettings?.({ model, reasoningEffort: selectedSetting() });
       if (consult) args.push('--tools', '', '--disable-slash-commands');
     }
     const p = processSession(entry, args, c); p.child.stdin.end(c.prompt);

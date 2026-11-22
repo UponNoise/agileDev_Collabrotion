@@ -30,6 +30,52 @@ async function ownerStartRequired(args: string[], env: NodeJS.ProcessEnv) {
   });
 }
 
+function failMetadataRename(env: NodeJS.ProcessEnv, code: string, targets: string[]): NodeJS.ProcessEnv {
+  const preload = `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { basename } from 'node:path';
+    const rename = fs.renameSync;
+    fs.renameSync = (source, destination) => {
+      if (${JSON.stringify(targets)}.includes(basename(destination))) {
+        throw Object.assign(new Error('Injected metadata rename failure'), { code: ${JSON.stringify(code)} });
+      }
+      return rename(source, destination);
+    };
+    syncBuiltinESMExports();
+  `;
+  const url = `data:text/javascript;base64,${Buffer.from(preload).toString('base64')}`;
+  return { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ''} --import=${url}`.trim() };
+}
+
+test('owner daemon publishes lock and descriptor on EXDEV and reconnects after restart', { timeout: 30000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agiledev-service-exdev-'));
+  const env = fixtureEnvironment(directory);
+  const fallback = failMetadataRename(env, 'EXDEV', ['daemon.lock', 'daemon.json']);
+  try {
+    await assert.rejects(exec(process.execPath, [script, 'serve'], {
+      env: failMetadataRename(env, 'EACCES', ['daemon.json']), windowsHide: true, timeout: 5000,
+    }), { code: 1, stderr: /Injected metadata rename failure/ });
+    assert.ok(readdirSync(directory).every(name => !['daemon.lock', 'daemon.json'].includes(name) && !name.endsWith('.tmp')));
+
+    await exec(process.execPath, [script, 'service-start'], { env: fallback, windowsHide: true, timeout: 25000 });
+    const first = await requireService(directory);
+    assert.deepEqual(JSON.parse(readFileSync(join(directory, 'daemon.lock'), 'utf8')), { pid: first.pid, instance: first.instance });
+    await assert.rejects(exec(process.execPath, [script, 'serve'], { env: fallback, windowsHide: true, timeout: 5000 }), {
+      code: 1, stderr: /A live process owns the service lock/,
+    });
+    assert.equal(await stopService(directory), true);
+    await ownerStartRequired(['mcp'], { ...env, AGILEDEV_TOKEN: 'private-offline-agent-fixture' });
+    await exec(process.execPath, [script, 'service-start'], { env: fallback, windowsHide: true, timeout: 25000 });
+    const second = await requireService(directory);
+    assert.notEqual(second.instance, first.instance);
+    assert.equal(second.ownerToken, first.ownerToken);
+    assert.ok(readdirSync(directory).every(name => !name.endsWith('.tmp')));
+  } finally {
+    await stopService(directory);
+  }
+});
+
 test('offline agent entries and ordinary owner commands never start a service', { timeout: 20000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'agiledev-service-offline-'));
   const env = fixtureEnvironment(directory);
