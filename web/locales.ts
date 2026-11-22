@@ -264,6 +264,7 @@ const pairs: [string, string][] = [
   ['PM', '项目管理 Agent'],
   ['Worker', '执行 Agent'],
   ['QA', 'QA 测试'],
+  ['Consult', '问答'],
   ['human', '用户'],
   ['lead', '产品主 Agent'],
   ['pm', '项目管理 Agent'],

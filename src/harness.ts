@@ -6,6 +6,10 @@ import { Harness } from './contracts.js';
 
 const exec = promisify(execFile);
 export interface HarnessEntry { id: Harness; command: string; args: string[]; env?: Record<string, string> }
+export function harnessEnvironment(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const internal = new Set(['AGILEDEV_GITHUB_TOKEN', 'AGILEDEV_TOKEN', 'AGILEDEV_ENDPOINT', 'AGILEDEV_DATA_DIR']);
+  return Object.fromEntries(Object.entries({ ...process.env, ...extra }).filter(([key]) => !internal.has(key.toUpperCase())));
+}
 function executable(name: string): string | undefined {
   for (const path of (process.env.PATH ?? '').split(delimiter)) {
     for (const ext of process.platform === 'win32' ? ['.exe'] : ['']) {
@@ -16,8 +20,9 @@ function executable(name: string): string | undefined {
   return undefined;
 }
 function directories(path: string): string[] {
-  if (!existsSync(path)) return [];
-  return readdirSync(path, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  try {
+    return readdirSync(path, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  } catch { return []; }
 }
 export function discoverHarnesses(): HarnessEntry[] {
   const result: HarnessEntry[] = [];
@@ -47,7 +52,7 @@ export function discoverHarnesses(): HarnessEntry[] {
 }
 export async function probeHarness(entry: HarnessEntry) {
   try {
-    const { stdout } = await exec(entry.command, [...entry.args, '--version'], { env: { ...process.env, ...entry.env }, timeout: 10000, windowsHide: true, maxBuffer: 65536 });
+    const { stdout } = await exec(entry.command, [...entry.args, '--version'], { env: harnessEnvironment(entry.env), timeout: 10000, windowsHide: true, maxBuffer: 65536 });
     return { id: entry.id, available: true, version: stdout.trim(), executionVerified: false };
   } catch {
     return { id: entry.id, available: false, error: 'VERSION_PROBE_FAILED', executionVerified: false };
