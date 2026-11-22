@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -12,7 +12,7 @@ import { Coordinator } from '../src/runner.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter, NativeAdapter } from '../src/adapters.js';
 import { createServer } from '../src/http.js';
 import { LocalClient } from '../src/client.js';
-import { prepareExecution } from '../src/execution.js';
+import { linkExecutionDependencies, prepareExecution, resolveExecutionDependencies } from '../src/execution.js';
 import { applyFixturePlan, executeFixture } from './fixtures.js';
 
 async function waitFor(check: () => boolean, timeout = 10000) {
@@ -27,9 +27,11 @@ class ControlledAdapter implements ExecutionAdapter {
     return { result: new Promise<AdapterResult>(done => this.finish.set(context.cwd, done)), interrupt: async () => { this.finish.get(context.cwd)?.({ outcome: 'cancelled' }); return true; } };
   }
 }
-async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapter(), concurrency = 2) {
+async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapter(), concurrency = 2, provisionDependencies = false) {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-runner-'));
   const source = join(root, 'source'); mkdirSync(source); writeFileSync(join(source, 'source.txt'), 'original');
+  const dependencies = provisionDependencies ? mkdirSync(join(root, 'dependencies'), { recursive: true }) : undefined;
+  if (dependencies) writeFileSync(join(dependencies, 'package.txt'), 'owned dependency');
   const git = (...args: string[]) => execFileSync('git', args, { cwd: source, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   git('init'); git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fixture');
   const store = new Store(join(root, 'service.sqlite')); const flow = new Workflow(store); const owner = store.bootstrap();
@@ -49,9 +51,20 @@ async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapte
   applyFixturePlan(flow,owner.actor,parent.id);
   const jobs = tasks.map(i => change('work_dispatch', i.id, { designId: store.get<Issue>('issue', parent.id).designId, scopeRevision: 1 }).run as Run);
   const server = createServer(store); const endpoint = await server.listen({ host: '127.0.0.1', port: 0 });
-  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency });
-  const close = async () => { await coordinator.close(); await server.close(); store.close(); rmSync(root, { recursive: true, force: true }); };
-  return { root, source, store, flow, owner, change, workspace, tasks, jobs, adapter, coordinator, close };
+  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency, executionDependencies: dependencies });
+  const close = async () => {
+    await coordinator.close();
+    await server.close();
+    if (dependencies) for (const job of jobs) {
+      const executionRoot = store.get<Run>('run', job.id).executionRoot;
+      if (!executionRoot) continue;
+      const link = join(executionRoot, 'node_modules');
+      if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
+    }
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  };
+  return { root, source, dependencies, store, flow, owner, change, workspace, tasks, jobs, adapter, coordinator, close };
 }
 
 test('cross-harness dispatch isolates real Git worktrees and requires authenticated submission', { timeout: 20000 }, async () => {
@@ -65,6 +78,7 @@ test('cross-harness dispatch isolates real Git worktrees and requires authentica
       const context = adapter.contexts[n]!; const client = new LocalClient(context.endpoint, context.token);
       const actor = f.store.authenticate(context.token); const job = f.store.get<Run>('run', actor.runId!);
       const other = f.jobs.find(j => j.id !== job.id)!;
+      context.onModelSettings?.({ model: { value: 'fixture-model', source: 'launch' } });
       await assert.rejects(client.command('issue_get', { workspaceId: f.workspace.id, issueId: other.issueId }), (e: any) => e.code === 'SCOPE_DENIED');
       const current = (await client.command('issue_get', { workspaceId: f.workspace.id, issueId: job.issueId })).issue;
       writeFileSync(join(context.cwd, 'source.txt'), `delivered ${n}`);
@@ -78,6 +92,8 @@ test('cross-harness dispatch isolates real Git worktrees and requires authentica
       const issue = f.store.get<Issue>('issue', job.issueId); const run = f.store.get<Run>('run', job.id);
       assert.equal(issue.state, 'LEAD_REVIEW'); assert.equal(issue.stage, 'PRE_QA'); assert.equal(issue.candidate!.runId, run.id);
       assert.match(run.baseSha!, /^[a-f0-9]{40,64}$/); assert.ok(issue.candidate!.executionRoot);
+      assert.deepEqual(f.flow.execute(f.owner.actor, 'run_get', { workspaceId: f.workspace.id, runId: run.id }), { run });
+      assert.deepEqual(run.modelSettings, { model: { value: 'fixture-model', source: 'launch' } });
       assert.throws(() => f.store.authenticate(adapter.contexts.find(c => c.cwd === run.executionRoot)!.token), /valid scoped credential/);
     }
   } finally { await f.close(); }
@@ -91,6 +107,34 @@ test('provider success without a submission fails the run and preserves the busi
     await waitFor(() => f.store.get<Run>('run', f.jobs[0]!.id).state === 'FAILED');
     assert.equal(f.store.get<Run>('run', f.jobs[0]!.id).errorCode, 'SUBMISSION_REQUIRED');
     assert.equal(f.store.get<Issue>('issue', f.tasks[0]!.id).state, 'NOT_STARTED');
+  } finally { await f.close(); }
+});
+
+test('rejected adapter startup removes dependencies only when no process started', { timeout: 20000 }, async () => {
+  const contexts = new Map<string, AdapterContext>();
+  const adapter: ExecutionAdapter = {
+    async start(context) {
+      contexts.set(context.harness, context);
+      if (context.harness === 'claude-code') context.onPid(process.pid);
+      throw new DomainError('HARNESS_UNAVAILABLE', 'Fixture adapter rejected startup');
+    }
+  };
+  const f = await setup(2, adapter, 2, true);
+  try {
+    await f.coordinator.tick();
+    const runs = () => f.jobs.map(job => f.store.get<Run>('run', job.id));
+    await waitFor(() => runs().every(run => !!run.finishedAt));
+    const [failed, uncertain] = runs() as [Run, Run];
+    assert.equal(failed.state, 'FAILED');
+    assert.equal(failed.errorCode, 'HARNESS_UNAVAILABLE');
+    assert.equal(f.store.get<Issue>('issue', failed.issueId).state, 'NOT_STARTED');
+    assert.equal(lstatSync(join(failed.executionRoot!, 'node_modules'), { throwIfNoEntry: false }), undefined);
+    assert.throws(() => f.store.authenticate(contexts.get('codex')!.token), { code: 'UNAUTHENTICATED' });
+    assert.equal(uncertain.state, 'UNCERTAIN');
+    assert.equal(uncertain.pid, process.pid);
+    assert.ok(lstatSync(join(uncertain.executionRoot!, 'node_modules')).isSymbolicLink());
+    assert.throws(() => f.store.authenticate(contexts.get('claude-code')!.token), { code: 'UNAUTHENTICATED' });
+    assert.equal(readFileSync(join(f.dependencies!, 'package.txt'), 'utf8'), 'owned dependency');
   } finally { await f.close(); }
 });
 
@@ -196,4 +240,30 @@ test('Git source changes are never silently discarded and nested workspace roots
     assert.equal(readFileSync(join(isolated.root, 'nested.txt'), 'utf8'), 'scoped');
     assert.match(isolated.root, /nested$/);
   } finally { await f.close(); }
+});
+
+test('dependency configuration requires an absolute directory and preserves conflicting entries', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agiledev-dependency-conflict-'));
+  const source = join(root, 'owner');
+  const destination = join(root, 'execution');
+  const replacement = join(root, 'replacement');
+  mkdirSync(source);
+  mkdirSync(join(destination, 'node_modules'), { recursive: true });
+  mkdirSync(replacement);
+  const original = join(destination, 'node_modules', 'keep.txt');
+  writeFileSync(original, 'existing directory');
+  try {
+    assert.throws(() => resolveExecutionDependencies('owner'), { code: 'INVALID_EXECUTION_DEPENDENCIES' });
+    assert.throws(() => resolveExecutionDependencies(original), { code: 'INVALID_EXECUTION_DEPENDENCIES' });
+    assert.throws(() => linkExecutionDependencies(destination, resolveExecutionDependencies(source)!), { code: 'DEPENDENCY_LINK_CONFLICT' });
+    assert.equal(readFileSync(original, 'utf8'), 'existing directory');
+    const release = linkExecutionDependencies(replacement, source);
+    const replacedLink = join(replacement, 'node_modules');
+    unlinkSync(replacedLink);
+    mkdirSync(replacedLink);
+    const retained = join(replacedLink, 'keep.txt');
+    writeFileSync(retained, 'replacement directory');
+    assert.throws(release, { code: 'DEPENDENCY_LINK_CLEANUP_FAILED' });
+    assert.equal(readFileSync(retained, 'utf8'), 'replacement directory');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

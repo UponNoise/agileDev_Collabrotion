@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { Actor, CheckProfile, DomainError, Issue, QaReport, Run, Snapshot, Workspace, liveRunStates, type Harness } from './contracts.js';
 import { AdapterContext, AdapterResult, ExecutionAdapter, NativeAdapter, RunningSession } from './adapters.js';
-import { prepareExecution } from './execution.js';
+import { linkExecutionDependencies, prepareExecution, resolveExecutionDependencies } from './execution.js';
 import { Store } from './store.js';
 import { Workflow } from './workflow.js';
 import { copySnapshot, sealSnapshot, verifySnapshot } from './snapshots.js';
@@ -17,7 +17,7 @@ import { consultBudgetMs, consultQuestion, wakeSettings } from './consult.js';
 import { join } from 'node:path';
 
 interface OwnedExecution { actor: Actor; token: string; session?: RunningSession; promise?: Promise<void>; stopping: boolean; started: number; heartbeat: number; errorCode?: string }
-export interface RunnerOptions { endpoint: string; directory: string; bridgeScript: string; concurrency?: number; maxRunMs?: number; adapter?: ExecutionAdapter; now?: () => number }
+export interface RunnerOptions { endpoint: string; directory: string; bridgeScript: string; concurrency?: number; maxRunMs?: number; executionDependencies?: string; adapter?: ExecutionAdapter; now?: () => number }
 export class Coordinator {
   readonly id = randomUUID();
   private live = new Map<string, OwnedExecution>();
@@ -28,12 +28,14 @@ export class Coordinator {
   private readonly adapter: ExecutionAdapter;
   private readonly now: () => number;
   private readonly concurrency: number;
+  private readonly executionDependencies?: string;
   private readonly checks: CheckExecutor;
   constructor(private store: Store, private options: RunnerOptions) {
     this.now = options.now ?? Date.now;
     this.adapter = options.adapter ?? new NativeAdapter();
     this.flow = new Workflow(store, this.now, harness => this.canConsult(harness));
     this.concurrency = options.concurrency ?? 2;
+    this.executionDependencies = resolveExecutionDependencies(options.executionDependencies);
     this.checks = new CheckExecutor(store);
     if (!Number.isInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 4) throw new DomainError('INVALID_CAPACITY', 'Concurrent run capacity must be 1 through 4');
     if (!Number.isFinite(options.maxRunMs ?? 1800000) || (options.maxRunMs ?? 1800000) <= 0) throw new DomainError('INVALID_BUDGET', 'Run time budget must be a positive finite number');
@@ -139,6 +141,7 @@ export class Coordinator {
   }
   private async execute(id: string, owned: OwnedExecution) {
     let stopped = false;
+    let unlinkDependencies: (() => void) | undefined;
     try {
       let run = this.store.get<Run>('run', id);
       let issue = this.store.get<Issue>('issue', run.issueId);
@@ -198,15 +201,25 @@ export class Coordinator {
         'The coordinator has claimed your lease. Use agiledev issue_get to read the latest issue version and fence, and work_heartbeat for long work. Implement and self-check the assigned behavior.',
         'When ready, call agiledev work_submit with the current expectedVersion, fence, a unique idempotencyKey, a concise summary, and the relative paths of actual delivered files. Do not submit secrets or dependency directories. A final text response alone is not submission. Never approve your own implementation.',
       ].join('\n\n');
-      const result = await this.launch(run, owned, directory.root, prompt);
+      unlinkDependencies = this.executionDependencies ? linkExecutionDependencies(directory.root, this.executionDependencies) : undefined;
+      const instructions = unlinkDependencies ? `${prompt}\n\nThe owner provisioned shared node_modules for running existing scripts. Do not change that directory or run package installation in this execution root.` : prompt;
+      const result = await this.launch(run, owned, directory.root, instructions);
       stopped = result.outcome !== 'uncertain';
       const checksStopped = await this.checks.cancelRun(id);
-      if (result.outcome === 'succeeded' && run.kind !== 'qa' && this.store.get<Run>('run',id).state === 'RUNNING') this.sealDelivery(run,owned);
+      if (stopped && checksStopped) unlinkDependencies?.();
+      if (checksStopped && result.outcome === 'succeeded' && run.kind !== 'qa' && this.store.get<Run>('run',id).state === 'RUNNING') this.sealDelivery(run,owned);
       this.finish(id, owned, checksStopped ? result : { outcome: 'uncertain', errorCode: 'CHECK_STOP_UNCONFIRMED' });
     } catch (error) {
-      const errorCode = error instanceof DomainError ? error.code : 'EXECUTION_FAILED';
+      if (!this.store.db.open) return;
+      const mayBeRunning = !stopped && !!(owned.session || this.store.get<Run>('run', id).pid);
+      let failure = error;
+      if (!stopped && !mayBeRunning) {
+        try { unlinkDependencies?.(); }
+        catch (cleanupError) { failure = cleanupError; }
+      }
+      const errorCode = failure instanceof DomainError ? failure.code : 'EXECUTION_FAILED';
       const cancelled = errorCode === 'INTERRUPTED_BEFORE_LAUNCH' || errorCode === 'QUESTION_ALREADY_ANSWERED';
-      this.finish(id, owned, { outcome: owned.session && !stopped ? 'uncertain' : cancelled ? 'cancelled' : 'failed', errorCode, summary: error instanceof DomainError ? error.message : 'Execution could not be completed; inspect the retained run directory' });
+      this.finish(id, owned, { outcome: mayBeRunning ? 'uncertain' : cancelled ? 'cancelled' : 'failed', errorCode, summary: failure instanceof DomainError ? failure.message : 'Execution could not be completed; inspect the retained run directory' });
     } finally { this.live.delete(id); }
   }
   private async launch(run: Run, owned: OwnedExecution, cwd: string, prompt: string) {
@@ -223,6 +236,11 @@ export class Coordinator {
       } : {}),
       onPid: pid => { if (this.store.db.open) this.update(id, { pid }); },
       onProvider: providerSessionId => { if (this.store.db.open) this.update(id, { providerSessionId }); },
+      onModelSettings: settings => {
+        if (!this.store.db.open) return;
+        const modelSettings = this.store.get<Run>('run', id).modelSettings;
+        this.update(id, { modelSettings: { ...modelSettings, ...settings } });
+      },
       onOutput: summary => { if (this.store.db.open) this.update(id, { summary: summary.replaceAll(owned.token, '[redacted]').slice(-16000) }); }
     };
     owned.session = await this.adapter.start(context);
