@@ -266,10 +266,12 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
       SELECT data FROM records
       WHERE kind = 'defect' AND workspace_id = ? AND json_extract(data, '$.state') = 'PROPOSED'
     `).all(workspace.id) as { data: string }[];
+    const confirmable = new Map<string, boolean>();
     for (const row of proposals) {
       const defect = JSON.parse(row.data) as DefectRecord;
       const issue = byId.get(defect.issueId);
       if (!issue) continue;
+      if (!confirmable.has(issue.id)) confirmable.set(issue.id, policy.confirmable(issue));
       const audit = history().for(defect.id).find(event =>
         event.operation === 'defect_created' && event.data?.state === 'PROPOSED' && event.data.issueId === issue.id);
       const target = { issueVersion: issue.version, revisionHash: null, defectId: defect.id, defectVersion: defect.version };
@@ -277,7 +279,7 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
       const reporter = defect.reporterId ? maybe<Actor>(store, 'actor', defect.reporterId) : null;
       entry.defect = {
         key: defect.key, proposedSeverity: defect.severity, reporterId: defect.reporterId,
-        reporterName: reporter?.name ?? null, summary: briefText(defect.actual, 160), confirmable: policy.confirmable(issue)
+        reporterName: reporter?.name ?? null, summary: briefText(defect.actual, 160), confirmable: confirmable.get(issue.id)!
       };
     }
   }

@@ -15,6 +15,7 @@ import { acceptanceDigest } from '../src/qa-policy.js';
 import { createServer } from '../src/http.js';
 import { GitVerifier } from '../src/git-verifier.js';
 import { snapshotGitTree } from '../src/git.js';
+import { inboxList, type InboxPolicy } from '../src/inbox.js';
 
 const now = Date.UTC(2026, 10, 11, 12);
 const day = 86400000;
@@ -145,6 +146,26 @@ test('triage attention follows current delivery evidence without hiding any pend
   assert.deepEqual(workspaceCounts(other.id), { total: 1, blocking: 0, attention: 0, byKind: { ...byKind, DELIVERY_ACCEPTANCE: 0, DEFECT_TRIAGE: 1 } });
   const deliveryEntry = f.list().entries.find((entry: any) => entry.kind === 'DELIVERY_ACCEPTANCE' && entry.issueId === acceptance.issueId);
   assert.deepEqual(deliveryEntry.pendingBy, { id: acceptance.lead.id, name: acceptance.lead.name });
+});
+
+test('confirmable is evaluated once per issue however many reports it holds', t => {
+  const f = fixture(t);
+  const reporter = f.enroll('lead').actor as Actor;
+  const finding = { severity: 'MINOR', criterionIds: ['C1'], reproduce: 'Open fixture', expected: 'Present', actual: 'Missing' };
+  const first = f.issue(); const second = f.issue();
+  for (let index = 0; index < 5; index++) f.change('defect_propose', first.id, finding, reporter);
+  for (let index = 0; index < 2; index++) f.change('defect_propose', second.id, finding, reporter);
+  const calls: string[] = [];
+  const policy: InboxPolicy = {
+    delivery: () => ({ digest: null, accepted: false, blockers: [] }),
+    unmanaged: () => false,
+    confirmable: issue => { calls.push(issue.id); return issue.id === second.id; }
+  };
+  const page = inboxList(f.store, f.owner, { kind: 'DEFECT_TRIAGE', limit: 100 }, policy, now);
+  assert.equal(page.total, 7);
+  assert.deepEqual([...calls].sort(), [first.id, second.id].sort());
+  assert.deepEqual(page.entries.filter(entry => entry.defect?.confirmable).map(entry => entry.issueId), [second.id, second.id]);
+  assert.equal(page.summary.attention, 2);
 });
 
 test('human inbox derives current design target, preserves metadata age and resets a resubmission epoch', t => {
