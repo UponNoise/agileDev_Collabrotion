@@ -10,7 +10,7 @@ import { dataDirectory, ensureService, requireService, ServiceError, stopService
 import { verifyExecution,verifyGit } from './verify-execution.js';
 import { verifyConsult, verifyConsultExchange } from './verify-consult.js';
 import { consultLauncherIdentity, readConsultVerification } from './consult-verification.js';
-import { harnesses, Harness } from './contracts.js';
+import { DomainError, harnesses, Harness } from './contracts.js';
 
 const dataDir = dataDirectory();
 const service = () => ensureService({ dataDir, node: process.execPath, script: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js') });
@@ -90,7 +90,16 @@ async function main() {
     if (!args[0]) throw new Error('Usage: command <operation> [JSON file|-]; input defaults to stdin');
     const client = await commandClient();
     const input = JSON.parse(readFileSync(!args[1] || args[1] === '-' ? 0 : args[1], 'utf8'));
-    console.log(JSON.stringify(await client.command(args[0], input), null, 2));
+    try {
+      console.log(JSON.stringify(await client.command(args[0], input), null, 2));
+    } catch (error) {
+      if (error instanceof DomainError && error.remedy !== undefined) {
+        console.error(JSON.stringify({ error: { code: error.code, message: error.message, details: error.details ?? null, remedy: error.remedy } }));
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
     return;
   }
   if (command === 'connection') {

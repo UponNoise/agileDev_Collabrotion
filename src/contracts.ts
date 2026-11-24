@@ -71,7 +71,7 @@ export interface Issue {
   aggregate?: boolean; planId?: string; scopeDecisionId?: string; unmanagedExecution?: boolean; estimate?: { value: number; unit: 'hours' | 'points'; confidence: 'low' | 'medium' | 'high' } | null; iteration?: string | null; iterationId?: string | null; legacyIterationLabel?: string | null;
 }
 export class DomainError extends Error {
-  constructor(public code: string, message: string, public statusCode = 409, public details?: unknown) { super(message); }
+  constructor(public code: string, message: string, public statusCode = 409, public details?: unknown, public remedy?: unknown) { super(message); }
 }
 const id = z.string().min(1).max(150);
 const text = z.string().min(1).max(65536);
