@@ -7,7 +7,7 @@ Status: proposed. This document is the canonical state, permission, approval, an
 | Dimension | Values / meaning |
 | --- | --- |
 | Issue lifecycle | Work and review progress; listed below |
-| Design revision | `DRAFT`, `IN_REVIEW`, `APPROVED`, `CHANGES_REQUESTED`, `SUPERSEDED` |
+| Design revision | `DRAFT`, `IN_REVIEW`, `APPROVED`, `CHANGES_REQUESTED` |
 | Run lifecycle | `QUEUED`, `STARTING`, `RUNNING`, `STOPPING`, `SUCCEEDED`, `FAILED`, `CANCELLED`, `UNCERTAIN` |
 | Evidence/approval validity | Current, superseded, incomplete, unavailable, or invalidated at a recorded revision |
 
@@ -61,8 +61,8 @@ All mutations require authenticated actor scope, `expected_version`, and an idem
 | From | Action / actor | To | Required guards and evidence |
 | --- | --- | --- | --- |
 | No item | Create / human, lead, PM | `NOT_STARTED` | Valid workspace and parent; generated ID/key; never caller-selected active state |
-| `NOT_STARTED` | Claim / assigned worker | `IN_PROGRESS` | Approved design, acknowledged task scope/criteria revision, readiness, dependencies, binding, capacity, no hold; atomic lease |
-| `IN_PROGRESS` | Submit / owning worker | `LEAD_REVIEW:PRE_QA` | Current lease fence, exact candidate snapshot, criterion map, self-check evidence, handoff summary |
+| `NOT_STARTED` | Claim / service coordinator (for managed run) | `IN_PROGRESS` | Approved design, acknowledged task scope/criteria revision, readiness, dependencies, binding, capacity, no hold; atomic lease |
+| `IN_PROGRESS` | Submit / worker inside managed run (run token) | `LEAD_REVIEW:PRE_QA` | Current lease fence, exact candidate snapshot, criterion map, self-check evidence, handoff summary |
 | `LEAD_REVIEW:PRE_QA` | Pass / assigned lead | `QA_TEST` | Current criterion-level initial review; independent QA assignment created or queued |
 | `LEAD_REVIEW:PRE_QA` | Fail / assigned lead | `LEAD_REJECTED` | Reproducible rejection reasons and failed/missing criteria |
 | `QA_TEST` | Pass / assigned QA | `LEAD_REVIEW:FINAL` | Independent run/session, exact candidate, complete required tests, no unresolved blocking findings |
@@ -72,7 +72,7 @@ All mutations require authenticated actor scope, `expected_version`, and an idem
 | `USER_ACCEPTANCE` | Reject / human | `USER_REJECTED` | Exact snapshot/revision and actionable feedback; classification `DEFECT` (creates defects on the rejected digest), `SCOPE_CHANGE` (rework blocked by `SCOPE_REVISION_REQUIRED` until a newer approved design), or `CLARIFICATION` |
 | `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest and visible risk set; acknowledges open MINOR findings (§12); all closure checks pass |
 | `USER_ACCEPTANCE` | Complete / lead or PM | `DONE` | Exact-snapshot human close grant or prior current human acceptance; all closure checks still pass |
-| Any rework state | Claim rework / assigned worker | `IN_PROGRESS` | Valid assignment/binding, dependencies, fresh lease, required approved scope |
+| Any rework state | Claim rework / service coordinator (for managed run) | `IN_PROGRESS` | Valid assignment/binding, dependencies, fresh lease, required approved scope |
 | Nonterminal state | Hold / human or granted lead/PM | `ON_HOLD` | Reason, action scope, prior state/stage saved; cancellation/reconciliation of active runs requested |
 | `ON_HOLD` | Resume / human or granted lead/PM | Saved valid state or `IN_PROGRESS` | Revalidate revision, evidence, dependencies, and ownership; never restore an expired lease |
 | Nonterminal state | Abandon / human or granted lead/PM | `ABANDONED` | Reason, authority, explicit child disposition and scope impact; stop/reconcile live work |
@@ -302,7 +302,7 @@ Closing seals immutable historical membership and an event-derived summary. Fini
 
 ## 12. Revision R2: decision presentation, agent messages, and consult sessions
 
-Status: accepted by the user on 2026-11-14 with D17–D24; not implemented. Rationale, details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md) §13. Where this section differs from sections 1–11, this section governs.
+Status: accepted by the user on 2026-11-14 with D17–D24. Role profiles (`src/agent-profiles.ts`), compact briefs, remedies and MINOR/risk bindings (`src/issue-brief.ts`, `src/workflow.ts`), scoped issue messages and QA message evidence (`src/messages.ts`), and fresh-mode consult runs (`src/consult.ts`) are implemented. B27 and B28 (the decision and workspace UI slices) are in progress—service projections (ADC-0002) and the web decision model (ADC-0003) are merged, while the remaining Decisions and Workspace UI tasks and `resume`/`queue` consult wake modes remain planned. Rationale, details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md) §13. Where this section differs from sections 1–11, this section governs.
 
 ### Human decisions
 
@@ -335,4 +335,4 @@ When a question requests it and the workspace allows it, the coordinator starts 
 | Nesting | The service rejects any question from a consult run before storing it, so a consult cannot wake anyone; replies never wake |
 | Failure | An unavailable harness, failed authentication or exhausted budget stores the message and reports the reason; no retry |
 
-Wake modes `fresh`, `resume` and `queue` are capability-reported for each harness and offered only after verification. Rework and re-test prompts carry the previous rejection and its findings.
+Wake modes `fresh`, `resume` and `queue` are capability-reported for each harness and offered only after verification (only `fresh` is implemented; `resume` and `queue` report `UNVERIFIED`). Rework and re-test prompts carry the previous rejection and its findings.
