@@ -15,7 +15,7 @@ import type {
   Snapshot,
   Workspace
 } from '../src/contracts';
-import type { DecisionRiskView, DefectSeverity } from '../src/defect-contracts';
+import type { DecisionRiskView, DefectObservation, DefectRecord, DefectSeverity } from '../src/defect-contracts';
 
 export type DisplayIssue = Issue & { url: string; titleSuffix: string; iterationId?: string | null; legacyIterationLabel?: string | null; scope?: { status: ScopeState['status']; decisionId: string | null; action: string | null; blocking: string[] } };
 export type View = 'backlog' | 'board' | 'reviews' | 'runs' | 'settings' | 'decisions';
@@ -60,6 +60,7 @@ export interface IssueData {
   authorizationScopeHash: string;
   git: GitSubmissionView | null;
   closureBlocked: string[];
+  defects?: { observation: DefectObservation };
   readiness: { ready: boolean; blocking: string[] };
   executionRecovery: { required: boolean; fence: number; candidateId: string | null };
   planning: {
@@ -136,6 +137,9 @@ export async function request<T>(path: string, body?: unknown): Promise<T> {
 export async function command<T>(operation: string, input: object): Promise<T> {
   return (await request<{ result: T }>(`/api/command/${operation}`, input)).result;
 }
+export const loadIssue = (workspaceId: string, issueId: string) =>
+  command<IssueData>('ui_issue', { workspaceId, issueId, limit: 1 });
+export type { DefectRecord };
 export const mutation = <T>(operation: string, input: object) =>
   command<T>(operation, {
     ...input,

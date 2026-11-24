@@ -1,19 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Actor, InboxKind, Workspace } from '../src/contracts';
 import type { InboxEntry, InboxSettings } from './api';
 import { ApiError, command, errorText, mutation } from './api';
 import { Empty, Field } from './components';
-import { useDateText, useText } from './Preferences';
+import { formatAge, matchOpenEntry, rowTitle } from './card-model';
+import { useCodeText, useSentence } from './CardKit';
+import type { CardProps } from './CardKit';
+import { DefectCard, QuestionCard } from './DefectCard';
+import { DeliveryCard } from './DeliveryCard';
+import { DesignCard } from './DesignCard';
+import { groupEntries } from './decision-model';
+import type { ListGroup } from './decision-model';
+import { ClosureCard, RunCard } from './RunCard';
+import { ScopeCard } from './ScopeReview';
+import { useText } from './Preferences';
+import { kindSentence } from './sentences';
 
-export const decisionKinds: Record<InboxKind, string> = {
-  DESIGN_REVIEW: 'Design review',
-  DELIVERY_ACCEPTANCE: 'Delivery acceptance',
-  SCOPE_DECISION: 'Scope decision',
-  RUN_RECONCILE: 'Execution reconciliation',
-  CLOSURE_BLOCKED: 'Accepted delivery',
-  AGENT_QUESTION: 'Agent question',
-  DEFECT_TRIAGE: 'Defect triage'
-};
 interface Counts { total: number; blocking: number; attention: number; byKind: Record<InboxKind, number> }
 export interface InboxData {
   entries: InboxEntry[];
@@ -23,12 +25,12 @@ export interface InboxData {
   workspaces: (Counts & { workspaceId: string; name: string; settings: InboxSettings })[];
   generatedAt: string;
 }
-export interface DecisionFilter { workspaceId: string; kind: string; offset: number }
-const unfiltered: DecisionFilter = { workspaceId: '', kind: '', offset: 0 };
+export interface DecisionFilter { workspaceId: string; kind: string; offset: number; limit?: number }
+const PAGE = 20;
 
 export function useDecisionInbox(actor: Actor | null, refresh: number, filter: DecisionFilter, visible: boolean) {
   const [result, setResult] = useState<{ data: InboxData | null; global: InboxData | null; error: unknown; loading: boolean }>({ data: null, global: null, error: null, loading: true });
-  const { workspaceId, kind, offset } = visible ? filter : unfiltered;
+  const wanted = visible ? Math.max(PAGE, filter.limit ?? PAGE) : 1;
   useEffect(() => {
     if (!actor) {
       setResult({ data: null, global: null, error: null, loading: true });
@@ -36,67 +38,52 @@ export function useDecisionInbox(actor: Actor | null, refresh: number, filter: D
     }
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
-    setResult(previous => ({ ...previous, data: null, loading: true, error: null }));
+    setResult((previous) => ({ ...previous, loading: previous.data === null, error: null }));
     const load = async () => {
       try {
-        const filtered = !!workspaceId || !!kind || offset !== 0;
-        const query = { ...(workspaceId ? { workspaceId } : {}), ...(kind ? { kind } : {}), offset, limit: 20 };
-        const [data, global] = filtered
-          ? await Promise.all([command<InboxData>('inbox_list', query), command<InboxData>('inbox_list', { limit: 1 })])
-          : await command<InboxData>('inbox_list', query).then(value => [value, value]);
-        if (active) setResult({ data, global, error: null, loading: false });
+        const data = await command<InboxData>('inbox_list', { offset: 0, limit: Math.min(100, wanted) });
+        let next = data.nextOffset;
+        while (active && next !== null && data.entries.length < wanted) {
+          const page = await command<InboxData>('inbox_list', { offset: next, limit: Math.min(100, wanted - data.entries.length) });
+          data.entries.push(...page.entries);
+          next = page.nextOffset;
+          data.nextOffset = next;
+        }
+        if (active) setResult({ data, global: data, error: null, loading: false });
       } catch (error) {
-        if (active) setResult(previous => ({ ...previous, error, loading: false }));
+        if (active) setResult((previous) => ({ ...previous, error, loading: false }));
       } finally {
         if (active) timer = setTimeout(load, 1000);
       }
     };
     void load();
     return () => { active = false; clearTimeout(timer); };
-  }, [actor, refresh, workspaceId, kind, offset]);
+  }, [actor, refresh, wanted]);
   return result;
 }
 
-function Entry({ entry, threshold, open }: { entry: InboxEntry; threshold: number; open(entry: InboxEntry): void }) {
-  const t = useText();
-  const dateText = useDateText();
-  const age = entry.ageMs;
-  const ownerQuestion = entry.kind === 'AGENT_QUESTION';
-  const pendingDefect = entry.kind === 'DEFECT_TRIAGE';
-  const ageText = age === null ? t('Age unavailable') : age < 60000 ? t('Less than a minute') : age < 3600000
-    ? t('{count} min').replace('{count}', String(Math.floor(age / 60000)))
-    : t('{count} h').replace('{count}', String(Math.floor(age / 3600000)));
-  return (
-    <article className="decision-row" data-decision-kind={entry.kind}>
-      <div className="decision-copy">
-        <div className="decision-labels">
-          <strong>{t(decisionKinds[entry.kind])}</strong>
-          <span className={`status ${entry.status === 'READY_TO_COMPLETE' ? 'good' : entry.blocking ? 'review' : 'neutral'}`}>
-            {t(ownerQuestion ? 'Awaiting your reply' : entry.status === 'READY_TO_COMPLETE' ? 'Ready to complete' : entry.blocking || pendingDefect ? 'Decision required' : 'Acceptance recorded')}
-          </span>
-        </div>
-        <a href={entry.target.runId ? `/?${new URLSearchParams({ workspace: entry.workspaceId, view: 'runs', run: entry.target.runId })}` : `${entry.url}?view=reviews`}
-          onClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); open(entry); } }}>
-          <span className="mono">{entry.key}</span> {entry.title}
-        </a>
-        <p className="decision-age">
-          <span className={age !== null && age > threshold * 3600000 ? 'decision-aged' : ''}>{ageText}</span>
-          {entry.pendingSince ? <span> · {t('Pending since')} <time dateTime={entry.pendingSince}>{dateText(entry.pendingSince)}</time></span> : <span> · {t('Historical pending time was not recorded.')}</span>}
-          {entry.clockSkew ? <span> · {t('Recorded time is ahead of the service clock.')}</span> : null}
-        </p>
-        {entry.blockers.length ? <p className="decision-blockers">{t('Current blockers')}: {entry.blockers.join(' · ')}</p> : null}
-        {entry.kind === 'CLOSURE_BLOCKED' ? <p className="muted">{t('Acceptance is saved. Inspect current guards, then use Recheck closure; no second acceptance is needed.')}</p> : null}
-        <details className="decision-target">
-          <summary>{t('Exact decision target')}</summary>
-          <dl className="metadata">
-            <dt>{t('Issue version')}</dt><dd>{entry.target.issueVersion}</dd>
-            {Object.entries(entry.target).filter(([key, value]) => key !== 'issueVersion' && value !== null).map(([key, value]) => <div className="decision-target-field" key={key}><dt>{key}</dt><dd className="mono">{String(value)}</dd></div>)}
-          </dl>
-        </details>
-      </div>
-      <button onClick={() => open(entry)}>{t(ownerQuestion || pendingDefect ? 'View issue' : entry.target.runId ? 'Inspect run' : entry.status === 'READY_TO_COMPLETE' ? 'Inspect completion' : 'Review item')}</button>
-    </article>
-  );
+export function openDecisionCard(workspaceId: string, issueId: string, kind: InboxKind) {
+  history.pushState(null, '', `/?${new URLSearchParams({ workspace: workspaceId, view: 'decisions', issue: issueId, kind })}`);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+function Card(props: CardProps) {
+  switch (props.entry.kind) {
+    case 'DESIGN_REVIEW': return <DesignCard {...props} />;
+    case 'DELIVERY_ACCEPTANCE': return <DeliveryCard {...props} />;
+    case 'SCOPE_DECISION': return <ScopeCard {...props} />;
+    case 'RUN_RECONCILE': return <RunCard {...props} />;
+    case 'CLOSURE_BLOCKED': return <ClosureCard {...props} />;
+    case 'DEFECT_TRIAGE': return <DefectCard {...props} />;
+    case 'AGENT_QUESTION': return <QuestionCard {...props} />;
+  }
+}
+
+const groupLabel: Record<ListGroup, string> = { 'needs-you': 'Needs you', accepted: 'Accepted', later: 'Later' };
+
+function typing(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return !!element && (element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName));
 }
 
 export function Decisions({ feed, filter, setFilter, workspaces, open, retry }: {
@@ -104,41 +91,133 @@ export function Decisions({ feed, filter, setFilter, workspaces, open, retry }: 
   filter: DecisionFilter;
   setFilter(filter: DecisionFilter): void;
   workspaces: Workspace[];
-  open(entry: InboxEntry): void;
+  open?(entry: InboxEntry): void;
   retry(): void;
 }) {
   const t = useText();
+  const render = useSentence();
+  const codeText = useCodeText();
   const data = feed.data;
+  const groups = useMemo(() => groupEntries(data?.entries ?? []), [data]);
+  const flat = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
+  const [slot, setSlot] = useState<{ key: string; entry: InboxEntry } | null>(null);
+  const [want, setWant] = useState(() => readWant());
+  const remembered = useRef<{ entry: InboxEntry; index: number } | null>(null);
+  const openSlot = (entry: InboxEntry) => {
+    remembered.current = { entry, index: Math.max(0, flat.indexOf(entry)) };
+    setSlot({ key: entry.id, entry });
+  };
+  const matched = slot ? matchOpenEntry(flat, slot.entry) : null;
+  useEffect(() => {
+    const pop = () => setWant(readWant());
+    window.addEventListener('popstate', pop);
+    return () => window.removeEventListener('popstate', pop);
+  }, []);
+  useEffect(() => {
+    if (!data) return;
+    if (want) {
+      const match = flat.find((entry) => entry.issueId === want.issueId && entry.kind === want.kind);
+      if (match && matched?.id !== match.id) openSlot(match);
+      setWant(null);
+      return;
+    }
+    if (!slot && flat.length) openSlot(flat[0]!);
+  }, [data, flat, want, slot, matched?.id]);
+  if (matched) remembered.current = { entry: matched, index: flat.indexOf(matched) };
+  const current = matched ?? (slot && remembered.current ? remembered.current.entry : null);
+  const gone = !!current && !matched;
+  const currentId = matched?.id ?? slot?.entry.id ?? null;
+  const hasNext = flat.some((entry) => entry.id !== currentId);
+  const go = (delta: 1 | -1) => {
+    const count = flat.length;
+    if (!count) return;
+    const position = matched ? flat.indexOf(matched) : (remembered.current?.index ?? 0);
+    const index = matched
+      ? (position + delta + count) % count
+      : delta === 1 ? Math.min(position, count - 1) : (position - 1 + count) % count;
+    const target = flat[index]!;
+    if (target.id !== matched?.id) openSlot(target);
+  };
+  const nextOne = () => { if (hasNext) go(1); };
+  useEffect(() => {
+    const press = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing || typing(event.target)) return;
+      if (event.key.toLowerCase() === 'j') go(1);
+      else if (event.key.toLowerCase() === 'k') go(-1);
+    };
+    window.addEventListener('keydown', press);
+    return () => window.removeEventListener('keydown', press);
+  });
+  const more = data !== null && data.nextOffset !== null;
+  const showWorkspace = workspaces.length > 1;
   return (
     <section className="decisions" aria-label={t('Human decisions')}>
-      <div className="decision-filters">
-        <Field label={t('Decision workspace')}><select value={filter.workspaceId} onChange={event => setFilter({ ...filter, workspaceId: event.target.value, offset: 0 })}>
-          <option value="">{t('All readable workspaces')}</option>
-          {workspaces.map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
-        </select></Field>
-        <Field label={t('Decision kind')}><select value={filter.kind} onChange={event => setFilter({ ...filter, kind: event.target.value, offset: 0 })}>
-          <option value="">{t('All decision kinds')}</option>
-          {Object.entries(decisionKinds).map(([kind, label]) => <option key={kind} value={kind}>{t(label)}</option>)}
-        </select></Field>
-      </div>
-      {feed.error ? <div className="error" role="alert"><p>{t(errorText(feed.error))}</p><p>{t('The inbox could not refresh. Any visible records may be stale; opening an item revalidates it.')}</p><button onClick={retry}>{t('Retry')}</button></div> : null}
-      {feed.loading ? <p role="status">{t('Loading decisions…')}</p> : data?.entries.length ? (
-        <>
-          {data.workspaces.filter(workspace => data.entries.some(entry => entry.workspaceId === workspace.workspaceId)).map(workspace => (
-            <section className="decision-group" aria-labelledby={`decisions-${workspace.workspaceId}`} key={workspace.workspaceId}>
-              <h2 id={`decisions-${workspace.workspaceId}`}>{workspace.name}</h2>
-              {data.entries.filter(entry => entry.workspaceId === workspace.workspaceId).map(entry => <Entry key={entry.id} entry={entry} threshold={workspace.settings.agingThresholdHours} open={open} />)}
-            </section>
-          ))}
-        </>
-      ) : data ? <Empty title={t(filter.kind || filter.workspaceId ? 'No matching decisions' : 'Nothing is waiting on you')}><p>{t('New design reviews, delivery acceptances, scope decisions, and execution reconciliations appear here.')}</p></Empty> : null}
-      {data ? <footer className="pagination">
-        <span>{t('{count} decisions').replace('{count}', String(data.total))} · {t('page {page}').replace('{page}', String(filter.offset / 20 + 1))}</span>
-        <button disabled={!filter.offset || feed.loading} onClick={() => setFilter({ ...filter, offset: Math.max(0, filter.offset - 20) })}>{t('Previous')}</button>
-        <button disabled={data.nextOffset === null || feed.loading} onClick={() => setFilter({ ...filter, offset: data.nextOffset! })}>{t('Next')}</button>
-      </footer> : null}
+      {feed.error ? (
+        <div className="error" role="alert">
+          <p>{feed.error instanceof ApiError ? codeText(feed.error.code) : codeText('SERVICE_UNAVAILABLE')}</p>
+          <button onClick={retry}>{t('Retry')}</button>
+        </div>
+      ) : null}
+      {feed.loading && !data ? <p role="status">{t('Loading decisions…')}</p> : null}
+      {data && !flat.length && !current ? (
+        <Empty title={t('Nothing is waiting on you')}><p>{t('New decisions appear here.')}</p></Empty>
+      ) : null}
+      {data && (flat.length || current) ? (
+        <div className="decisions-layout">
+          <nav className="decision-rail" aria-label={t('Decisions')}>
+            {!flat.length ? <p className="muted">{t('Nothing is waiting on you')}</p> : null}
+            {groups.filter((group) => group.entries.length).map((group) => (
+              <section key={group.group} aria-labelledby={`rail-${group.group}`}>
+                <h2 id={`rail-${group.group}`}>{render({ key: groupLabel[group.group], values: {} })} <span className="rail-count">{group.entries.length}</span></h2>
+                <ul>
+                  {group.entries.map((entry) => {
+                    const age = formatAge(entry.ageMs);
+                    return (
+                      <li key={entry.id}>
+                        <a
+                          href={entry.url}
+                          aria-current={entry.id === currentId ? 'true' : undefined}
+                          onClick={(event) => {
+                            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                            event.preventDefault();
+                            if (matched?.id !== entry.id) openSlot(entry);
+                          }}
+                        >
+                          <span className="rail-title">{rowTitle(entry)}</span>
+                          <span className="rail-meta">
+                            {render(kindSentence(entry.kind))}
+                            {showWorkspace ? ` · ${entry.workspaceName}` : ''}
+                            {age ? ` · ${t(age.key).replace('{count}', String(age.count ?? ''))}` : ''}
+                            {entry.status === 'READY_TO_COMPLETE' ? ` · ${t('Ready')}` : ''}
+                          </span>
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+            {more ? <button type="button" onClick={() => setFilter({ ...filter, limit: (filter.limit ?? PAGE) + PAGE })}>{t('Show more')}</button> : null}
+          </nav>
+          <div className="decision-panel">
+            {current && slot ? (
+              <>
+                {open ? <p className="card-links"><a href={current.url} onClick={(event) => { event.preventDefault(); open(current); }}>{t('Open the issue')}</a></p> : null}
+                <Card key={slot.key} entry={current} gone={gone} hasNext={hasNext} onNext={nextOne} />
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
+}
+
+function readWant() {
+  const query = new URLSearchParams(location.search);
+  const issueId = query.get('issue');
+  const kind = query.get('kind');
+  return issueId && kind ? { issueId, kind } : null;
 }
 
 export function InboxSettingsForm({ workspaceId, onSaved }: { workspaceId: string; onSaved(): void }) {

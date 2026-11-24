@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { command, errorText, formKey, harnessName, mutation, stateLabel } from './api';
 import type { IssueData, WorkspaceData } from './api';
 import { AsyncForm, Empty, Icon, JsonView, Status } from './components';
+import { openDecisionCard } from './Decisions';
 import type { IssueDialog } from './IssueForms';
 
 export function IssuePanel({
@@ -470,7 +471,7 @@ export function IssuePanel({
           {!historical &&
           packet.design?.status === 'IN_REVIEW' &&
           !['DONE', 'ABANDONED'].includes(root.state) ? (
-            <button className="primary" disabled={!online} onClick={() => dialog('design-review')}>
+            <button className="primary" disabled={!online} onClick={() => openDecisionCard(root.workspaceId, root.id, 'DESIGN_REVIEW')}>
               {t('Review design')}
             </button>
           ) : null}
@@ -483,7 +484,7 @@ export function IssuePanel({
             ? rootCall('design_submit', 'Request design review')
             : null}
           {issue.state === 'USER_ACCEPTANCE' && packet.deliveryDigest ? (
-            <button className="primary" disabled={!online} onClick={() => dialog('delivery')}>
+            <button className="primary" disabled={!online} onClick={() => openDecisionCard(issue.workspaceId, issue.id, 'DELIVERY_ACCEPTANCE')}>
               {t('Review delivery')}
             </button>
           ) : null}
@@ -505,13 +506,13 @@ export function IssuePanel({
               {t('Manage authorization')}
             </button>
             {packet.executionRecovery.required && issue.state !== 'DONE' ? (
-              <button disabled={!online} onClick={() => dialog('execution-recovery')}>
+              <button disabled={!online} onClick={() => openDecisionCard(issue.workspaceId, issue.id, 'RUN_RECONCILE')}>
                 {t('Reconcile unbound execution')}
               </button>
             ) : null}
             {issue.parentId &&
             (issue.state === 'ABANDONED' || (issue.scopeDecisionId && issue.scope?.action !== 'RESTORE')) ? (
-              <button disabled={!online} onClick={() => dialog('scope-decision')}>
+              <button disabled={!online} onClick={() => openDecisionCard(issue.workspaceId, issue.id, 'SCOPE_DECISION')}>
                 {t('Review delivery scope')}
               </button>
             ) : null}

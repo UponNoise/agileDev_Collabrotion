@@ -1,231 +1,168 @@
-import { useText } from './Preferences';
-import { useEffect, useState } from 'react';
-import { command, errorText, formKey, mutation } from './api';
-import type { IssueData, ScopeData } from './api';
-import { AsyncForm, Field, Modal, Status } from './components';
+import { useState } from 'react';
+import { command } from './api';
+import type { ScopeData } from './api';
+import { Bar, CardFrame, ChangeNotice, Recorded, Section, WhoWhen, auditRows, useCard, useCtrlEnter, useNextLine, useReasonShortcut, useSentence } from './CardKit';
+import type { CardProps } from './CardKit';
+import { cardShown } from './decision-model';
+import { useDateText, useText } from './Preferences';
+import { kindSentence } from './sentences';
 
-export function ScopeReview({
-  packet,
-  onClose,
-  onSaved
-}: {
-  packet: IssueData;
-  onClose(): void;
-  onSaved(): void;
-}) {
+type Choice = 'EXCLUDE' | 'REPLACE' | 'RESTORE';
+
+export function ScopeCard({ entry, gone, hasNext, onNext }: CardProps) {
   const t = useText();
-  const [data, setData] = useState<ScopeData | null>(null);
-  const [error, setError] = useState('');
-  const [action, setAction] = useState('EXCLUDE');
-  const [selected, setSelected] = useState<string[]>([]);
-  const child = packet.issue;
-  useEffect(() => {
-    let active = true;
-    command<ScopeData>('scope_get', { workspaceId: child.workspaceId, issueId: child.id, limit: 100 })
-      .then((result) => {
-        if (!active) return;
-        setData(result);
-        const previous = result.children.find((v) => v.issue.id === child.id)?.scope.decision;
-        if (previous && previous.action !== 'RESTORE') setAction('RESTORE');
-      })
-      .catch((failure) => {
-        if (active) setError(errorText(failure));
+  const render = useSentence();
+  const dateText = useDateText();
+  const nextLine = useNextLine();
+  const card = useCard<ScopeData>({
+    entryId: entry.id,
+    load: () => command<ScopeData>('scope_get', { workspaceId: entry.workspaceId, issueId: entry.issueId, limit: 100 }),
+    describe(data) {
+      const target = data.children.find((child) => child.issue.id === entry.issueId);
+      const eligible = data.children.filter((child) => child.issue.id !== entry.issueId && child.issue.state !== 'ABANDONED' && child.scope.status === 'INCLUDED');
+      return cardShown({
+        kind: 'SCOPE_DECISION',
+        entryId: entry.id,
+        issueVersion: (target?.issue.version ?? 0) + data.issue.version,
+        riskHash: null,
+        target: {},
+        scope: {
+          designId: data.design?.id ?? '',
+          scopeHash: data.scopeHash,
+          childScopeHash: target?.scopeHash ?? '',
+          replacements: eligible.map((child) => `${child.issue.id}:${child.scopeHash}`)
+        }
       });
-    return () => {
-      active = false;
-    };
-  }, [child.id, child.workspaceId]);
-  const target = data?.children.find((v) => v.issue.id === child.id);
-  const previous = target?.scope.decision;
-  const closed = !!data && ['DONE', 'ABANDONED'].includes(data.issue.state);
-  const replacements =
-    data?.children.filter(
-      (v) => v.issue.id !== child.id && v.issue.state !== 'ABANDONED' && v.scope.status === 'INCLUDED'
-    ) ?? [];
+    }
+  });
+  const [choice, setChoice] = useState<Choice | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [reason, setReason] = useState('');
+  const [reopenParent, setReopenParent] = useState(false);
+  const [done, setDone] = useState<{ recorded: string; next: string | null } | null>(null);
+  const data = card.data;
+  const target = data?.children.find((child) => child.issue.id === entry.issueId) ?? null;
+  const previous = target?.scope.decision ?? null;
+  const parentClosed = !!data && ['DONE', 'ABANDONED'].includes(data.issue.state);
+  const replacements = data?.children.filter((child) => child.issue.id !== entry.issueId && child.issue.state !== 'ABANDONED' && child.scope.status === 'INCLUDED') ?? [];
+  const own = new Set(target?.issue.criteria ?? []);
+  const chosen = replacements.filter((child) => selected.includes(child.issue.id));
+  const covered = [...own].every((criterion) => chosen.some((child) => child.issue.criteria.includes(criterion)));
+  const approved = data?.design?.status === 'APPROVED';
+  const available = {
+    EXCLUDE: target?.issue.state === 'ABANDONED',
+    REPLACE: target?.issue.state === 'ABANDONED' && replacements.some((child) => child.issue.criteria.some((criterion) => own.has(criterion))),
+    RESTORE: !!previous && previous.action !== 'RESTORE'
+  };
+  const ready = !!choice && available[choice] && approved && (choice !== 'REPLACE' || (chosen.length > 0 && covered)) && (choice !== 'RESTORE' || !parentClosed || reopenParent);
+  const locked = card.busy || !card.ready || !card.online || card.changed || gone;
+  const label = choice === 'REPLACE' ? t('Confirm replacement') : choice === 'EXCLUDE' ? t('Confirm exclusion') : choice === 'RESTORE' ? t('Restore to the scope') : t('Choose one first');
+  const submit = async () => {
+    if (locked || !ready || !choice || !reason.trim()) return;
+    const result = await card.decide('scope_decide', ({ data: current }) => {
+      const child = current.children.find((value) => value.issue.id === entry.issueId)!;
+      return {
+        workspaceId: entry.workspaceId,
+        issueId: entry.issueId,
+        expectedVersion: child.issue.version,
+        expectedParentVersion: current.issue.version,
+        designId: current.design!.id,
+        expectedDecisionId: child.issue.scopeDecisionId ?? null,
+        scopeHash: current.scopeHash,
+        childScopeHash: child.scopeHash,
+        action: choice,
+        replacements: choice === 'REPLACE'
+          ? current.children.filter((value) => selected.includes(value.issue.id)).map((value) => ({ issueId: value.issue.id, expectedVersion: value.issue.version, scopeHash: value.scopeHash }))
+          : [],
+        reason: reason.trim(),
+        reopenParent: choice === 'RESTORE' ? reopenParent : false,
+        reopenChild: false
+      };
+    });
+    if (!result) return;
+    setDone({
+      recorded: choice === 'RESTORE' ? t('You restored the task to the delivery scope.') : choice === 'EXCLUDE' ? t('You excluded the task from the delivery.') : t('You replaced the task with other tasks.'),
+      next: await nextLine(entry.workspaceId, 'Waiting for {pm} to plan the tasks')
+    });
+  };
+  useCtrlEnter(done || locked || !ready ? null : () => void submit());
+  useReasonShortcut(null);
+  const bar = done || gone ? (
+    <Recorded recorded={done?.recorded ?? t('This was already handled.')} next={done?.next ?? null} onNext={onNext} hasNext={hasNext} />
+  ) : (
+    <Bar changed={card.changed} onSeeChanges={card.seeChanges} error={card.error}>
+      {choice ? (
+        <div className="reason-box">
+          <label className="field">
+            <span>{t('Reason')}</span>
+            <textarea rows={3} maxLength={65536} value={reason} onChange={(event) => setReason(event.target.value)} />
+          </label>
+          {choice === 'RESTORE' && parentClosed ? (
+            <label className="check-row">
+              <input type="checkbox" checked={reopenParent} onChange={(event) => setReopenParent(event.target.checked)} />
+              <span>{t('Reopen the closed requirement; its acceptance will be invalidated.')}</span>
+            </label>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="bar-row">
+        <button type="button" className="primary" disabled={locked || !ready || !reason.trim()} onClick={() => void submit()}>{label}</button>
+      </div>
+    </Bar>
+  );
+  if (!data || !target) return <p role="status" className="muted card-loading">{card.loadFailed ? t('Nothing was recorded; your input is kept') : t('Loading…')}</p>;
   return (
-    <Modal
-      title={t('Review delivery scope')}
-      subtitle={`${child.key} · ${child.titleSuffix}`}
-      onClose={onClose}
+    <CardFrame
+      entry={entry}
+      kindLabel={render(kindSentence('SCOPE_DECISION'))}
+      title={entry.title}
+      who={<WhoWhen entry={entry} />}
+      audit={[...auditRows(entry), ['Design', data.design?.id], ['Design hash', data.design?.hash], ['Scope hash', data.scopeHash], ['Task scope hash', target.scopeHash], ['Previous decision', previous?.id]]}
+      bar={bar}
     >
-      {error ? (
-        <p className="error" role="alert">
-          {t(error)}
-        </p>
-      ) : null}
-      {!data && !error ? <p className="muted">{t('Loading the current parent and task scope…')}</p> : null}
-      {data && target ? (
-        <AsyncForm
-          onDone={() => {
-            onSaved();
-            onClose();
-          }}
-          onSave={(form) =>
-            mutation('scope_decide', {
-              workspaceId: child.workspaceId,
-              issueId: child.id,
-              expectedVersion: target.issue.version,
-              expectedParentVersion: data.issue.version,
-              designId: data.design?.id,
-              expectedDecisionId: target.issue.scopeDecisionId ?? null,
-              scopeHash: data.scopeHash,
-              childScopeHash: target.scopeHash,
-              action,
-              replacements:
-                action === 'REPLACE'
-                  ? replacements
-                      .filter((v) => selected.includes(v.issue.id))
-                      .map((v) => ({
-                        issueId: v.issue.id,
-                        expectedVersion: v.issue.version,
-                        scopeHash: v.scopeHash
-                      }))
-                  : [],
-              reason: String(form.get('reason')),
-              reopenParent: form.has('reopenParent'),
-              reopenChild: action === 'RESTORE' && form.has('reopenChild'),
-              ...formKey(form)
-            })
-          }
-        >
-          <div className="form-body">
-            <p className="notice">
-              {t(
-                'Only you can confirm this scope decision. Excluded tasks remain abandoned. Every approved criterion still requires delivery evidence. The parent must receive a current plan and repeat integration review.'
-              )}
-            </p>
-            <h3>{t('Approved parent requirement')}</h3>
-            <a href={data.issue.url}>{data.issue.title}</a>
-            <p>
-              <Status value={data.issue.state} /> · <Status value={data.design?.status ?? 'MISSING'} />
-            </p>
-            <p className="prose">{data.issue.description}</p>
-            <dl className="metadata">
-              <dt>{t('Design')}</dt>
-              <dd className="mono">{data.design?.id ?? t('No approved design')}</dd>
-              <dt>{t('Design hash')}</dt>
-              <dd className="mono">{data.design?.hash}</dd>
-              <dt>{t('Required criteria')}</dt>
-              <dd>{data.design?.criteria.join(', ')}</dd>
-            </dl>
-            <details>
-              <summary>{t('Design content')}</summary>
-              <div className="prose">{data.design?.content}</div>
-            </details>
-            <h3>{t('Task under review')}</h3>
-            <p>
-              <Status value={target.issue.state} /> · <Status value={target.scope.status} />
-            </p>
-            <p className="prose">{target.issue.description}</p>
-            <p>
-              {t('Owned criteria: ')}
-              {target.issue.criteria.join(', ') || t('None declared')}
-            </p>
-            {previous ? (
-              <details>
-                <summary>{t('Previous human scope decision')}</summary>
-                <dl className="metadata">
-                  <dt>{t('Action')}</dt>
-                  <dd>{previous.action}</dd>
-                  <dt>{t('Human')}</dt>
-                  <dd className="mono">{previous.actorId}</dd>
-                  <dt>{t('Decision')}</dt>
-                  <dd className="mono">{previous.id}</dd>
-                  <dt>{t('Reason')}</dt>
-                  <dd className="prose">{previous.reason}</dd>
-                </dl>
-              </details>
-            ) : null}
-            {target.scope.blocking.length ? (
-              <p role="status">
-                {target.scope.blocking.join(', ')}
-                {t('. Restore scope or review a new replacement against the current design.')}
-              </p>
-            ) : null}
-            <Field label={t('Scope decision')}>
-              <select name="action" value={action} onChange={(e) => setAction(e.target.value)}>
-                <option value="EXCLUDE" disabled={target.issue.state !== 'ABANDONED'}>
-                  {t('Exclude this abandoned task')}
-                </option>
-                <option value="REPLACE" disabled={target.issue.state !== 'ABANDONED'}>
-                  {t('Replace with named sibling tasks')}
-                </option>
-                <option value="RESTORE" disabled={!previous || previous.action === 'RESTORE'}>
-                  {t('Restore this task to delivery scope')}
-                </option>
-              </select>
-            </Field>
-            {action === 'REPLACE' ? (
-              <fieldset>
-                <legend>{t('Replacement tasks')}</legend>
-                {!replacements.length ? (
-                  <p>{t('No included sibling tasks are available. Create replacement tasks first.')}</p>
-                ) : null}
-                {replacements.map((v) => (
-                  <section className="evidence-block" key={v.issue.id}>
-                    <label className="checkbox">
-                      <input
-                        type="checkbox"
-                        checked={selected.includes(v.issue.id)}
-                        onChange={(e) =>
-                          setSelected((ids) =>
-                            e.target.checked ? [...ids, v.issue.id] : ids.filter((id) => id !== v.issue.id)
-                          )
-                        }
-                      />
-                      {v.issue.key} · {v.issue.titleSuffix}
-                    </label>
-                    <p>
-                      <Status value={v.issue.state} />
-                      {t(' · Criteria: ')}
-                      {v.issue.criteria.join(', ') || t('None declared')}
-                    </p>
-                    <p className="prose">{v.issue.description}</p>
-                  </section>
-                ))}
-              </fieldset>
-            ) : null}
-            {action === 'RESTORE' ? (
-              <Field
-                label={t('Reopen the abandoned task')}
-                hint={t('Clears its current candidate and reviews. Historical evidence remains available.')}
-              >
-                <input name="reopenChild" type="checkbox" defaultChecked />
-              </Field>
-            ) : null}
-            {closed ? (
-              <Field
-                label={t('Reopen the closed parent')}
-                hint={t(
-                  'The current parent delivery acceptance will be invalidated. Integration and human acceptance must run again.'
-                )}
-              >
-                <input name="reopenParent" type="checkbox" required />
-              </Field>
-            ) : null}
-            <Field label={t('Decision reason')}>
-              <textarea name="reason" rows={4} maxLength={65536} required />
-            </Field>
-            {data.design?.status !== 'APPROVED' ? (
-              <p className="error" role="alert">
-                {t('Approve the current parent design before confirming scope changes.')}
-              </p>
-            ) : null}
-          </div>
-          <footer className="form-footer">
-            <button type="button" onClick={onClose}>
-              {t('Cancel')}
-            </button>
-            <button
-              type="submit"
-              className="primary"
-              disabled={data.design?.status !== 'APPROVED' || (action === 'REPLACE' && !selected.length)}
-            >
-              {t('Confirm scope decision')}
-            </button>
-          </footer>
-        </AsyncForm>
-      ) : null}
-    </Modal>
+      <ChangeNotice seen={card.seen} lines={[t('The tasks or the design changed while you were reading.')]} />
+      <Section title={t('What happened')}>
+        {entry.abandonment ? (
+          <p>{t('{name} abandoned this task on {date}.').replace('{name}', entry.abandonment.by.name).replace('{date}', dateText(entry.abandonment.at))}{' '}
+            {entry.abandonment.granted ? t('It used a grant from you.') : null}</p>
+        ) : <p>{t('The scope of this task needs your decision again.')}</p>}
+        {entry.abandonment ? <p className="quote">{entry.abandonment.reason}</p> : null}
+      </Section>
+      <Section title={t('Criteria of this task')}>
+        {target.issue.criteria.length ? <ul>{target.issue.criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul> : <p className="muted">{t('None declared')}</p>}
+      </Section>
+      <Section title={t('Your choice')}>
+        {!approved ? <p className="error">{t('Approve the current parent design before confirming scope changes.')}</p> : null}
+        <div className="choices" role="radiogroup" aria-label={t('Your choice')}>
+          {(['EXCLUDE', 'REPLACE', 'RESTORE'] as const).filter((value) => value !== 'RESTORE' || available.RESTORE).map((value) => (
+            <label key={value} className={`choice ${available[value] ? '' : 'disabled'}`}>
+              <input type="radio" name="scope-choice" disabled={!available[value]} checked={choice === value} onChange={() => setChoice(value)} />
+              <span>{t(value === 'EXCLUDE' ? 'Exclude it from the delivery' : value === 'REPLACE' ? 'Replace it with other tasks' : 'Restore it to the delivery scope')}</span>
+            </label>
+          ))}
+        </div>
+        {choice === 'REPLACE' ? (
+          <fieldset className="replacements">
+            <legend>{t('Tasks that take over')}</legend>
+            {!replacements.length ? <p className="muted">{t('No other task in the delivery can take over.')}</p> : null}
+            {replacements.map((child) => {
+              const overlaps = child.issue.criteria.some((criterion) => own.has(criterion));
+              return (
+                <label key={child.issue.id} className={`check-row ${overlaps ? '' : 'disabled'}`}>
+                  <input
+                    type="checkbox"
+                    disabled={!overlaps}
+                    checked={selected.includes(child.issue.id)}
+                    onChange={(event) => setSelected((ids) => (event.target.checked ? [...ids, child.issue.id] : ids.filter((id) => id !== child.issue.id)))}
+                  />
+                  <span>{child.issue.titleSuffix}<small>{child.issue.criteria.join(', ') || t('None declared')}</small></span>
+                </label>
+              );
+            })}
+            {chosen.length && !covered ? <p className="muted">{t('The chosen tasks do not cover every criterion yet.')}</p> : null}
+          </fieldset>
+        ) : null}
+      </Section>
+    </CardFrame>
   );
 }
