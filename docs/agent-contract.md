@@ -1,6 +1,6 @@
 # Agent and adapter contract 0.1
 
-Status: proposed API design, not implemented schemas or working commands. The MCP server and web API translate into the same domain commands. This document specifies the intended behavior for P1–P5 implementation.
+Status: historical P0 API design proposal (sections 1–6) plus accepted R2 specification (section 10). For the current implemented agent API, tool schemas, error shape, and role profiles, read [the agent guide](agent-guide.md) (authoritative source: `src/contracts.ts`, `src/agent-profiles.ts`, `src/issue-brief.ts`).
 
 ## 1. Tool design principles
 
@@ -16,6 +16,8 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 
 ## 2. Proposed tool inventory
 
+> Historical P0 proposal. Do not use these snake_case names, `contract_version`, or `issue_get` `view=brief|full|history|evidence` inputs against the running service; the implemented API uses camelCase, `issue_get` `view: "summary" | "full"`, and `discussion` (`src/contracts.ts`, `src/workflow.ts`). See [the agent guide](agent-guide.md) for current tools.
+
 | Tool | Purpose / main inputs | Role and constraints |
 | --- | --- | --- |
 | `workspace_resolve` | Resolve/select binding from trusted host context, advertised roots, or explicit validated path | No disk-wide scan; ambiguous results require selection; registration is idempotent |
@@ -26,7 +28,7 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | `design_submit` | Requirement, exact draft revision, review summary | Lead; freezes review candidate and requests human decision |
 | `plan_apply` | Requirement/design revision, task specs, criterion map, dependencies, assignments/dates, expected aggregate versions | PM/lead; validates whole plan atomically and creates unstarted tasks |
 | `work_dispatch` | Ready issue, assignment, adapter/binding, budget policy, versions | PM/lead coordinator; durable queued run, no duplicate on retry |
-| `work_claim` | Issue/assignment, acknowledged scope/criteria revision, verified run binding, expected version | Assigned worker; atomic lease and fence; no caller-selected actor identity |
+| `work_claim` | Issue/assignment, acknowledged scope/criteria revision, verified run binding, expected version | Service coordinator only (`claimReservedWork` in `src/workflow.ts`; `work_claim` has no agent role in `src/agent-profiles.ts`); the worker acts inside the managed run with its run token |
 | `work_heartbeat` | Assignment/lease, current fence, expected lease version | Owning run; extends lease without taking another run's ownership |
 | `work_submit` | Issue, round, scope/design revision, artifact manifest, criterion/self-check evidence, lease fence | Owning worker; transitions to initial lead review only |
 | `review_submit` | Issue, stage, verdict, criterion results, report/evidence, current digest | Assigned lead or independent QA; stage-specific rules; no human impersonation |
@@ -66,6 +68,8 @@ Implemented scope refinement, 2026-11-07: human/lead/PM may expand paginated `sc
 Implemented execution refinement, 2026-11-09: claim/heartbeat/submission require the reserved run-scoped worker, exact assignment/harness/scope, and isolated directory. Logical workers ask PM to `work_dispatch`; the coordinator claims the `STARTING` run. Submission requires the actual provider session, and review requires a sealed artifact from a successful stopped producer. Old unbound work stays readable and explicitly blocked. Human-only `work_reconcile` is absent from MCP; it records exact stop confirmation/reason and fences/reset ownership while retaining history. Existing held or abandoned disposition is preserved. This does not attach arbitrary external processes or treat a queue intent as execution.
 
 ## 3. Representative payloads
+
+> Historical P0 proposal. The service does not use `contract_version`, snake_case fields, or the `retryable` / `current_version` / `correlation_id` error envelope below. Current commands use camelCase and return errors as `{code, message, details, remedy}` (`src/issue-brief.ts`, `src/http.ts`, `src/mcp.ts`); see [the agent guide](agent-guide.md).
 
 Illustrative brief response:
 
@@ -136,6 +140,8 @@ Illustrative failure:
 An MCP error uses the protocol's supported error/result form and a concise equivalent text message. No business failure returns a misleading success sentence. Protocol-specific response details are finalized against the selected SDKs in P1.
 
 ## 4. Errors and retries
+
+> Historical P0 proposal. Proposed codes `WORKSPACE_AMBIGUOUS`, `LEASE_CONFLICT`, `GIT_VERIFICATION_UNAVAILABLE`, `CAPACITY_REACHED`, `BUDGET_REACHED`, and `STORE_BUSY` do not exist in the source. See [the agent guide](agent-guide.md#10-frequent-refusals) and `src/issue-brief.ts` for active error codes and remedies.
 
 | Code | Meaning / recovery |
 | --- | --- |
@@ -235,7 +241,7 @@ Limited delegation depth does not force PM → worker nesting inside the host. P
 
 ## 10. Revision R2: role profiles, briefs, and messages
 
-Status: accepted by the user on 2026-11-14 with D17–D24; not implemented. Details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md) §13. Where this section differs from sections 1–9, this section governs; `decision_batch_accept` is withdrawn. `defect_propose`, `defect_list` and `defect_get` are in every profile.
+Status: accepted by the user on 2026-11-14 with D17–D24. Role profiles (`src/agent-profiles.ts`), compact briefs and remedies (`src/issue-brief.ts`), scoped issue messages (`src/messages.ts`), and fresh consult runs (`src/consult.ts`) are implemented; see [the agent guide](agent-guide.md) for current usage. B27 and B28 (the decision and workspace UI slices) are in progress—service projections (ADC-0002) and the web decision model (ADC-0003) are merged, while the remaining Decisions and Workspace UI tasks and `resume`/`queue` consult modes remain planned. Details and the clarifications from the independent review are in [revision R2](proposals/r2-surfaces-coordination-scope.md) §13. Where this section differs from sections 1–9, this section governs; `decision_batch_accept` is withdrawn. `defect_propose`, `defect_list` and `defect_get` are in every profile.
 
 `tools/list` for a credential contains only its role's profile: operations the service can authorize for that role, and no human-only operation. The service still enforces every permission. One shared definition feeds the listing, the authorization tests and the generated reference.
 
@@ -251,11 +257,11 @@ Every operation states its purpose, preconditions, effect and common rejections.
 
 | Tool or field | Purpose / main inputs | Role and constraints |
 | --- | --- | --- |
-| `issue_get` additions | `status`, `blockers[{code, message, subjects, remedy}]`, `nextActions[{operation, args}]` or `waitingOn`, `design{id, status, hash, bytes, decision}`, `lastRejection`, `messages{total, awaitingYourReply}` | Within the NF05 budget; `nextActions` entries become objects |
+| `issue_get` additions | `view` (`summary` or `full`), `status`, `blockers[{code, message, subjects, remedy}]`, `nextActions[{operation, args}]` or `waitingOn`, `design{id, status, hash, bytes, decision}`, `lastRejection`, `discussion{visibleCount, pendingCount, questions}` | Within the NF05 budget; `nextActions` entries are objects |
 | `design_get` | Issue; returns design content, criteria, requirement scope, status, and decision history with reasons | Read within the caller's issue scope; workers and QA for their own issue and its parent |
 | `evidence_get` additions | Design-decision and delivery-decision records | Same scope as today |
 | `message_send` | Issue, recipient (role, actor or owner), kind, body, optional `replyTo`, optional wake request, idempotency key | Any agent with scope on the issue; a worker–QA pair on one issue is rejected; `replyTo` must be visible to the sender; returns the delivery state |
 | `message_list` | Issue, cursor, page size | Only messages visible to the caller: those it sent or received, plus every message on the issue for the owner, lead and PM; no read receipts |
-| `message_wait` | Issue or message, cursor, timeout of at most 50 seconds | Bounded long-poll for visible replies to the caller |
+| `message_wait` | `workspaceId`, `issueId`, `questionId`, `timeoutMs` (0–50000 ms, default 30000) | Bounded long-poll for a reply to a question sent by the caller |
 
 Rejections return `{code, message, details, remedy}`. Authorization is checked before preconditions. Messages carry no authority. An agent cannot create, dismiss or resolve an inbox entry; the only entry a message produces is the owner-question entry derived from an unanswered message to the owner.
