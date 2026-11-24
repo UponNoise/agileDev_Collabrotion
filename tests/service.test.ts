@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ensureService, processExists, readDescriptor, requireService, serviceAvailable, stopService } from '../src/service-launcher.js';
 import { LocalClient } from '../src/client.js';
+import { DomainError } from '../src/contracts.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createServer } from 'node:http';
@@ -280,4 +281,93 @@ test('service identity and version mismatches stop attachment before any credent
     await assert.rejects(requireService(directory), { code: 'SERVICE_VERSION_MISMATCH' });
     assert.deepEqual(authorizations, [undefined, undefined, undefined, undefined]);
   } finally { await new Promise<void>((done, fail) => server.close(error => error ? fail(error) : done())); }
+});
+
+test('refused CLI commands print one-line JSON with code and remedy on stderr while other failures keep plain output', { timeout: 20000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agiledev-service-refusal-'));
+  const env = fixtureEnvironment(directory);
+  try {
+    await exec(process.execPath, [script, 'service-start'], { env, windowsHide: true });
+    const descriptor = readDescriptor(directory)!;
+    const owner = new LocalClient(descriptor.endpoint, descriptor.ownerToken);
+    const workspace = (await owner.command('workspace_register', { root: directory, name: 'Refusal fixture', prefix: 'REF', idempotencyKey: 'workspace' })).workspace;
+    const lead = await owner.command('actor_enroll', { workspaceId: workspace.id, role: 'lead', name: 'Refusal lead', idempotencyKey: 'lead' });
+    const worker = await owner.command('actor_enroll', { workspaceId: workspace.id, role: 'worker', name: 'Refusal worker', idempotencyKey: 'worker' });
+    const issue = (await owner.command('issue_create', { workspaceId: workspace.id, title: 'Refusal check', idempotencyKey: 'issue' })).issue;
+    await owner.command('issue_update', { workspaceId: workspace.id, issueId: issue.id, expectedVersion: 1, priority: 1, idempotencyKey: 'bump' });
+
+    await assert.rejects(
+      new LocalClient(descriptor.endpoint, lead.token).command('issue_update', { workspaceId: workspace.id, issueId: issue.id, expectedVersion: 1, priority: 2, idempotencyKey: 'stale-client' }),
+      (error: unknown) => {
+        assert.ok(error instanceof DomainError);
+        assert.equal(error.code, 'VERSION_CONFLICT');
+        assert.deepEqual(error.details, { currentVersion: 2 });
+        assert.deepEqual(error.remedy, { role: 'caller', action: 'Reload the issue, run, defect or iteration before retrying with its current version.' });
+        return true;
+      }
+    );
+
+    const conflictFile = join(directory, 'conflict.json');
+    writeFileSync(conflictFile, JSON.stringify({ workspaceId: workspace.id, issueId: issue.id, expectedVersion: 1, priority: 3, idempotencyKey: 'stale-cli' }));
+    await assert.rejects(
+      exec(process.execPath, [script, 'command', 'issue_update', conflictFile], { env: { ...env, AGILEDEV_ENDPOINT: descriptor.endpoint, AGILEDEV_TOKEN: lead.token }, windowsHide: true, timeout: 5000 }),
+      (error: any) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, '');
+        const line = error.stderr.trim();
+        assert.ok(!line.includes('\n'));
+        const payload = JSON.parse(line);
+        assert.deepEqual(Object.keys(payload), ['error']);
+        assert.deepEqual(Object.keys(payload.error), ['code', 'message', 'details', 'remedy']);
+        assert.equal(payload.error.code, 'VERSION_CONFLICT');
+        assert.equal(typeof payload.error.message, 'string');
+        assert.deepEqual(payload.error.details, { currentVersion: 2 });
+        assert.equal(payload.error.remedy.role, 'caller');
+        assert.match(payload.error.remedy.action, /current version/);
+        return true;
+      }
+    );
+
+    const deniedFile = join(directory, 'denied.json');
+    writeFileSync(deniedFile, JSON.stringify({ expectedVersion: -1 }));
+    await assert.rejects(
+      exec(process.execPath, [script, 'command', 'design_decide', deniedFile], { env: { ...env, AGILEDEV_ENDPOINT: descriptor.endpoint, AGILEDEV_TOKEN: worker.token }, windowsHide: true, timeout: 5000 }),
+      (error: any) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, '');
+        const line = error.stderr.trim();
+        assert.ok(!line.includes('\n'));
+        const payload = JSON.parse(line);
+        assert.equal(payload.error.code, 'ROLE_DENIED');
+        assert.equal(payload.error.details, null);
+        assert.equal(payload.error.remedy.role, 'caller');
+        assert.match(payload.error.remedy.action, /role profile/);
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      exec(process.execPath, [script, 'connection', 'codex'], { env: { ...env, AGILEDEV_ENDPOINT: descriptor.endpoint, AGILEDEV_TOKEN: 'invalid-token-fixture' }, windowsHide: true, timeout: 5000 }),
+      (error: any) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, '');
+        assert.ok(!error.stderr.trim().startsWith('{'));
+        assert.match(error.stderr, /Invalid credential|Unauthorized|credential/i);
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      exec(process.execPath, [script, 'command'], { env, windowsHide: true, timeout: 5000 }),
+      (error: any) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, '');
+        assert.match(error.stderr, /Usage: command/);
+        return true;
+      }
+    );
+  } finally {
+    await stopService(directory);
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

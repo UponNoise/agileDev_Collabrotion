@@ -378,7 +378,7 @@ The MCP role playbook supplies the shared authorization, input and retry rules o
 
 The summary's `defects` section counts open, proposed and blocking records. It includes up to two open BLOCKER/MAJOR IDs, ordered by severity, and the issue-scoped `defect_list` arguments for pagination. Use `defect_get` with an ID for the complete authorized finding.
 
-Agent `issue_list`, `run_list` and `defect_list` default to compact pages of up to 20. Expand a specific record with its read tool, or request `view: "full"` with the existing scope and page limits. Command errors include `code`, `message`, `details` and a `remedy` naming the responsible party and any applicable operation.
+Agent `issue_list`, `run_list` and `defect_list` default to compact pages of up to 20. Expand a specific record with its read tool, or request `view: "full"` with the existing scope and page limits. Command errors include `code`, `message`, `details` and a `remedy` naming the responsible party and any applicable operation; when the CLI `command` subcommand receives a service refusal, it prints `{"error":{"code":...,"message":...,"details":...,"remedy":...}}` as one line of JSON on stderr and exits with code 1.
 
 ### Issue messages
 
