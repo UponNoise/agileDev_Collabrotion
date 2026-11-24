@@ -9,6 +9,7 @@
 - Preserve the distinction between initial lead review and final lead review, and between implemented, abandoned, merged, and deployed.
 - Never fabricate human approval, QA independence, test evidence, commit links, harness compatibility, or completion. Record unknown and unavailable capabilities explicitly.
 - Protect local project data. Do not commit databases, workspace inventories, transcripts, tokens, or private evidence. Do not configure a user's harness or start paid agent runs merely to inspect compatibility.
+- Keep temporary files, fixtures, measurements and logs in the operating system's temporary directory or under the task's own working directory, and remove them when the task ends. Never write them to a drive root, the user's folders or another checkout.
 - Prefer a single workflow authority with thin adapters. Do not create a separate workflow implementation for each harness.
 - For concurrent development, agree on issue ownership and isolated worktrees. Do not let two workers edit the same checkout. Reconcile stale leases and uncertain executions before redispatch.
 - Record specification changes and their acceptance impact before changing behavior. A material scope or artifact change invalidates the affected approvals.

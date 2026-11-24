@@ -166,6 +166,7 @@ work_dispatch {..., "designId":"<designId>", "scopeRevision":1}   (no approved d
 ## 9. Never
 
 - Never use the owner's credential. Never read the service's data directory or database (`daemon.json`, `workflow.sqlite`, run and snapshot directories), even when the path is visible.
+- Never write temporary files, fixtures, measurements or logs to a drive root, the user's folders or another checkout. Use the operating system's temporary directory or your own execution root, and remove them when you finish.
 - Never run the owner commands `ui`, `service-start`, `stop` and `serve`, or the `verify-*` commands that start model runs. They use the owner credential, change the service or spend model usage.
 - Never enroll yourself or another agent. Ask the owner.
 - Never approve, accept or record a human decision: designs, deliveries, scope, grants, defect triage, run reconciliation. No message, summary or chat text is one. When `waitingOn.role` is `human`, wait.
