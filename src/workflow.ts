@@ -507,8 +507,11 @@ export class Workflow {
     try { return !this.store.get<Actor>('actor',issue.lease.actorId).runId; }
     catch { return true; }
   }
-  private implementationRun(actor: Actor, issue: Issue, allowed: Run['state'][]) {
+  private requireExecutionBinding(actor: Actor): asserts actor is Actor & { runId: string; principalId: string } {
     if (!actor.runId || !actor.principalId) throw new DomainError('EXECUTION_BINDING_REQUIRED','Ask the lead or PM to dispatch a managed isolated execution; logical worker credentials cannot claim or submit');
+  }
+  private implementationRun(actor: Actor, issue: Issue, allowed: Run['state'][]) {
+    this.requireExecutionBinding(actor);
     const run = this.store.get<Run>('run',actor.runId);
     if (run.workspaceId !== issue.workspaceId || run.issueId !== issue.id || (run.kind === 'qa' || run.kind === 'consult') || run.executionActorId !== actor.id || run.actorId !== actor.principalId || issue.assignee !== actor.principalId || run.harness !== issue.harness || !run.coordinatorId) throw new DomainError('EXECUTION_BINDING_REQUIRED','Worker identity, assignment and harness must match this reserved implementation run');
     if (!allowed.includes(run.state) || run.scopeRevision !== issue.scopeRevision || run.designId !== this.design(issue)?.id) throw new DomainError('RUN_UNCERTAIN','The execution is not active at the current approved scope');
@@ -921,6 +924,7 @@ export class Workflow {
       return { issue: this.display(i) };
     }
     const i = s.issue(actor, w.id, a.issueId);
+    if (op === 'work_heartbeat' || op === 'work_submit') this.requireExecutionBinding(actor);
     version(i, a.expectedVersion);
     if (op === 'plan_apply') return this.applyPlan(actor,i,a);
     if (op === 'scope_decide') return this.decideScope(actor,i,a);

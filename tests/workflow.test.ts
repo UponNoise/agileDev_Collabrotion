@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Actor, DomainError, Issue, Run, agentOperations } from '../src/contracts.js';
-import { Store, hash } from '../src/store.js';
+import { Store, canonical, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { applyFixturePlan, bindFixtureImplementation, executeFixture } from './fixtures.js';
 
@@ -354,4 +354,43 @@ test('schedule metadata preserves approval while older unbound scope cannot auth
   assert.equal(f.current(f.parent.id).designId,designId); assert.equal(f.store.get<any>('design',designId).status,'APPROVED');
   const older = f.store.get<any>('design',designId); delete older.requirementDescription; f.store.put('design',older,task.workspaceId);
   assert.throws(() => f.claim(task),(error: any) => error.code === 'NOT_READY' && error.details.blockers.includes('DESIGN_SCOPE_STALE'));
+});
+
+test('a logical worker is told it needs a managed run before any version, lease or state check', () => {
+  const f = setup(); const task = f.task(); f.approve(); f.assign(task);
+  const unchanged = () => canonical(['records', 'receipts', 'events'].map(table => f.store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+  const otherWorker = f.run(f.human.actor, 'actor_enroll', { role: 'worker', name: 'Other worker' });
+  const profile = f.run(f.human.actor, 'check_profile_create', { name: 'node-check', command: process.execPath, args: ['-e', 'process.exit(0)'], criteria: ['AC-1'] }).profile;
+  f.change(f.pm.actor, 'qa_configure', task.id, { actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] });
+
+  const notStartedVersion = f.current(task.id).version;
+  assert.throws(() => f.run(f.worker.actor, 'work_heartbeat', { issueId: task.id, expectedVersion: notStartedVersion, fence: 99 }), rejects('EXECUTION_BINDING_REQUIRED'));
+  assert.throws(() => f.run(f.worker.actor, 'work_submit', { issueId: task.id, expectedVersion: notStartedVersion, fence: 99, summary: 'Logical submit', files: ['a.txt'] }), rejects('EXECUTION_BINDING_REQUIRED'));
+  assert.throws(() => f.run(f.worker.actor, 'work_heartbeat', { issueId: task.id, expectedVersion: notStartedVersion + 5, fence: 99 }), rejects('EXECUTION_BINDING_REQUIRED'));
+  assert.throws(() => f.run(f.worker.actor, 'work_submit', { issueId: task.id, expectedVersion: notStartedVersion + 5, fence: 99, summary: 'Logical submit', files: ['a.txt'] }), rejects('EXECUTION_BINDING_REQUIRED'));
+
+  f.claim(task);
+  const before = unchanged();
+  const claimed = f.current(task.id);
+  for (const expectedVersion of [claimed.version, claimed.version + 5]) {
+    for (const fence of [claimed.fence, claimed.fence + 10]) {
+      assert.throws(() => f.run(f.worker.actor, 'work_heartbeat', { issueId: task.id, expectedVersion, fence }), rejects('EXECUTION_BINDING_REQUIRED'));
+      assert.throws(() => f.run(f.worker.actor, 'work_submit', { issueId: task.id, expectedVersion, fence, summary: 'Logical submit', files: ['a.txt'] }), rejects('EXECUTION_BINDING_REQUIRED'));
+    }
+  }
+  assert.equal(unchanged(), before);
+
+  assert.throws(() => f.run(otherWorker.actor, 'work_heartbeat', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence }), rejects('SCOPE_DENIED'));
+  assert.throws(() => f.run(otherWorker.actor, 'work_submit', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence, summary: 'Other worker', files: ['a.txt'] }), rejects('SCOPE_DENIED'));
+  assert.throws(() => new Workflow(f.store).execute(f.worker.actor, 'work_claim', { workspaceId: task.workspaceId, issueId: task.id, expectedVersion: claimed.version, designId: f.current(f.parent.id).designId, scopeRevision: claimed.scopeRevision, idempotencyKey: randomUUID() }), rejects('ROLE_DENIED'));
+  assert.throws(() => f.change(f.qa.actor, 'qa_check_run', task.id, { profileId: profile.id, testFiles: ['.qa/check.mjs'] }), rejects('REVIEW_INDEPENDENCE_REQUIRED'));
+
+  const execActor = f.execution(task.id).actor;
+  assert.throws(() => f.run(execActor, 'work_heartbeat', { issueId: task.id, expectedVersion: claimed.version + 5, fence: claimed.fence }), rejects('VERSION_CONFLICT'));
+  assert.throws(() => f.run(execActor, 'work_submit', { issueId: task.id, expectedVersion: claimed.version + 5, fence: claimed.fence, summary: 'Stale version', files: ['a.txt'] }), rejects('VERSION_CONFLICT'));
+  assert.throws(() => f.run(execActor, 'work_heartbeat', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence + 1 }), rejects('STALE_FENCE'));
+  assert.throws(() => f.run(execActor, 'work_submit', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence + 1, summary: 'Wrong fence', files: ['a.txt'] }), rejects('STALE_FENCE'));
+  f.advance();
+  assert.throws(() => f.run(execActor, 'work_heartbeat', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence }), rejects('LEASE_EXPIRED'));
+  assert.throws(() => f.run(execActor, 'work_submit', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence, summary: 'Expired lease', files: ['a.txt'] }), rejects('LEASE_EXPIRED'));
 });

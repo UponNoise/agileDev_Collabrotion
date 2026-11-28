@@ -209,6 +209,10 @@ test('real stdio MCP advertises complete described role profiles and rejects for
       }
       const dispatch = tools.find(tool => tool.name === 'work_dispatch');
       if (dispatch) assert.match(dispatch.description ?? '', /NOT_READY.*APPROVAL_STALE/);
+      const heartbeat = tools.find(tool => tool.name === 'work_heartbeat');
+      if (heartbeat) assert.match(heartbeat.description ?? '', /EXECUTION_BINDING_REQUIRED for a logical worker\./);
+      const submit = tools.find(tool => tool.name === 'work_submit');
+      if (submit) assert.match(submit.description ?? '', /EXECUTION_BINDING_REQUIRED for a logical worker\./);
       for (const name of ['delivery_decide', 'work_claim', ...(role === 'worker' || role === 'qa' ? ['iteration_get'] : [])]) {
         const result = await client.callTool({ name, arguments: { expectedVersion: -1, iteration: 'legacy' } });
         assert.equal(result.isError, true);
