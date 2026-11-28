@@ -147,6 +147,7 @@ const errorKeys: Record<string, string> = {
   PROVIDER_CONFIGURATION_REQUIRED: 'The model settings are incomplete; check the launch settings',
   DSH_PATCH_REQUIRED: 'The model settings are incomplete; check the launch settings',
   DSH_DIRECTORY_RIGHTS_REQUIRED: 'DSH did not start: your Windows account needs Full control on the run directory. Add it there, or move the data folder into your user folder',
+  MCP_ISOLATION_UNAVAILABLE: 'The run was not started: AgileDev could not keep your other MCP servers out of it. Run the diagnostics or check your DSH configuration.',
   INVALID_DSH_PATCH: 'The model settings are incomplete; check the launch settings',
   INVALID_MODEL_SETTING: 'The model settings are incomplete; check the launch settings',
   INVALID_CAPACITY: 'The run limits are invalid; check the launch settings',

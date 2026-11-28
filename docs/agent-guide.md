@@ -65,6 +65,8 @@ issue_get {"workspaceId":"<workspaceId>","issueId":"<issueId>"}
 
 The service, not you, starts worker and QA sessions: `work_dispatch` queues a run, and the coordinator then creates the run token, prepares an isolated directory and starts the harness with the MCP entry already set. A QA run starts after the initial lead review when QA is configured.
 
+Managed runs use the `agiledev` MCP server and the harness's built-in capabilities, subject to the documented [DSH detection limits](local-development.md#managed-mcp-isolation).
+
 | Step | Performed by | Where |
 | --- | --- | --- |
 | `work_claim` | the coordinator | managed implementation run; no agent can call it |

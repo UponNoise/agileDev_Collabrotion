@@ -9,6 +9,7 @@ import { HarnessEntry, discoverHarnesses, harnessEnvironment } from './harness.j
 import { consultLauncherIdentity, matchesConsultVerification, type ConsultVerification } from './consult-verification.js';
 import { terminateTree } from './execution.js';
 import { checkDshRunDirectory, type RunDirectoryCheck } from './run-directory.js';
+import { collectDshMcpRows } from './mcp-isolation.js';
 
 export interface AdapterResult { outcome: 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; errorCode?: string; summary?: string }
 export interface AdapterContext {
@@ -128,7 +129,7 @@ function processSession(entry: HarnessEntry, args: string[], context: AdapterCon
   };
   return { child, result, interrupt, setListener: (fn: (event: any) => void) => { listener = fn; }, complete: settle, setSession: (id: string) => { sessionId = id; context.onProvider(id); }, setTerminal: (state: 'succeeded' | 'failed') => { terminal = state; } };
 }
-function writeDshMcpPatch(c: AdapterContext, route: DshRoute) {
+function writeDshMcpPatch(c: AdapterContext, route: DshRoute, clientRowIds: string[]) {
   const patch = join(c.directory, 'dsh.patch.yml');
   const selection = [
     '- id: agent-default-model',
@@ -138,10 +139,11 @@ function writeDshMcpPatch(c: AdapterContext, route: DshRoute) {
     ...(route.reasoningEffort ? [`    reasoningEffort: ${JSON.stringify(route.reasoningEffort)}`] : []),
     '',
   ].join('\n');
-  writeFileSync(patch, `${selection}- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`, { mode: 0o600 });
+  const disabled = clientRowIds.map(id => `- id: ${JSON.stringify(id)}\n  disabled: true\n`).join('');
+  writeFileSync(patch, `${selection}${disabled}- insert:\n    - id: agiledev-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: agiledev\n        transport: stdio\n        command: ${JSON.stringify(process.execPath)}\n        args: [${JSON.stringify(c.bridgeScript)}, "mcp"]\n        env:\n          AGILEDEV_ENDPOINT: !!js process.env.AGILEDEV_ENDPOINT\n          AGILEDEV_TOKEN: !!js process.env.AGILEDEV_TOKEN\n`, { mode: 0o600 });
   return patch;
 }
-function ownerDshPatchArgs() {
+export function ownerDshPatchArgs() {
   const path = process.env.AGILEDEV_DSH_PATCH;
   if (path === undefined) return [];
   if (isAbsolute(path)) {
@@ -172,8 +174,8 @@ function dshSettings(c: AdapterContext) {
   c.onModelSettings?.({ provider: selectedSetting(ownerProvider, provider), model: selectedSetting(ownerModel, model), reasoningEffort: effort });
   return { extras, route };
 }
-function dshPatchArgs(c: AdapterContext, profile: 'sdk' | 'headless', { extras, route }: ReturnType<typeof dshSettings>) {
-  return ['--profile', profile, ...extras, '--patch', writeDshMcpPatch(c, route)];
+function dshPatchArgs(c: AdapterContext, profile: 'sdk' | 'headless', { extras, route }: ReturnType<typeof dshSettings>, clientRowIds: string[]) {
+  return ['--profile', profile, ...extras, '--patch', writeDshMcpPatch(c, route, clientRowIds)];
 }
 async function dshSdk(entry: HarnessEntry, c: AdapterContext, args: string[], route: DshRoute): Promise<RunningSession> {
   const p = processSession(entry, args, c);
@@ -255,11 +257,20 @@ export class NativeAdapter implements ExecutionAdapter {
           const message = `DSH cannot confine commands in this run directory because this Windows account lacks ${missing.join(' and ')} there. Give the account Full control of the run directory (${runDirectory}), or keep the AgileDev data directory inside your user folder.`;
           throw new DomainError('DSH_DIRECTORY_RIGHTS_REQUIRED', message, 409, { directory: c.cwd, missing });
         }
-        return dshSdk(entry, c, dshPatchArgs(c, 'sdk', settings), settings.route);
       }
-      args = [...dshPatchArgs(c, 'headless', settings), '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
+      const profile = consult ? 'headless' : 'sdk';
+      const isolation = await collectDshMcpRows(entry, profile, settings.extras, c.cwd);
+      if ('reason' in isolation) {
+        const message = `Could not keep your other MCP servers out of this DSH run (${isolation.reason}). The run was not started.`;
+        throw new DomainError('MCP_ISOLATION_UNAVAILABLE', message);
+      }
+      if (consult) c.checkBeforeSpawn?.();
+      const patchArgs = dshPatchArgs(c, profile, settings, isolation.clientRowIds);
+      if (!consult) return dshSdk(entry, c, patchArgs, settings.route);
+      args = [...patchArgs, '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
     } else if (c.harness === 'codex') {
-      args = ['exec', '--json', '--sandbox', consult ? 'read-only' : 'workspace-write', '--cd', c.cwd, '--skip-git-repo-check', '-c', `mcp_servers.agiledev.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.agiledev.args=${JSON.stringify([c.bridgeScript, 'mcp'])}`, '-c', 'mcp_servers.agiledev.env_vars=["AGILEDEV_TOKEN","AGILEDEV_ENDPOINT"]', '-c', 'mcp_servers.agiledev.required=true', '-c', 'mcp_servers.agiledev.default_tools_approval_mode="approve"'];
+      const windowsSandbox = process.platform === 'win32' ? ['-c', 'windows.sandbox="elevated"'] : [];
+      args = ['exec', '--json', '--ignore-user-config', ...windowsSandbox, '--sandbox', consult ? 'read-only' : 'workspace-write', '--cd', c.cwd, '--skip-git-repo-check', '-c', `mcp_servers.agiledev.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.agiledev.args=${JSON.stringify([c.bridgeScript, 'mcp'])}`, '-c', 'mcp_servers.agiledev.env_vars=["AGILEDEV_TOKEN","AGILEDEV_ENDPOINT"]', '-c', 'mcp_servers.agiledev.required=true', '-c', 'mcp_servers.agiledev.default_tools_approval_mode="approve"'];
       const override = ownerSetting('AGILEDEV_CODEX_MODEL');
       const model = selectedSetting(override, override ? undefined : cachedCodexSol(entry), 'codex-cache');
       const effort = selectedSetting(ownerSetting('AGILEDEV_CODEX_REASONING_EFFORT'), model.value ? 'high' : undefined);
