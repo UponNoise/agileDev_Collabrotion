@@ -71,7 +71,7 @@ All mutations require authenticated actor scope, `expected_version`, and an idem
 | `LEAD_REVIEW:FINAL` | Fail / assigned lead | `LEAD_REJECTED` | Recorded final-stage rejection; rework owner retained or explicitly reassigned |
 | `USER_ACCEPTANCE` | Reject / human | `USER_REJECTED` | Exact snapshot/revision and actionable feedback; classification `DEFECT` (creates defects on the rejected digest), `SCOPE_CHANGE` (rework blocked by `SCOPE_REVISION_REQUIRED` until a newer approved design), or `CLARIFICATION` |
 | `USER_ACCEPTANCE` | Accept / human | `DONE` when guards pass | Human decision bound to current acceptance digest and visible risk set; acknowledges open MINOR findings (§12); all closure checks pass |
-| `USER_ACCEPTANCE` | Complete / lead or PM | `DONE` | Exact-snapshot human close grant or prior current human acceptance; all closure checks still pass |
+| `USER_ACCEPTANCE` | Complete / lead or PM | `DONE` | Exact-snapshot human close grant or prior current human acceptance; all closure checks still pass; a call that cannot close is refused with `CLOSURE_BLOCKED` and records nothing |
 | Any rework state | Claim rework / service coordinator (for managed run) | `IN_PROGRESS` | Valid assignment/binding, dependencies, fresh lease, required approved scope |
 | Nonterminal state | Hold / human or granted lead/PM | `ON_HOLD` | Reason, action scope, prior state/stage saved; cancellation/reconciliation of active runs requested |
 | `ON_HOLD` | Resume / human or granted lead/PM | Saved valid state or `IN_PROGRESS` | Revalidate revision, evidence, dependencies, and ownership; never restore an expired lease |
@@ -80,7 +80,7 @@ All mutations require authenticated actor scope, `expected_version`, and an idem
 
 On reopen, use `IN_PROGRESS` only when a ready assignment is actually claimed. Otherwise use `NOT_STARTED` and require a normal claim. If an issue returns from a review stage for implementation changes, its next submission always starts at `PRE_QA`.
 
-Human acceptance is an immutable decision record. If the human accepts while Git verification is unavailable, save the decision and leave the issue in `USER_ACCEPTANCE`. Recovery or `git_retry` changes verification/readiness only. The accepted issue remains visible and actionable until an explicit authorized `delivery_complete` validates the unchanged acceptance and all current guards; no invented second approval is required. An explicit human acceptance command, including a valid batch, may close an item whose guards already pass in that same transaction. Never display `DONE` before the authorized closure transaction commits.
+Human acceptance is an immutable decision record. If the human accepts while Git verification is unavailable, save the decision and leave the issue in `USER_ACCEPTANCE`. Recovery or `git_retry` changes verification/readiness only. The accepted issue remains visible and actionable until an explicit authorized `delivery_complete` validates the unchanged acceptance and all current guards; no invented second approval is required. An explicit human acceptance command, including a valid batch, may close an item whose guards already pass in that same transaction. Never display `DONE` before the authorized closure transaction commits. A `delivery_complete` call that cannot close is refused with `CLOSURE_BLOCKED` and records nothing.
 
 ## 4. Permission model
 
@@ -92,7 +92,8 @@ Human acceptance is an immutable decision record. If the human accepts while Git
 | Approve design or material scope change | Yes | No | No | No | No |
 | Plan tasks, dependencies, dates, iterations, assignees | Yes | Yes | Yes | No | No |
 | Dispatch implementation | Approved policy | Coordinate | Yes | No | No |
-| Claim / submit implementation | Through worker assignment | Only if separately assigned worker | Only if separately assigned worker | Own assignment | No |
+| Claim implementation | Service coordinator only | Service coordinator only | Service coordinator only | Service coordinator only | Service coordinator only |
+| Heartbeat / submit implementation | No | No | No | Inside managed run | No |
 | Initial / final lead review | Can perform explicitly as reviewer | Assigned reviewer | No | No | No |
 | QA report and pass/fail | Separate reviewer context | No self-QA | No | No self-QA | Assigned independent review |
 | User acceptance | Yes | Exact human grant only | Exact human grant only | No | No |
@@ -142,7 +143,7 @@ Working visual direction: a true-white issue workspace with a pale cool sidebar,
 
 ### Managed implementation binding, 2026-11-09
 
-Implementation claim, heartbeat, and submission require a server-issued execution actor bound to one implementation run, logical assignee, harness, workspace, approved design, task scope, and isolated execution directory. A logical worker credential alone cannot claim or submit from the source checkout. The coordinator claims only its reserved `STARTING` run; heartbeat/submission require that exact run to be `RUNNING`. Submission additionally requires the provider's recorded session identity. Queued, stopping, uncertain, terminal, mismatched, duplicate-live, or unbound executions cannot acquire or extend ownership. Expired leases still require reconciliation rather than renewal or silent replacement.
+Implementation claim, heartbeat, and submission require a server-issued execution actor bound to one implementation run, logical assignee, harness, workspace, approved design, task scope, and isolated execution directory. A logical worker credential alone cannot claim or submit from the source checkout; an identity without a run is refused with `EXECUTION_BINDING_REQUIRED` before any version, lease or state check. A lease renewal changes the lease only, never the issue version. The coordinator claims only its reserved `STARTING` run; heartbeat/submission require that exact run to be `RUNNING`. Submission additionally requires the provider's recorded session identity. Queued, stopping, uncertain, terminal, mismatched, duplicate-live, or unbound executions cannot acquire or extend ownership. Expired leases still require reconciliation rather than renewal or silent replacement.
 
 Old unbound leases/candidates remain readable but cannot advance review or delivery. The human-only `work_reconcile` command binds the exact issue version, fence, and candidate ID, requires explicit confirmation that the old external worker stopped, and records a reason. It rejects completed issues and known live/uncertain task or parent integration runs; those use normal run reconciliation instead. Resetting preserves old candidate/evidence records, clears current ownership and reviews, advances the fence, invalidates affected parent integration, and preserves effective holds or abandonment. This acknowledges the human's external stop confirmation; it does not fabricate provider identity or OS-level proof for an untracked process. An unchanged requirement can then be dispatched normally through any supported adapter. This command is absent from MCP. Existing historical completion records are not rewritten by startup or migration.
 

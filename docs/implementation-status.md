@@ -16,7 +16,7 @@ What the first real dispatches showed, each filed in the hub without a design:
 - A rework starts from the workspace commit and lacks the rejected files; a temporary commit of the sealed candidate served as the base (ADC-0007).
 - DSH could not execute commands in a run directory where the user holds only Modify: its sandbox needs `WRITE_OWNER`. The owner granted full control on the run directory, after which type checks and in-process tests run; commands that start piped child processes are still refused by its sandbox (ADC-0008).
 - Agents have no way to ask to join, and a local process can act with the owner credential; agents need a join request that the owner approves, and human decisions need a visible source (ADC-0009). Design approval came from the paired desktop identity.
-- Seven usability gaps for agents and five places where the documents disagree with the source (ADC-0010).
+- Agent usability fixes and documentation alignment (ADC-0010): item 1 (CLI refusal JSON/remedy output) done via PR #30 and documentation alignment via PR #29; item 2 (listing agents) moved to ADC-0009; items 3 to 7 implemented in service, CLI and docs (`EXECUTION_BINDING_REQUIRED` before version/lease checks on `work_heartbeat`/`work_submit`, `CLOSURE_BLOCKED` refusal with rollback on `delivery_complete`, version-preserving lease renewals, leading UTF-8 BOM stripping in `command` input, and `nextActions` offers for `issue_assign`, `plan_apply` and `qa_configure` when due), while the web edits for `CLOSURE_BLOCKED` (T3) wait for prerequisite merges.
 
 ## Concurrent ownership, 2026-11-14
 

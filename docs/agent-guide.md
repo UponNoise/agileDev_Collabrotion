@@ -17,9 +17,9 @@ For an agent of any harness (Codex, Claude Code, DSH) that joins a running Agile
 2. Set `AGILEDEV_ENDPOINT` (`http://127.0.0.1:<port>`) and `AGILEDEV_TOKEN` (`<token>`) for every process that talks to the service. Always set both.
 3. MCP over stdio: run `node <release>/dist/cli.js mcp` with those variables. `tools/list` shows only the operations your role may call. The server instructions are your role playbook; read them.
 4. `node <release>/dist/cli.js connection codex` (or `claude-code`, `dsh`) prints the entry for your harness. It names the token by environment variable and never prints it. The owner adds it to the harness configuration; add it yourself only when the owner asks you to. The service never edits harness configuration.
-5. Without MCP: `node <release>/dist/cli.js command <operation> <file>`, or `-` to read stdin. The file holds the JSON input as UTF-8 without a byte order mark. The result goes to stdout as JSON. A refusal exits with code 1 and prints only its message on stderr.
+5. Without MCP: `node <release>/dist/cli.js command <operation> <file>`, or `-` to read stdin. The input file is UTF-8 and a leading byte order mark is ignored. The result goes to stdout as JSON. A service refusal exits with code 1 and prints one line `{"error":{"code","message","details","remedy"}}` on stderr; other failures (unreadable file, invalid JSON, no service) print only a message.
 6. `command` with no `AGILEDEV_ENDPOINT` and no `AGILEDEV_TOKEN` acts as the local owner. With only the endpoint it refuses. With only a token it sends your token to the service it finds in the data directory. An agent therefore sets both, every time.
-7. To see the `code` and `remedy` of a refusal under `command`, post the same JSON to `<endpoint>/api/command/<operation>` with the header `authorization: Bearer <token>`. MCP shows them already.
+7. `command` already prints `code`, `details` and `remedy` of a refusal. MCP shows them already.
 8. A lost token cannot be shown again, and a replayed enrollment does not return it. Ask the owner to enroll a new identity. Do not search for the old token.
 
 ## 3. The first five minutes
@@ -59,7 +59,7 @@ issue_get {"workspaceId":"<workspaceId>","issueId":"<issueId>"}
 - `design`: `{id, status, hash, bytes, decision}`. Expand with `design_get`. Also `defects` (counts), `discussion` (pending questions) and `executionRecovery.required` (an old execution needs a human; do not dispatch).
 - `view: "full"` adds `readiness`, `deliveryDigest`, `git`, `closureBlocked`, `planning` and the defect observation. Use it when `blockerCount` exceeds the blockers shown or a field is missing. The summary stays near 2 KB.
 
-**Do only what `nextActions` offers your role.** Planning steps are not in that list. They come from the `remedy` of a blocker that names your role (the PM's `issue_assign` and `plan_apply`) or from `waitingOn` (the PM's QA configuration). Nothing else is yours to do.
+**Do only what `nextActions` offers your role.** `issue_assign` (when there is no assignee and the design is approved; the section 3 sample, written before approval, stays as it is), `plan_apply` (on the requirement when the design is approved and a plan blocker remains) and `qa_configure` (at QA with no QA run) are listed when due. Other planning edits still come from a blocker's `remedy`. Nothing else is yours to do.
 
 ## 5. The loop of each role
 
@@ -84,17 +84,17 @@ The token the owner enrolls for a worker or QA is a logical identity. It can rea
 
 **PM** (a logical token)
 1. `issue_get`, `gap_list`, and `plan_get` on the requirement.
-2. `plan_apply {designId, mode, expectedPlanId, tasks, integrationCriteria, overlapReasons, reason}`. `mode` is `DRAFT` or `READY`. `expectedPlanId` is null or the id from `plan_get`. Each task has `ref`, a `title` shaped `[Feature] Area: action -> outcome` (types Feature, Fix, Refactor, Test, Docs, Research), `description`, `criteria`, `dependencies`. List every existing child with its `issueId` and `expectedVersion`. `READY` needs an approved design and every criterion mapped to a task or to `integrationCriteria`.
-3. `issue_assign {actorId, harness}` with `harness` `codex`, `claude-code` or `dsh`. No operation lists agents. Ask the owner for the worker's and QA's `actorId`.
-4. `qa_configure {actorId, harness, checkProfileIds}`. Take profile ids from `check_profile_list`; only the owner creates profiles.
+2. `plan_apply {designId, mode, expectedPlanId, tasks, integrationCriteria, overlapReasons, reason}` when offered. `mode` is `DRAFT` or `READY`. `expectedPlanId` is null or the id from `plan_get`. Each task has `ref`, a `title` shaped `[Feature] Area: action -> outcome` (types Feature, Fix, Refactor, Test, Docs, Research), `description`, `criteria`, `dependencies`. List every existing child with its `issueId` and `expectedVersion`. `READY` needs an approved design and every criterion mapped to a task or to `integrationCriteria`.
+3. `issue_assign {actorId, harness}` when offered, with `harness` `codex`, `claude-code` or `dsh`. No operation lists agents. Ask the owner for the worker's and QA's `actorId`.
+4. `qa_configure {actorId, harness, checkProfileIds}` when offered. Take profile ids from `check_profile_list`; only the owner creates profiles.
 5. `work_dispatch {designId, scopeRevision}` when offered. It starts a real harness run once the service's runner takes it. `run.state` `QUEUED` means queued, not running. Follow with `run_list` and `issue_get`. `run_interrupt {runId, expectedVersion, reason}` asks a run to stop. Rework uses the same operation. After a rejection, `work_dispatch` takes an optional `start` (`"candidate"`, the default, or `"workspace"`); the run's `base` (see `run_get`) says whether it continues from the rejected delivery (`kind: "candidate"` with candidate, snapshot and base commit) or from the workspace (`kind: "workspace"` with a reason). A rework worker finds the previous delivery already in its execution root and lists every delivered file again in `work_submit`. `REWORK_BASE_UNAVAILABLE` means the previous delivery could not be restored: dispatch again with `start: "workspace"`.
 6. Git delivery, after the final review: `git_submit {candidateId, commitUrl}` with the real pushed commit, `https://github.com/<owner>/<repo>/commit/<full sha>`. If verification fails or is unavailable: `git_retry {submissionId}`. A different commit voids earlier human acceptance.
-7. `delivery_complete` when offered. Without a `grantId` it is offered only when `closureBlocked` is empty. With one it needs a human `complete` grant (`grant_list`). The call can succeed and leave the issue in `USER_ACCEPTANCE`: read `issue.state` and `closureBlocked` in the result.
+7. `delivery_complete` when offered. Without a `grantId` it is offered only when `closureBlocked` is empty. With one it needs a human `complete` grant (`grant_list`). A completion that cannot close is refused with `CLOSURE_BLOCKED`: `details.blockers` lists what is left and nothing changes.
 
 **Worker** (inside a managed run)
 1. Read the prompt, then `issue_get` for `expectedVersion` and `fence`. Work only in your execution root.
-2. `work_heartbeat {fence}` during long work. The lease lasts 5 minutes and the coordinator also renews it.
-3. Read `issue_get` again, then `work_submit {fence, summary, files}`. `files` are 1 to 32 relative paths, at most 2 MiB each, not under `.git`, `node_modules`, `.qa` or `.env`, not links. The coordinator's renewals raise the version, so read it right before.
+2. `work_heartbeat {fence}` during long work. The lease lasts 5 minutes and the coordinator also renews it. Lease renewals, the coordinator's and your own, do not change the issue version.
+3. Read `issue_get` right before `work_submit {fence, summary, files}`. `files` are 1 to 32 relative paths, at most 2 MiB each, not under `.git`, `node_modules`, `.qa` or `.env`, not links.
 4. Stop. A final text answer is not a submission. A run that ends without `work_submit` fails.
 
 **QA** (inside a managed run)
@@ -188,7 +188,9 @@ work_dispatch {..., "designId":"<designId>", "scopeRevision":1}   (no approved d
 | `NOT_READY` | Dispatch blockers remain. `details.blockers` lists them. | `issue_get`; resolve each blocker through its `remedy`. |
 | `APPROVAL_STALE` | The design, scope or digest changed after you read it. | `issue_get`; use the current `designId` and `scopeRevision`. |
 | `INVALID_TRANSITION` | The action does not fit the issue's current state. | `issue_get`; do what `nextActions` offers. |
-| `STALE_FENCE`, `LEASE_EXPIRED` | You do not hold the lease, or it ran out. A logical worker always gets this from `work_submit`. | Stop. Ask the PM to check `run_list`; a human reconciles uncertain runs. |
+| `STALE_FENCE`, `LEASE_EXPIRED` | You do not hold the lease, or it ran out. | Stop. Ask the PM to check `run_list`; a human reconciles uncertain runs. |
+| `EXECUTION_BINDING_REQUIRED` | The credential is a logical identity, not a managed run. | Stop; ask the PM to dispatch, only the run's own token can renew or submit. |
+| `CLOSURE_BLOCKED` | `delivery_complete` while a blocker remains; nothing changed. | `issue_get` with `view: "full"`, clear each blocker through its remedy, call again. |
 | `RUN_EXISTS` | A queued, live or uncertain run owns the issue. | Wait for it. A lead or PM can `run_interrupt`; a human reconciles `UNCERTAIN`. |
 | `EVIDENCE_STALE` | The candidate, snapshot, check or test file changed. | Read the brief again and redo the step on the current candidate. |
 | `EVIDENCE_MISSING` | Required captured evidence is absent, for example a `PASS` without passing checks. | Run and settle the checks, or report `BLOCKED` or `NOT_RUN` honestly. |
