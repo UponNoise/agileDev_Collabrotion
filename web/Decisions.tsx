@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Actor, InboxKind, Workspace } from '../src/contracts';
 import type { InboxEntry, InboxSettings } from './api';
-import { ApiError, command, errorText, mutation } from './api';
-import { Empty, Field } from './components';
+import { ApiError, command } from './api';
 import { formatAge, matchOpenEntry, rowTitle } from './card-model';
 import { useCodeText, useSentence } from './CardKit';
 import type { CardProps } from './CardKit';
@@ -11,9 +10,11 @@ import { DeliveryCard } from './DeliveryCard';
 import { DesignCard } from './DesignCard';
 import { groupEntries } from './decision-model';
 import type { ListGroup } from './decision-model';
+import { StatusIcon, UiIcon } from './Icons';
+import type { UiIconName } from './Icons';
+import { useText } from './Preferences';
 import { ClosureCard, RunCard } from './RunCard';
 import { ScopeCard } from './ScopeReview';
-import { useText } from './Preferences';
 import { kindSentence } from './sentences';
 
 interface Counts { total: number; blocking: number; attention: number; byKind: Record<InboxKind, number> }
@@ -28,9 +29,14 @@ export interface InboxData {
 export interface DecisionFilter { workspaceId: string; kind: string; offset: number; limit?: number }
 const PAGE = 20;
 
-export function useDecisionInbox(actor: Actor | null, refresh: number, filter: DecisionFilter, visible: boolean) {
-  const [result, setResult] = useState<{ data: InboxData | null; global: InboxData | null; error: unknown; loading: boolean }>({ data: null, global: null, error: null, loading: true });
-  const wanted = visible ? Math.max(PAGE, filter.limit ?? PAGE) : 1;
+export function useDecisionInbox(actor: Actor | null, refresh: number, limit: number) {
+  const [result, setResult] = useState<{ data: InboxData | null; global: InboxData | null; error: unknown; loading: boolean }>({
+    data: null,
+    global: null,
+    error: null,
+    loading: true
+  });
+  const wanted = Math.max(PAGE, limit);
   useEffect(() => {
     if (!actor) {
       setResult({ data: null, global: null, error: null, loading: true });
@@ -81,198 +87,326 @@ function Card(props: CardProps) {
 
 const groupLabel: Record<ListGroup, string> = { 'needs-you': 'Needs you', accepted: 'Accepted', later: 'Later' };
 
-function typing(target: EventTarget | null) {
-  const element = target as HTMLElement | null;
-  return !!element && (element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName));
+const kindIcon: Record<InboxKind, UiIconName> = {
+  DESIGN_REVIEW: 'doc',
+  DELIVERY_ACCEPTANCE: 'pkg',
+  SCOPE_DECISION: 'scope',
+  RUN_RECONCILE: 'alert',
+  CLOSURE_BLOCKED: 'lock',
+  DEFECT_TRIAGE: 'bug',
+  AGENT_QUESTION: 'chat'
+};
+
+export interface DecisionTarget {
+  entryId: string | null;
+  issueId: string | null;
+  kind: InboxKind | null;
 }
 
-export function Decisions({ feed, filter, setFilter, workspaces, open, retry }: {
-  feed: ReturnType<typeof useDecisionInbox>;
-  filter: DecisionFilter;
-  setFilter(filter: DecisionFilter): void;
-  workspaces: Workspace[];
-  open?(entry: InboxEntry): void;
-  retry(): void;
-}) {
-  const t = useText();
-  const render = useSentence();
-  const codeText = useCodeText();
-  const data = feed.data;
+export function useDecisionSelection(
+  data: InboxData | null,
+  target: DecisionTarget,
+  active: boolean,
+  onSelectUrl?: (entry: InboxEntry) => void
+) {
   const groups = useMemo(() => groupEntries(data?.entries ?? []), [data]);
   const flat = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
   const [slot, setSlot] = useState<{ key: string; entry: InboxEntry } | null>(null);
-  const [want, setWant] = useState(() => readWant());
   const remembered = useRef<{ entry: InboxEntry; index: number } | null>(null);
-  const openSlot = (entry: InboxEntry) => {
-    remembered.current = { entry, index: Math.max(0, flat.indexOf(entry)) };
-    setSlot({ key: entry.id, entry });
-  };
+  const lastTarget = useRef<string>('');
+
+  const openSlot = useCallback(
+    (entry: InboxEntry, updateUrl = false) => {
+      remembered.current = { entry, index: Math.max(0, flat.indexOf(entry)) };
+      setSlot({ key: entry.id, entry });
+      if (updateUrl) onSelectUrl?.(entry);
+    },
+    [flat, onSelectUrl]
+  );
+
   const matched = slot ? matchOpenEntry(flat, slot.entry) : null;
+
   useEffect(() => {
-    const pop = () => setWant(readWant());
-    window.addEventListener('popstate', pop);
-    return () => window.removeEventListener('popstate', pop);
-  }, []);
-  useEffect(() => {
-    if (!data) return;
-    if (want) {
-      const match = flat.find((entry) => entry.issueId === want.issueId && entry.kind === want.kind);
-      if (match && matched?.id !== match.id) openSlot(match);
-      setWant(null);
-      return;
+    if (!data || !active) return;
+    const key = `${target.entryId ?? ''}|${target.issueId ?? ''}|${target.kind ?? ''}`;
+    if (key !== lastTarget.current && (target.entryId || (target.issueId && target.kind))) {
+      const found = target.entryId
+        ? flat.find((entry) => entry.id === target.entryId)
+        : flat.find((entry) => entry.issueId === target.issueId && entry.kind === target.kind);
+      if (found) {
+        lastTarget.current = key;
+        if (matched?.id !== found.id) openSlot(found, false);
+        return;
+      }
+      if (!data.nextOffset) lastTarget.current = key;
     }
-    if (!slot && flat.length) openSlot(flat[0]!);
-  }, [data, flat, want, slot, matched?.id]);
+    if (!slot && flat.length) {
+      openSlot(flat[0]!, false);
+    }
+  }, [active, data, flat, target.entryId, target.issueId, target.kind, slot, matched?.id, openSlot]);
+
   if (matched) remembered.current = { entry: matched, index: flat.indexOf(matched) };
   const current = matched ?? (slot && remembered.current ? remembered.current.entry : null);
-  const gone = !!current && !matched;
+  const gone = Boolean(current && !matched);
   const currentId = matched?.id ?? slot?.entry.id ?? null;
+  const currentIndex = matched ? flat.indexOf(matched) : -1;
   const hasNext = flat.some((entry) => entry.id !== currentId);
-  const go = (delta: 1 | -1) => {
-    const count = flat.length;
-    if (!count) return;
-    const position = matched ? flat.indexOf(matched) : (remembered.current?.index ?? 0);
-    const index = matched
-      ? (position + delta + count) % count
-      : delta === 1 ? Math.min(position, count - 1) : (position - 1 + count) % count;
-    const target = flat[index]!;
-    if (target.id !== matched?.id) openSlot(target);
+
+  const step = useCallback(
+    (delta: 1 | -1) => {
+      const count = flat.length;
+      if (!count) return;
+      const position = matched ? flat.indexOf(matched) : (remembered.current?.index ?? 0);
+      const index = matched
+        ? (position + delta + count) % count
+        : delta === 1
+          ? Math.min(position, count - 1)
+          : (position - 1 + count) % count;
+      const next = flat[index]!;
+      if (next.id !== matched?.id) openSlot(next, true);
+    },
+    [flat, matched, openSlot]
+  );
+
+  return {
+    groups,
+    flat,
+    slot,
+    current,
+    matched,
+    gone,
+    currentId,
+    currentIndex,
+    hasNext,
+    select: (entry: InboxEntry) => openSlot(entry, true),
+    step,
+    nextOne: () => {
+      if (hasNext) step(1);
+    }
   };
-  const nextOne = () => { if (hasNext) go(1); };
-  useEffect(() => {
-    const press = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing || typing(event.target)) return;
-      if (event.key.toLowerCase() === 'j') go(1);
-      else if (event.key.toLowerCase() === 'k') go(-1);
-    };
-    window.addEventListener('keydown', press);
-    return () => window.removeEventListener('keydown', press);
-  });
-  const more = data !== null && data.nextOffset !== null;
+}
+
+export function DecisionRailList({
+  feed,
+  selection,
+  workspaces,
+  onMore,
+  onSelected
+}: {
+  feed: ReturnType<typeof useDecisionInbox>;
+  selection: ReturnType<typeof useDecisionSelection>;
+  workspaces: Workspace[];
+  onMore(): void;
+  onSelected?(): void;
+}) {
+  const t = useText();
+  const render = useSentence();
+  const data = feed.data;
   const showWorkspace = workspaces.length > 1;
+  const more = data !== null && data.nextOffset !== null;
+
+  if (feed.loading && !data) {
+    return <div className="ctx-h">{t('Loading decisions…')}</div>;
+  }
+  if (!selection.flat.length) {
+    return <div className="ctx-h">{t('Nothing is waiting for you')}</div>;
+  }
+
   return (
-    <section className="decisions" aria-label={t('Human decisions')}>
-      {feed.error ? (
-        <div className="error" role="alert">
-          <p>{feed.error instanceof ApiError ? codeText(feed.error.code) : codeText('SERVICE_UNAVAILABLE')}</p>
-          <button onClick={retry}>{t('Retry')}</button>
-        </div>
-      ) : null}
-      {feed.loading && !data ? <p role="status">{t('Loading decisions…')}</p> : null}
-      {data && !flat.length && !current ? (
-        <Empty title={t('Nothing is waiting on you')}><p>{t('New decisions appear here.')}</p></Empty>
-      ) : null}
-      {data && (flat.length || current) ? (
-        <div className="decisions-layout">
-          <nav className="decision-rail" aria-label={t('Decisions')}>
-            {!flat.length ? <p className="muted">{t('Nothing is waiting on you')}</p> : null}
-            {groups.filter((group) => group.entries.length).map((group) => (
-              <section key={group.group} aria-labelledby={`rail-${group.group}`}>
-                <h2 id={`rail-${group.group}`}>{render({ key: groupLabel[group.group], values: {} })} <span className="rail-count">{group.entries.length}</span></h2>
-                <ul>
-                  {group.entries.map((entry) => {
-                    const age = formatAge(entry.ageMs);
-                    return (
-                      <li key={entry.id}>
-                        <a
-                          href={entry.url}
-                          aria-current={entry.id === currentId ? 'true' : undefined}
-                          onClick={(event) => {
-                            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-                            event.preventDefault();
-                            if (matched?.id !== entry.id) openSlot(entry);
-                          }}
-                        >
-                          <span className="rail-title">{rowTitle(entry)}</span>
-                          <span className="rail-meta">
-                            {render(kindSentence(entry.kind))}
-                            {showWorkspace ? ` · ${entry.workspaceName}` : ''}
-                            {age ? ` · ${t(age.key).replace('{count}', String(age.count ?? ''))}` : ''}
-                            {entry.status === 'READY_TO_COMPLETE' ? ` · ${t('Ready')}` : ''}
-                          </span>
-                        </a>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ))}
-            {more ? <button type="button" onClick={() => setFilter({ ...filter, limit: (filter.limit ?? PAGE) + PAGE })}>{t('Show more')}</button> : null}
-          </nav>
-          <div className="decision-panel">
-            {current && slot ? (
-              <>
-                {open ? <p className="card-links"><a href={current.url} onClick={(event) => { event.preventDefault(); open(current); }}>{t('Open the issue')}</a></p> : null}
-                <Card key={slot.key} entry={current} gone={gone} hasNext={hasNext} onNext={nextOne} />
-              </>
-            ) : null}
+    <>
+      {selection.groups
+        .filter((group) => group.entries.length > 0)
+        .map((group) => (
+          <div key={group.group} className="ctx-group">
+            <div className="ctx-h">{render({ key: groupLabel[group.group], values: {} })}</div>
+            {group.entries.map((entry) => {
+              const age = formatAge(entry.ageMs);
+              const ageLabel =
+                entry.status === 'READY_TO_COMPLETE'
+                  ? t('Ready')
+                  : age
+                    ? t(age.key).replace('{count}', String(age.count ?? ''))
+                    : '';
+              const href = `/?${new URLSearchParams({ workspace: entry.workspaceId, view: 'decisions', entry: entry.id })}`;
+              return (
+                <a
+                  key={entry.id}
+                  href={href}
+                  className={`ent ${entry.kind === 'RUN_RECONCILE' ? 'crit' : ''}`}
+                  aria-current={entry.id === selection.currentId ? 'true' : undefined}
+                  onClick={(event) => {
+                    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    selection.select(entry);
+                    onSelected?.();
+                  }}
+                >
+                  <UiIcon name={kindIcon[entry.kind]} size={15} />
+                  <span className="t">{rowTitle(entry)}</span>
+                  <span />
+                  <span className="s">
+                    <span className="cut">
+                      {render(kindSentence(entry.kind))}
+                      {showWorkspace ? ` · ${entry.workspaceName}` : ''}
+                    </span>
+                    {ageLabel ? <time>{ageLabel}</time> : null}
+                  </span>
+                </a>
+              );
+            })}
           </div>
-        </div>
+        ))}
+      {more ? (
+        <button type="button" className="btn ghost sm ctx-more" onClick={onMore}>
+          {t('Show more')}
+        </button>
       ) : null}
-    </section>
+    </>
   );
 }
 
-function readWant() {
-  const query = new URLSearchParams(location.search);
-  const issueId = query.get('issue');
-  const kind = query.get('kind');
-  return issueId && kind ? { issueId, kind } : null;
-}
-
-export function InboxSettingsForm({ workspaceId, onSaved }: { workspaceId: string; onSaved(): void }) {
+export function DecisionPane({
+  feed,
+  selection,
+  activeWorkspaceId,
+  liveRunCount,
+  onMenu,
+  onOpenIssue,
+  onOpenWork,
+  onRetry
+}: {
+  feed: ReturnType<typeof useDecisionInbox>;
+  selection: ReturnType<typeof useDecisionSelection>;
+  activeWorkspaceId: string | null;
+  liveRunCount: number;
+  onMenu(): void;
+  onOpenIssue(workspaceId: string, issueId: string): void;
+  onOpenWork(): void;
+  onRetry(): void;
+}) {
   const t = useText();
-  const [settings, setSettings] = useState<InboxSettings | null>(null);
-  const [value, setValue] = useState('');
-  const [error, setError] = useState('');
-  const [conflict, setConflict] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const intent = useRef<{ payload: string; key: string } | null>(null);
-  async function reload(keepInput: boolean) {
-    setBusy(true);
-    try {
-      const result = await command<{ settings: InboxSettings }>('inbox_settings_get', { workspaceId });
-      setSettings(result.settings);
-      if (!keepInput) setValue(String(result.settings.agingThresholdHours));
-      setConflict(false);
-      setError('');
-      intent.current = null;
-    } catch (failure) { setError(errorText(failure)); }
-    finally { setBusy(false); }
-  }
-  useEffect(() => { void reload(false); }, [workspaceId]);
+  const codeText = useCodeText();
+  const data = feed.data;
+  const current = selection.current;
+  const count = selection.flat.length;
+  const position = selection.currentIndex;
+
   return (
-    <section className="appearance inbox-settings" aria-labelledby="inbox-settings-title">
-      <h2 id="inbox-settings-title">{t('Decision attention')}</h2>
-      <p className="muted">{t('Aging is an advisory reminder for this workspace. It never advances a gate or changes an approval.')}</p>
-      <form onSubmit={async event => {
-        event.preventDefault();
-        if (!settings || busy || conflict) return;
-        const input = { workspaceId, expectedVersion: settings.version, agingThresholdHours: Number(value) };
-        const payload = JSON.stringify(input);
-        if (intent.current?.payload !== payload) intent.current = { payload, key: crypto.randomUUID() };
-        setBusy(true); setError(''); setSaved(false);
-        try {
-          const result = await mutation<{ settings: InboxSettings }>('inbox_settings_update', { ...input, idempotencyKey: intent.current.key });
-          setSettings(result.settings); setSaved(true); intent.current = null; onSaved();
-        } catch (failure) {
-          setConflict(failure instanceof ApiError && failure.code === 'VERSION_CONFLICT');
-          setError(errorText(failure));
-        } finally { setBusy(false); }
-      }}>
-        <Field label={t('Aging threshold (hours)')} hint={t('Choose a whole number from 1 to 168.')}>
-          <input type="number" min="1" max="168" step="1" required value={value} disabled={!settings || busy} onChange={event => { setValue(event.target.value); setSaved(false); }} />
-        </Field>
-        {settings ? <p className="muted">{t('Settings version')}: {settings.version} · {t('Saved threshold')}: {settings.agingThresholdHours} {t('hours')}</p> : null}
-        {error ? <p className="error" role="alert">{t(error)}</p> : null}
-        {conflict ? <p>{t('Another session changed these settings. Reload the version, review the saved threshold, and submit again. Your input is kept.')}</p> : null}
-        {saved ? <p role="status">{t('Attention settings saved.')}</p> : null}
-        <div className="decision-settings-actions">
-          <button type="submit" disabled={!settings || busy || conflict}>{t(busy ? 'Saving…' : 'Save attention settings')}</button>
-          {conflict || !settings && error ? <button type="button" disabled={busy} onClick={() => void reload(!!settings)}>{t('Reload settings version')}</button> : null}
+    <>
+      <header className="bar">
+        <button
+          type="button"
+          className="icon-btn menu-btn"
+          aria-label={t('Open navigation')}
+          onClick={onMenu}
+        >
+          <UiIcon name="menu" />
+        </button>
+        {current ? (
+          <>
+            <div className="crumb">
+              {activeWorkspaceId && current.workspaceId !== activeWorkspaceId ? (
+                <>
+                  <span className="cut">{current.workspaceName}</span>
+                  <UiIcon name="chev" size={12} />
+                </>
+              ) : null}
+              <b>{current.key}</b>
+            </div>
+            <a
+              className="btn ghost sm"
+              href={`/w/${encodeURIComponent(current.workspaceId)}/issues/${encodeURIComponent(current.issueId)}`}
+              onClick={(event) => {
+                if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                onOpenIssue(current.workspaceId, current.issueId);
+              }}
+            >
+              {t('Open issue')}
+            </a>
+            {count > 0 && position >= 0 ? (
+              <>
+                <span className="pos">{position + 1} / {count}</span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  disabled={count <= 1}
+                  title={`${t('Previous')} (K)`}
+                  aria-label={t('Previous')}
+                  onClick={() => selection.step(-1)}
+                >
+                  <UiIcon name="up" />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  disabled={count <= 1}
+                  title={`${t('Next')} (J)`}
+                  aria-label={t('Next')}
+                  onClick={() => selection.step(1)}
+                >
+                  <UiIcon name="chevd" />
+                </button>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <h1>{t('Decisions')}</h1>
+        )}
+      </header>
+      {feed.error && !data ? (
+        <div className="scroll">
+          <div className="center">
+            <div className="empty" role="alert">
+              <h2>{feed.error instanceof ApiError ? codeText(feed.error.code) : codeText('SERVICE_UNAVAILABLE')}</h2>
+              <button type="button" className="btn" onClick={onRetry}>
+                {t('Retry')}
+              </button>
+            </div>
+          </div>
         </div>
-      </form>
-    </section>
+      ) : feed.loading && !data ? (
+        <div className="scroll">
+          <div className="center">
+            <div className="empty" role="status">
+              <p>{t('Loading decisions…')}</p>
+            </div>
+          </div>
+        </div>
+      ) : current && selection.slot ? (
+        <div className="decision-host">
+          <Card
+            key={selection.slot.key}
+            entry={current}
+            gone={selection.gone}
+            hasNext={selection.hasNext}
+            onNext={selection.nextOne}
+          />
+        </div>
+      ) : (
+        <div className="scroll">
+          <div className="center">
+            <div className="empty">
+              <StatusIcon kind="done" />
+              <h2>{t('Nothing is waiting for you')}</h2>
+              <p>{t('New decisions appear here.')}</p>
+              {liveRunCount > 0 ? (
+                <a
+                  className="btn"
+                  href={`/?${new URLSearchParams({ ...(activeWorkspaceId ? { workspace: activeWorkspaceId } : {}), view: 'work' })}`}
+                  onClick={(event) => {
+                    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    onOpenWork();
+                  }}
+                >
+                  {t('{count} runs in progress').replace('{count}', String(liveRunCount))}
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

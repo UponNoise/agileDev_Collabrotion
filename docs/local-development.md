@@ -251,6 +251,18 @@ Git jobs use detached worktrees from the source's committed HEAD; uncommitted so
 
 Codex uses native `exec --json` with `workspace-write` and per-invocation AgileDev MCP configuration for managed implementation. Only the AgileDev MCP tool group is explicitly approved; API role/scope checks still apply and human-only commands are absent from the agent tool surface. Claude uses its native print/stream-JSON mode with session-only `acceptEdits` and the scoped MCP configuration. DSH uses its SDK profile with approval forwarding for managed implementation and QA; unanswered approval/user-input requests are denied or cancelled until a human UI is implemented. Fresh consults use the separate read-only launch configuration, including the DSH headless profile.
 
+On Windows, the DSH SDK sandbox needs `WRITE_DAC` and `WRITE_OWNER` on the execution workspace. AgileDev checks the current account's effective rights before starting a DSH worker or QA run. If Windows denies either right, the run fails before the model starts and names the missing rights. The owner can grant their account Full control over the `runs` directory and its subfolders. For example, run this in Command Prompt as the owner:
+
+```cmd
+icacls "<run directory>" /grant "%USERNAME%:(OI)(CI)F"
+```
+
+Alternatively, move the whole AgileDev data directory into the owner account's user folder and set `AGILEDEV_DATA_DIR` to the new location. The runs, snapshots and database share that directory. AgileDev performs the check without changing permissions.
+
+`node dist/cli.js doctor` reports `RUN_DIRECTORY_RIGHTS` for the data directory's `runs` folder. If that folder has yet to be created, the diagnostic reports the nearest existing ancestor it checked. Windows PowerShell's `Add-Type` compiles a small class at each DSH worker or QA startup and typically takes about one to three seconds. Constrained Language Mode, AppLocker or antivirus can prevent the check from answering. In that case it reports `UNKNOWN`, startup proceeds, and DSH surfaces any sandbox failure.
+
+`PIPED_CHILD_PROCESSES` reports the documented DSH 0.2.x Windows sandbox limitation. The sandbox refuses commands that start children with piped output, such as test runners that spawn workers. AgileDev keeps the sandbox mode and obtains test evidence from checks run by the service.
+
 Set optional `AGILEDEV_CODEX_MODEL` and `AGILEDEV_CODEX_REASONING_EFFORT` in the owner's service environment. By default the service selects the newest listed `-sol` slug by numeric model version from `models_cache.json` in `CODEX_HOME` (normally `~/.codex`) and uses `high` effort. With no usable Sol and no model override, it inherits the Codex model and effort defaults. An explicit effort still wins. The service supplies the selected values through `-c model=…` and `-c model_reasoning_effort=…`. Claude Code inherits its own defaults. Set `AGILEDEV_CLAUDE_MODEL` to pass `--model`. These settings apply to all managed runs of the corresponding harness from that service.
 
 DSH defaults to `deepseek-official` / `deepseek-flash` (DeepSeek-V41-Flash) with `max` effort. Select Gemini Hydrogen with `AGILEDEV_DSH_PROVIDER=google` and `AGILEDEV_DSH_MODEL=gemini-4-hydrogen`. It defaults to `high` and accepts `low`, `medium` and `high`. Supply its Google provider overlay as the trusted absolute `AGILEDEV_DSH_PATCH` file. Use `AGILEDEV_DSH_REASONING_EFFORT` for a supported override. The optional owner patch is applied before the generated route and MCP overlay in SDK and headless modes. The SDK also receives the selected route and effort at initialization. Other explicitly paired provider and model settings use the provider's effort default when no override is set. The service never changes routes after a launch failure.

@@ -48,6 +48,31 @@ export interface WorkspaceData {
   designs: Pick<Design, 'id' | 'issueId' | 'status'>[];
   connections: { id: string; actorId: string; client: { name: string; version: string }; initializedAt: string }[];
 }
+export interface WakeSettingsData {
+  settings: { workspaceId: string; enabled: boolean; version: number };
+  modes: { harness: 'codex' | 'claude-code' | 'dsh'; fresh: 'AVAILABLE' | 'UNVERIFIED'; resume: 'UNVERIFIED'; queue: 'UNVERIFIED' }[];
+}
+export interface IssueMessageView {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  sender: { actorId: string; principalId: string; role: Actor['role']; runId?: string };
+  recipient: { kind: 'owner' } | { kind: 'actor'; actorId: string; role: Exclude<Actor['role'], 'human'> };
+  kind: 'QUESTION' | 'REPLY' | 'NOTE';
+  body: string;
+  replyTo: string | null;
+  createdAt: string;
+  delivery?: { runId: string; harness: 'codex' | 'claude-code' | 'dsh'; mode: 'fresh'; state: string; reason?: string };
+}
+export interface LastRejectionView {
+  stage: 'PRE_QA' | 'QA' | 'FINAL' | 'USER';
+  at: string;
+  reason: string | null;
+  findingCount: number;
+  evidenceKind: string | null;
+  evidenceId: string | null;
+  candidateId: string;
+}
 export interface IssueData {
   issue: DisplayIssue;
   parent: Issue | null;
@@ -63,7 +88,8 @@ export interface IssueData {
   defects?: { observation: DefectObservation };
   readiness: { ready: boolean; blocking: string[] };
   executionRecovery: { required: boolean; fence: number; candidateId: string | null };
-  lastRejection?: { candidateId: string } | null;
+  lastRejection?: LastRejectionView | null;
+  discussion?: { visibleCount: number; pendingCount: number; questions: { id: string; senderId: string; senderRole: string; preview: string }[] } | null;
   planning: {
     planId: string | null;
     ready: boolean;
