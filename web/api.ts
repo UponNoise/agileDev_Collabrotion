@@ -71,6 +71,7 @@ export interface LastRejectionView {
   findingCount: number;
   evidenceKind: string | null;
   evidenceId: string | null;
+  candidateId: string;
 }
 export interface IssueData {
   issue: DisplayIssue;

@@ -481,11 +481,17 @@ export function IssueForm({
               ...base,
               ...formKey(data),
               designId: packet.design?.id,
-              scopeRevision: issue.scopeRevision
+              scopeRevision: issue.scopeRevision,
+              ...(data.get('fromWorkspace') ? { start: 'workspace' } : {})
             })
           }
         >
           <div className="form-body">
+            {(issue.candidate ? packet.lastRejection?.candidateId === issue.candidate.id : issue.state.endsWith('_REJECTED')) && (
+              <label className="check">
+                <input type="checkbox" name="fromWorkspace" /> {t('Start over from the workspace instead of the returned delivery')}
+              </label>
+            )}
             <p>
               {t('Starts a real ')}
               {harnessName(issue.harness)}

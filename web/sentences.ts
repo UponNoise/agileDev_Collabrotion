@@ -176,6 +176,7 @@ const errorKeys: Record<string, string> = {
   QA_BLOCKED: 'QA was blocked',
   CONSULT_REPLY_REQUIRED: 'No reply was sent',
   WORKSPACE_DIRTY: 'The workspace has uncommitted changes; not started',
+  REWORK_BASE_UNAVAILABLE: 'The previous delivery could not be restored; dispatch again from the workspace',
   DEPENDENCY_LINK_FAILED: 'The isolated directory could not be prepared',
   DEPENDENCY_LINK_CONFLICT: 'The isolated directory could not be prepared',
   DEPENDENCY_LINK_CLEANUP_FAILED: 'The isolated directory could not be prepared',
