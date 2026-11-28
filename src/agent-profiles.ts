@@ -211,7 +211,7 @@ const fieldDescriptions: Record<string, string> = {
   "fence": "Active lease fence from issue_get.",
   "actorId": "Enrolled actor ID from an authorized assignment or enrollment record.",
   "assigneeId": "Enrolled worker ID for this task; assignments remain separate from dispatch.",
-  "harness": "Configured execution harness: codex, claude-code or dsh.",
+  "harness": "Configured execution harness: codex, claude-code, dsh or agy.",
   "reason": "Caller’s reason for this action.",
   "content": "Markdown design content supplied by the accountable lead.",
   "criteria": "Acceptance criterion IDs from the approved parent design or the explicit new scope.",

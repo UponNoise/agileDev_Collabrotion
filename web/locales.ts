@@ -889,6 +889,7 @@ export const sentencePairs: [string, string][] = [
   ['The delivery could not be sealed', '交付内容没能封存'],
   ['The run limits are invalid; check the launch settings', '运行上限设置有误，请检查启动设置'],
   ['It cannot be completed yet; a closing check is not met', '现在还不能完成，有关闭条件尚未满足'],
+  ['This tool has not passed its check on this computer yet; run its check in a terminal and restart the service', '这个开发环境还没有在这台电脑上通过实测；请在终端运行实测命令并重启服务'],
   ['created', '创建了'],
   ['edited', '修改了内容'],
   ['wrote the design', '写了设计'],
@@ -1223,7 +1224,8 @@ const cardPairs: [string, string][] = [
   ['Stop', '停止'],
   ['Stop run', '停止运行'],
   ['No runs recorded yet.', '还没有运行记录。'],
-  ['Create a workspace first.', '请先创建一个工作区。']
+  ['Create a workspace first.', '请先创建一个工作区。'],
+  ['Antigravity (needs check)', 'Antigravity（需重新实测）']
 ];
 const zh = new Map([...pairs, ...cardPairs]);
 const folded = new Map([...pairs, ...cardPairs].map(([source, target]) => [source.toLowerCase(), target]));
@@ -1235,7 +1237,7 @@ export function translate(locale: 'en' | 'zh-CN', source: string) {
   if (translated) return (source.match(/^\s*/)?.[0] ?? '') + translated + (source.match(/\s*$/)?.[0] ?? '');
   const error = normalized.match(/^([A-Z][A-Z_]+): (.+)$/);
   if (error) return `${error[1]}：${zh.get(error[2]) ?? folded.get(error[2].toLowerCase()) ?? error[2]}`;
-  const dispatch = normalized.match(/^Dispatch (Codex|DSH|Claude Code)$/);
+  const dispatch = normalized.match(/^Dispatch (Codex|DSH|Claude Code|Antigravity)$/);
   if (dispatch) return `派发 ${dispatch[1]}`;
   const lifecycle = normalized.match(/^(Hold|Resume|Abandon|Reopen) issue$/);
   if (lifecycle) return `${zh.get(lifecycle[1]) ?? lifecycle[1]}需求`;

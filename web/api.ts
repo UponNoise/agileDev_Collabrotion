@@ -7,6 +7,7 @@ import type {
   GitAttempt,
   GitRepositoryEntry,
   GitSubmission,
+  Harness,
   Issue,
   InboxKind,
   Plan,
@@ -50,7 +51,7 @@ export interface WorkspaceData {
 }
 export interface WakeSettingsData {
   settings: { workspaceId: string; enabled: boolean; version: number };
-  modes: { harness: 'codex' | 'claude-code' | 'dsh'; fresh: 'AVAILABLE' | 'UNVERIFIED'; resume: 'UNVERIFIED'; queue: 'UNVERIFIED' }[];
+  modes: { harness: Harness; fresh: 'AVAILABLE' | 'UNVERIFIED'; resume: 'UNVERIFIED'; queue: 'UNVERIFIED' }[];
 }
 export interface IssueMessageView {
   id: string;
@@ -62,7 +63,7 @@ export interface IssueMessageView {
   body: string;
   replyTo: string | null;
   createdAt: string;
-  delivery?: { runId: string; harness: 'codex' | 'claude-code' | 'dsh'; mode: 'fresh'; state: string; reason?: string };
+  delivery?: { runId: string; harness: Harness; mode: 'fresh'; state: string; reason?: string };
 }
 export interface LastRejectionView {
   stage: 'PRE_QA' | 'QA' | 'FINAL' | 'USER';

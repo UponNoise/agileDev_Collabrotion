@@ -22,10 +22,11 @@ test('a damaged optional Windows harness directory does not block discovery of o
   t.after(() => rmSync(root, { recursive: true, force: true }));
   writeFileSync(join(root, 'Claude-Data'), 'fixture file where an optional directory belongs');
   const env = { ...process.env, APPDATA: root, LOCALAPPDATA: root, PATH: '', AGILEDEV_DATA_DIR: root,
-    AGILEDEV_CODEX_PATH: process.execPath, AGILEDEV_CLAUDE_PATH: '', AGILEDEV_DSH_PATH: join(root, 'missing-dsh.exe') };
+    AGILEDEV_CODEX_PATH: process.execPath, AGILEDEV_CLAUDE_PATH: '', AGILEDEV_DSH_PATH: join(root, 'missing-dsh.exe'),
+    AGILEDEV_AGY_PATH: join(root, 'missing-agy.exe') };
   const output = execFileSync(process.execPath, [resolve('dist/cli.js'), 'doctor'], { env, encoding: 'utf8', timeout: 10000, windowsHide: true });
   const report = JSON.parse(output);
-  assert.deepEqual(report.missing, ['claude-code', 'dsh']);
+  assert.deepEqual(report.missing, ['claude-code', 'dsh', 'agy']);
   assert.equal(report.harnesses.find((entry: { id: string }) => entry.id === 'codex')?.available, true);
 });
 

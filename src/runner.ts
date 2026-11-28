@@ -43,6 +43,9 @@ export class Coordinator {
   canConsult(harness: Harness) {
     return !this.closing && this.adapter.supportsConsult?.(harness) === true;
   }
+  canDispatch(harness: Harness) {
+    return !this.closing && this.adapter.supportsDispatch?.(harness) !== false;
+  }
   async start() {
     this.recover(); await this.tick();
     this.timer = setInterval(() => { void this.tick().catch(() => {}); }, 250);
@@ -239,7 +242,7 @@ export class Coordinator {
           const current = this.store.get<Extract<Run, { kind: 'consult' }>>('run', id);
           this.consultLaunchQuestion(current, this.store.get<Issue>('issue', current.issueId));
         }
-      } : {}),
+      } : run.kind === 'qa' ? { kind: 'qa' as const } : {}),
       onPid: pid => { if (this.store.db.open) this.update(id, { pid }); },
       onProvider: providerSessionId => { if (this.store.db.open) this.update(id, { providerSessionId }); },
       onModelSettings: settings => {

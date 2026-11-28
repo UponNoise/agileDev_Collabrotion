@@ -139,6 +139,7 @@ export async function probeHosts() {
     for (const entry of discoverHarnesses()) {
       const version = await probeHarness(entry);
       if (!version.available) { results.push(version); continue; }
+      if (entry.id === 'agy') { results.push({ ...version, status: 'NOT_PROBED', reason: 'NO_INFERENCE_FREE_PROBE' }); continue; }
       const role = entry.id === 'claude-code' ? 'pm' : 'lead';
       const enrollment = flow.execute(owner.actor, 'actor_enroll', {
         workspaceId: workspace.id, role, name: `${entry.id} probe`, idempotencyKey: `enroll-${entry.id}`
