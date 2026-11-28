@@ -858,6 +858,7 @@ export const sentencePairs: [string, string][] = [
   ['{harness} could not be started', '没能启动 {harness}'],
   ['The model service returned an error; this run produced nothing', '模型服务返回错误，这次运行没有产出'],
   ['The model settings are incomplete; check the launch settings', '模型设置不完整，请检查启动设置'],
+  ['DSH did not start: your Windows account needs Full control on the run directory. Add it there, or move the data folder into your user folder', 'DSH 没有启动：你的账户对运行目录缺少完全控制权限。请给运行目录加上完全控制，或把数据目录移到用户主目录下'],
   ['Stopped at the time limit', '超过时间上限，已停止'],
   ['Stopped as requested', '已按要求停止'],
   ['Stopped, as you confirmed', '已停止，由你确认'],

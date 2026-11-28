@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { LocalClient } from './client.js';
 import { connectMcp } from './mcp.js';
 import { discoverHarnesses, probeHarness } from './harness.js';
+import { harnessDiagnostics } from './diagnostics.js';
 import { probeHosts } from './probe.js';
 import { serve } from './daemon.js';
 import { dataDirectory, ensureService, requireService, ServiceError, stopService } from './service-launcher.js';
@@ -71,7 +72,11 @@ async function main() {
     const status = await Promise.all(entries.map(async entry => {
       const probe = await probeHarness(entry);
       const record = readConsultVerification(dataDir, entry.id);
-      return { ...probe, freshConsultVerified: !!record && probe.available && record.version === probe.version && record.launcher === consultLauncherIdentity(entry) };
+      return {
+        ...probe,
+        freshConsultVerified: !!record && probe.available && record.version === probe.version && record.launcher === consultLauncherIdentity(entry),
+        diagnostics: probe.available ? await harnessDiagnostics(entry, { version: probe.version, dataDir }) : [],
+      };
     }));
     console.log(JSON.stringify({ harnesses: status, missing: harnesses.filter(id => !entries.some(e => e.id === id)) }, null, 2));
     return;

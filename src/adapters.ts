@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { Harness, DomainError, type RunModelSettings, type RunModelValue } from './contracts.js';
 import { HarnessEntry, discoverHarnesses, harnessEnvironment } from './harness.js';
 import { consultLauncherIdentity, matchesConsultVerification, type ConsultVerification } from './consult-verification.js';
 import { terminateTree } from './execution.js';
+import { checkDshRunDirectory, type RunDirectoryCheck } from './run-directory.js';
 
 export interface AdapterResult { outcome: 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; errorCode?: string; summary?: string }
 export interface AdapterContext {
@@ -151,7 +152,7 @@ function ownerDshPatchArgs() {
   }
   throw new DomainError('INVALID_DSH_PATCH', 'AGILEDEV_DSH_PATCH must name an accessible absolute patch file');
 }
-function dshLaunch(c: AdapterContext, profile: 'sdk' | 'headless') {
+function dshSettings(c: AdapterContext) {
   const ownerProvider = ownerSetting('AGILEDEV_DSH_PROVIDER');
   const ownerModel = ownerSetting('AGILEDEV_DSH_MODEL');
   const ownerEffort = ownerSetting('AGILEDEV_DSH_REASONING_EFFORT');
@@ -168,9 +169,11 @@ function dshLaunch(c: AdapterContext, profile: 'sdk' | 'headless') {
     throw new DomainError('INVALID_MODEL_SETTING', `AGILEDEV_DSH_REASONING_EFFORT for the selected model must be one of ${allowedEfforts.join(', ')}`);
   }
   const route = { provider, model, reasoningEffort: effort.value ?? undefined };
-  const args = ['--profile', profile, ...extras, '--patch', writeDshMcpPatch(c, route)];
   c.onModelSettings?.({ provider: selectedSetting(ownerProvider, provider), model: selectedSetting(ownerModel, model), reasoningEffort: effort });
-  return { args, route };
+  return { extras, route };
+}
+function dshPatchArgs(c: AdapterContext, profile: 'sdk' | 'headless', { extras, route }: ReturnType<typeof dshSettings>) {
+  return ['--profile', profile, ...extras, '--patch', writeDshMcpPatch(c, route)];
 }
 async function dshSdk(entry: HarnessEntry, c: AdapterContext, args: string[], route: DshRoute): Promise<RunningSession> {
   const p = processSession(entry, args, c);
@@ -207,10 +210,14 @@ async function dshSdk(entry: HarnessEntry, c: AdapterContext, args: string[], ro
 }
 export class NativeAdapter implements ExecutionAdapter {
   private stale = new Set<Harness>();
+  private readonly runDirectoryCheck: (directory: string) => Promise<RunDirectoryCheck>;
   constructor(
     private entries: () => HarnessEntry[] = discoverHarnesses,
-    private verification: ReadonlyMap<Harness, ConsultVerification> = new Map()
-  ) {}
+    private verification: ReadonlyMap<Harness, ConsultVerification> = new Map(),
+    options: { runDirectoryCheck?: (directory: string) => Promise<RunDirectoryCheck> } = {},
+  ) {
+    this.runDirectoryCheck = options.runDirectoryCheck ?? checkDshRunDirectory;
+  }
   private verifiedFresh(harness: Harness) {
     return this.stale.has(harness) ? undefined : this.verification.get(harness);
   }
@@ -239,9 +246,18 @@ export class NativeAdapter implements ExecutionAdapter {
     mkdirSync(c.directory, { recursive: true });
     let args: string[];
     if (c.harness === 'dsh') {
-      const launch = dshLaunch(c, consult ? 'headless' : 'sdk');
-      if (!consult) return dshSdk(entry, c, launch.args, launch.route);
-      args = [...launch.args, '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
+      const settings = dshSettings(c);
+      if (!consult) {
+        const check = await this.runDirectoryCheck(c.cwd);
+        if (check.state === 'MISSING') {
+          const { missing } = check;
+          const runDirectory = dirname(c.directory);
+          const message = `DSH cannot confine commands in this run directory because this Windows account lacks ${missing.join(' and ')} there. Give the account Full control of the run directory (${runDirectory}), or keep the AgileDev data directory inside your user folder.`;
+          throw new DomainError('DSH_DIRECTORY_RIGHTS_REQUIRED', message, 409, { directory: c.cwd, missing });
+        }
+        return dshSdk(entry, c, dshPatchArgs(c, 'sdk', settings), settings.route);
+      }
+      args = [...dshPatchArgs(c, 'headless', settings), '--permission-mode', 'read-only', '--approval-policy', 'never', '--json', '-'];
     } else if (c.harness === 'codex') {
       args = ['exec', '--json', '--sandbox', consult ? 'read-only' : 'workspace-write', '--cd', c.cwd, '--skip-git-repo-check', '-c', `mcp_servers.agiledev.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.agiledev.args=${JSON.stringify([c.bridgeScript, 'mcp'])}`, '-c', 'mcp_servers.agiledev.env_vars=["AGILEDEV_TOKEN","AGILEDEV_ENDPOINT"]', '-c', 'mcp_servers.agiledev.required=true', '-c', 'mcp_servers.agiledev.default_tools_approval_mode="approve"'];
       const override = ownerSetting('AGILEDEV_CODEX_MODEL');
