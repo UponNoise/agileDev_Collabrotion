@@ -168,7 +168,8 @@ export const CHANGED_CONTENT_CODES = [
   'DECISION_RISKS_STALE',
   'DESIGN_SCOPE_STALE',
   'SCOPE_CONTEXT_STALE',
-  'DEFECT_OBSERVATION_REQUIRED'
+  'DEFECT_OBSERVATION_REQUIRED',
+  'CLOSURE_BLOCKED'
 ] as const;
 
 export function isChangedContentCode(code: string): boolean {

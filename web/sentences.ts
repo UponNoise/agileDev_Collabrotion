@@ -204,7 +204,8 @@ const errorKeys: Record<string, string> = {
   DESIGN_SCOPE_STALE: 'The requirement changed; {lead} updates the design',
   DECISION_RISKS_STALE: 'The problems changed; review them again',
   SCOPE_CONTEXT_STALE: 'The scope changed; review it again',
-  DEFECT_OBSERVATION_REQUIRED: 'The delivery observation changed; review it again'
+  DEFECT_OBSERVATION_REQUIRED: 'The delivery observation changed; review it again',
+  CLOSURE_BLOCKED: 'It cannot be completed yet; a closing check is not met'
 };
 
 const historyKeys = {
@@ -505,7 +506,7 @@ export function historySentence(operation: string, data: HistoryEventData = {}):
       return simple(historyKeys.sentBack, { kind: rejectionSentence(classification) });
     }
     case 'delivery_complete':
-      return simple(historyKeys.completed);
+      return data.state === 'DONE' ? simple(historyKeys.completed) : null;
     case 'issue_transition': {
       const beforeState = before('state');
       const afterState = after('state');

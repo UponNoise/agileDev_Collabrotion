@@ -887,6 +887,7 @@ export const sentencePairs: [string, string][] = [
   ['The delivery observation changed; review it again', '交付观察记录已经变化，请重新查看'],
   ['The delivery could not be sealed', '交付内容没能封存'],
   ['The run limits are invalid; check the launch settings', '运行上限设置有误，请检查启动设置'],
+  ['It cannot be completed yet; a closing check is not met', '现在还不能完成，有关闭条件尚未满足'],
   ['created', '创建了'],
   ['edited', '修改了内容'],
   ['wrote the design', '写了设计'],

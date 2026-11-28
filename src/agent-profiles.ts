@@ -134,19 +134,20 @@ const extraPurposes: Record<string, string> = {
   check_profile_list: 'Read scoped human-approved fixed test profiles; no arbitrary commands can be authorized here.',
   qa_configure: 'Select an independent QA actor, harness and human-approved check profiles for this issue.',
   event_list: 'Read scoped append-only audit events after a sequence cursor; no event grants authority.',
-  work_heartbeat: 'Renew the current bound worker lease using the exact issue version and fence; never revives lost ownership.'
+  work_heartbeat: 'Renew the current bound worker lease using the exact issue version and fence; renewal leaves the issue version unchanged and never revives lost ownership.'
 };
 const specificRejections: Partial<Record<Operation, string>> = {
   artifact_read: 'EVIDENCE_STALE if the sealed artifact changed.',
   design_set: 'RUN_EXISTS while execution owns the affected scope.',
   design_submit: 'INVALID_TRANSITION if the design cannot be edited.',
   work_dispatch: 'NOT_READY lists blockers. APPROVAL_STALE requires the current design and scope. A rework run records its start in base.',
-  work_heartbeat: 'STALE_FENCE or LEASE_EXPIRED requires ownership reconciliation.',
-  work_submit: 'STALE_FENCE, LEASE_EXPIRED or PROVIDER_ID_REQUIRED.',
+  work_heartbeat: 'EXECUTION_BINDING_REQUIRED for a logical worker. STALE_FENCE or LEASE_EXPIRED requires ownership reconciliation.',
+  work_submit: 'EXECUTION_BINDING_REQUIRED for a logical worker. STALE_FENCE, LEASE_EXPIRED or PROVIDER_ID_REQUIRED.',
   review_submit: 'EVIDENCE_STALE if the candidate changed. RUN_STILL_LIVE while its producer is active.',
   qa_configure: 'REVIEW_INDEPENDENCE_REQUIRED if the selected reviewer cannot act independently.',
   git_submit: 'GIT_BINDING_REQUIRED or COMMIT_REPOSITORY_MISMATCH requires the bound remote.',
   git_retry: 'GIT_EVIDENCE_STALE if the current commit mapping changed.',
+  delivery_complete: 'CLOSURE_BLOCKED lists the remaining blockers and changes nothing.',
   message_send: 'MESSAGE_NOT_VISIBLE for hidden references. MESSAGE_INDEPENDENCE_REQUIRED blocks worker–QA messages. MESSAGE_RECIPIENT_UNAVAILABLE requires another recipient.'
 };
 export const operationProfiles = entries;

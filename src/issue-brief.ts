@@ -62,6 +62,7 @@ const commandRemedies: Record<string, [action: string, role: Party | 'caller', o
   CONSULT_REPLY_ALREADY_SENT: ['Your reply is stored. Stop without sending again.', 'caller'],
   REVIEW_INDEPENDENCE_REQUIRED: ['Check the current independent QA assignment and its sealed snapshot.', 'qa', 'issue_get'],
   APPROVAL_STALE: ['Refresh the reviewed issue and present the current evidence for a new decision.', 'caller', 'issue_get'],
+  CLOSURE_BLOCKED: ['Read the current brief and clear its closure blockers before completing again.', 'caller', 'issue_get'],
   DECISION_RISKS_STALE: ['Refresh the issue and present the changed risks for a new decision.', 'human', 'issue_get'],
   SERVICE_UNAVAILABLE: ['Ask the owner to inspect the local service and reconnect when available.', 'human'],
   INTERNAL_ERROR: ['Ask the owner to inspect the local service before retrying.', 'human']
