@@ -48,6 +48,8 @@ export function discoverHarnesses(): HarnessEntry[] {
   const entry = join(local, 'Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js');
   if (dsh && existsSync(dsh)) result.push({ id: 'dsh', command: dsh, args: [] });
   else if (process.platform === 'win32' && existsSync(desktop) && existsSync(join(local, 'Programs/DeepSeek Harness/resources/app.asar'))) result.push({ id: 'dsh', command: desktop, args: ['--expose-internals', entry], env: { ELECTRON_RUN_AS_NODE: '1' } });
+  const agy = process.env.AGILEDEV_AGY_PATH ?? executable('agy') ?? (process.platform === 'win32' ? join(local, 'agy/bin/agy.exe') : undefined);
+  if (agy && existsSync(agy)) result.push({ id: 'agy', command: agy, args: [] });
   return result;
 }
 export async function probeHarness(entry: HarnessEntry) {

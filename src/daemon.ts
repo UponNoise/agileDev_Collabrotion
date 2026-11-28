@@ -9,6 +9,7 @@ import { Coordinator } from './runner.js';
 import { GitVerifier } from './git-verifier.js';
 import { NativeAdapter } from './adapters.js';
 import { loadConsultVerifications } from './consult-verification.js';
+import { loadDispatchVerifications } from './dispatch-verification.js';
 import { processExists, readDescriptor, ServiceError } from './service-launcher.js';
 
 function publishMetadata(file: string, instance: string, value: object) {
@@ -59,11 +60,18 @@ export async function serve(dataDir: string) {
     process.exit(0);
   };
   let app: ReturnType<typeof createServer>;
-  try { store = new Store(join(dataDir, 'workflow.sqlite')); app = createServer(store, { instance, stop }, harness => coordinator?.canConsult(harness) === true); }
+  try {
+    store = new Store(join(dataDir, 'workflow.sqlite'));
+    app = createServer(store, { instance, stop }, {
+      consultAvailable: harness => coordinator?.canConsult(harness) === true,
+      dispatchAvailable: harness => coordinator ? coordinator.canDispatch(harness) : harness !== 'agy',
+    });
+  }
   catch (error) { store?.close(); release(); throw error; }
   try {
     const runnerEnabled = process.env.AGILEDEV_RUNNER_ENABLED !== '0';
     const verification = runnerEnabled ? await loadConsultVerifications(dataDir) : null;
+    const dispatchVerification = runnerEnabled ? await loadDispatchVerifications(dataDir) : null;
     const endpoint = await app.listen({ host: '127.0.0.1', port: Number(process.env.AGILEDEV_PORT ?? 43170) });
     const old = readDescriptor(dataDir);
     let ownerToken = old?.ownerToken;
@@ -71,8 +79,8 @@ export async function serve(dataDir: string) {
     ownerToken ??= store!.bootstrap().token;
     publishMetadata(descriptorFile, instance, { endpoint, ownerToken, pid: process.pid, instance });
     verifier = new GitVerifier(store!); verifier.start();
-    if (verification) {
-      const adapter = new NativeAdapter(undefined, verification);
+    if (verification && dispatchVerification) {
+      const adapter = new NativeAdapter(undefined, verification, { dispatchVerification });
       coordinator = new Coordinator(store!, {
         endpoint, directory: join(dataDir, 'runs'), bridgeScript: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), adapter,
         concurrency: Number(process.env.AGILEDEV_CONCURRENCY ?? 2), maxRunMs: Number(process.env.AGILEDEV_MAX_RUN_MS ?? 1800000),

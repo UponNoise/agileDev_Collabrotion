@@ -7,6 +7,7 @@ import type {
   GitAttempt,
   GitRepositoryEntry,
   GitSubmission,
+  Harness,
   Issue,
   InboxKind,
   Plan,
@@ -47,10 +48,11 @@ export interface WorkspaceData {
   profiles: CheckProfile[];
   designs: Pick<Design, 'id' | 'issueId' | 'status'>[];
   connections: { id: string; actorId: string; client: { name: string; version: string }; initializedAt: string }[];
+  dispatchHarnesses?: string[];
 }
 export interface WakeSettingsData {
   settings: { workspaceId: string; enabled: boolean; version: number };
-  modes: { harness: 'codex' | 'claude-code' | 'dsh'; fresh: 'AVAILABLE' | 'UNVERIFIED'; resume: 'UNVERIFIED'; queue: 'UNVERIFIED' }[];
+  modes: { harness: Harness; fresh: 'AVAILABLE' | 'UNVERIFIED'; resume: 'UNVERIFIED'; queue: 'UNVERIFIED' }[];
 }
 export interface IssueMessageView {
   id: string;
@@ -62,7 +64,7 @@ export interface IssueMessageView {
   body: string;
   replyTo: string | null;
   createdAt: string;
-  delivery?: { runId: string; harness: 'codex' | 'claude-code' | 'dsh'; mode: 'fresh'; state: string; reason?: string };
+  delivery?: { runId: string; harness: Harness; mode: 'fresh'; state: string; reason?: string };
 }
 export interface LastRejectionView {
   stage: 'PRE_QA' | 'QA' | 'FINAL' | 'USER';
@@ -184,7 +186,7 @@ export const errorText = (error: unknown) =>
     : 'The local service could not be reached. Your input has been kept.';
 export const dateText = (value?: string | number | null) => (value ? new Date(value).toLocaleString() : 'Not recorded');
 export const harnessName = (value?: string | null) =>
-  value === 'codex' ? 'Codex' : value === 'dsh' ? 'DSH' : value === 'claude-code' ? 'Claude Code' : '—';
+  value === 'codex' ? 'Codex' : value === 'dsh' ? 'DSH' : value === 'claude-code' ? 'Claude Code' : value === 'agy' ? 'Antigravity' : '—';
 export function stateLabel(issue: Issue, designs: WorkspaceData['designs'] = []) {
   if (
     issue.state === 'NOT_STARTED' &&

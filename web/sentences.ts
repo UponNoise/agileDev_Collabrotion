@@ -114,7 +114,8 @@ const blockerKeys: Record<string, string> = {
   UNSUPPORTED_PROVIDER: 'Only commits on GitHub are supported',
   VERIFICATION_INTERRUPTED: 'Verification was interrupted; check again',
   VERIFICATION_COORDINATOR_LOST: 'Verification was interrupted; check again',
-  ARTIFACT_POLICY: 'These files cannot be delivered'
+  ARTIFACT_POLICY: 'These files cannot be delivered',
+  HARNESS_NOT_VERIFIED: 'This tool has not passed its check on this computer yet; run its check in a terminal and restart the service'
 };
 
 const errorKeys: Record<string, string> = {
@@ -206,7 +207,8 @@ const errorKeys: Record<string, string> = {
   DECISION_RISKS_STALE: 'The problems changed; review them again',
   SCOPE_CONTEXT_STALE: 'The scope changed; review it again',
   DEFECT_OBSERVATION_REQUIRED: 'The delivery observation changed; review it again',
-  CLOSURE_BLOCKED: 'It cannot be completed yet; a closing check is not met'
+  CLOSURE_BLOCKED: 'It cannot be completed yet; a closing check is not met',
+  HARNESS_NOT_VERIFIED: 'This tool has not passed its check on this computer yet; run its check in a terminal and restart the service'
 };
 
 const historyKeys = {

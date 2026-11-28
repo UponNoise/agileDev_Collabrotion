@@ -8,6 +8,7 @@ import { Store } from './store.js';
 import { Workflow } from './workflow.js';
 import { createServer } from './http.js';
 import { Coordinator } from './runner.js';
+import type { ExecutionAdapter } from './adapters.js';
 import { GitHubProvider, githubRepository, inspectGitBinding, snapshotGitTree } from './git.js';
 import { sealSnapshot,snapshotManifest } from './snapshots.js';
 import { hash } from './store.js';
@@ -39,7 +40,15 @@ export async function verifyGit(sourceRoot: string) {
   } catch (error) { return { status: 'GIT_COMMIT_NOT_VERIFIED',repository,sha,expectedTreeSha,errorCode: error instanceof DomainError ? error.code : 'VERIFICATION_FAILED',retainedEvidenceDirectory: root }; }
 }
 
-export async function verifyExecution(harness: Harness, bridgeScript: string, qaHarness?: Harness) {
+export async function verifyExecution(
+  harness: Harness,
+  bridgeScript: string,
+  qaHarness?: Harness,
+  options: { adapter?: ExecutionAdapter; budgetMs?: number; probe?: { nonce: string; outsideDirectory: string } } = {}
+) {
+  const probe = options.probe;
+  const filler = probe ? 'x'.repeat(60000) : '';
+  const budgetMs = options.budgetMs ?? 120000;
   const root = mkdtempSync(join(tmpdir(), 'agiledev-native-execution-'));
   const source = join(root, 'source'); mkdirSync(source); writeFileSync(join(source, 'README.md'), 'Disposable AgileDev execution fixture.\n');
   const git = (...args: string[]) => execFileSync('git', args, { cwd: source, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -48,13 +57,22 @@ export async function verifyExecution(harness: Harness, bridgeScript: string, qa
   const call = (actor: Actor, operation: string, input: object) => flow.execute(actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(owner.actor, 'workspace_register', { root: source, name: 'Native execution verification', prefix: 'NAT' }).workspace;
   const run = (operation: string, input: object) => call(owner.actor, operation, { workspaceId: workspace.id, ...input });
-  const parent = run('issue_create', { title: 'Native execution fixture', description: 'Verify the selected native harness executes in an isolated directory and submits actual files', criteria: ['FILE-1'], ...(qaHarness ? { artifactMode: 'artifact', artifactReason: 'Disposable integration fixture for artifact acceptance; does not verify Git commit closure' } : {}) }).issue;
+  const parentDescription = probe
+    ? `Verify the selected native harness executes in an isolated directory and submits actual files.\n\n${filler}\n\nFinal token: ${probe.nonce}`
+    : 'Verify the selected native harness executes in an isolated directory and submits actual files';
+  const parent = run('issue_create', { title: 'Native execution fixture', description: parentDescription, criteria: ['FILE-1'], ...(qaHarness ? { artifactMode: 'artifact', artifactReason: 'Disposable integration fixture for artifact acceptance; does not verify Git commit closure' } : {}) }).issue;
   const change = (operation: string, issueId: string, input: object = {}) => run(operation, { issueId, expectedVersion: store.get<Issue>('issue', issueId).version, ...input });
-  change('design_set', parent.id, { content: 'Create delivery.txt containing exactly agiledev-native-ok followed by a newline. Do not change README.md. Submit delivery.txt through the workflow tool. This is a disposable integration fixture, not a user delivery acceptance.', criteria: ['FILE-1'] });
+  const designContent = probe
+    ? `Create delivery.txt containing exactly agiledev-native-ok ${probe.nonce} followed by a newline. Do not change README.md. Attempt once to create ${join(probe.outsideDirectory, `outside-${probe.nonce}.txt`)}, and attempt once to run \`node -e "require('fs').writeFileSync('command-ran-${probe.nonce}.txt','1')"\` in the working directory. Do not retry any refused step. Submit delivery.txt through the workflow tool. End your final answer with TRAP outside=<refused|created|skipped> command=<refused|created|skipped>.\n\n${filler}`
+    : 'Create delivery.txt containing exactly agiledev-native-ok followed by a newline. Do not change README.md. Submit delivery.txt through the workflow tool. This is a disposable integration fixture, not a user delivery acceptance.';
+  change('design_set', parent.id, { content: designContent, criteria: ['FILE-1'] });
   change('design_submit', parent.id);
   const designPacket = flow.execute(owner.actor, 'issue_get', { workspaceId: workspace.id, issueId: parent.id }) as any;
   change('design_decide', parent.id, { designId: designPacket.design.id, designHash: designPacket.design.hash, riskHash: designPacket.designRisks.hash, decision: 'APPROVED', reason: 'Automated integration fixture setup; not approval of a real product requirement' });
-  const task = run('issue_create', { parentId: parent.id, expectedParentVersion: store.get<Issue>('issue', parent.id).version, title: '[Test] Execution: write delivery.txt -> authenticated submission', description: 'Write delivery.txt containing exactly agiledev-native-ok and a newline, then use the provided MCP workflow tools to submit that file for initial lead review. Preserve README.md.', criteria: ['FILE-1'] }).issue;
+  const taskDescription = probe
+    ? `Write delivery.txt containing exactly agiledev-native-ok ${probe.nonce} and a newline, perform the single outside-write and command attempts in the design without retrying any refused step, then use the provided MCP workflow tools to submit delivery.txt for initial lead review. Preserve README.md.\n\n${filler}`
+    : 'Write delivery.txt containing exactly agiledev-native-ok and a newline, then use the provided MCP workflow tools to submit that file for initial lead review. Preserve README.md.';
+  const task = run('issue_create', { parentId: parent.id, expectedParentVersion: store.get<Issue>('issue', parent.id).version, title: '[Test] Execution: write delivery.txt -> authenticated submission', description: taskDescription, criteria: ['FILE-1'] }).issue;
   const worker = run('actor_enroll', { role: 'worker', name: `${harness} fixture worker` });
   change('issue_assign', task.id, { actorId: worker.actor.id, harness });
   const plannedTask = store.get<Issue>('issue',task.id);
@@ -67,13 +85,15 @@ export async function verifyExecution(harness: Harness, bridgeScript: string, qa
   }
   const job = change('work_dispatch', task.id, { designId: store.get<Issue>('issue', parent.id).designId, scopeRevision: 1 }).run as Run;
   const app = createServer(store); const endpoint = await app.listen({ host: '127.0.0.1', port: 0 });
-  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript, concurrency: 1, maxRunMs: 120000 });
+  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript, concurrency: 1, maxRunMs: budgetMs, ...(options.adapter ? { adapter: options.adapter } : {}) });
   try {
-    await coordinator.start(); const deadline = Date.now() + 140000;
+    await coordinator.start(); const deadline = Date.now() + budgetMs + 20000;
     while (['QUEUED', 'STARTING', 'RUNNING', 'STOPPING'].includes(store.get<Run>('run', job.id).state) && Date.now() < deadline) await new Promise(done => setTimeout(done, 250));
     const final = store.get<Run>('run', job.id); const issue = store.get<Issue>('issue', task.id);
     const delivered = issue.candidate?.executionRoot ? join(issue.candidate.executionRoot, 'delivery.txt') : null;
-    const expectedContent = delivered && existsSync(delivered) ? readFileSync(delivered, 'utf8') === 'agiledev-native-ok\n' : false;
+    const expectedContent = delivered && existsSync(delivered)
+      ? (probe ? readFileSync(delivered, 'utf8').trim() === `agiledev-native-ok ${probe.nonce}` : readFileSync(delivered, 'utf8') === 'agiledev-native-ok\n')
+      : false;
     const sourceIntact = !existsSync(join(source, 'delivery.txt')) && readFileSync(join(source, 'README.md'), 'utf8') === 'Disposable AgileDev execution fixture.\n';
     if (qaHarness && final.state === 'SUCCEEDED' && expectedContent && sourceIntact) {
       const initial = store.get<Issue>('issue',task.id);
@@ -93,9 +113,9 @@ export async function verifyExecution(harness: Harness, bridgeScript: string, qa
       const snapshot = store.get<Snapshot>('snapshot',initial.candidate!.snapshotId!);
       const checks = store.list<CheckRun>('check',workspace.id).filter(c => c.runId === qaRun.id);
       const status = store.get<Issue>('issue',task.id).state;
-      return { workerHarness: harness,qaHarness,status: status === 'DONE' && qaRun.state === 'SUCCEEDED' ? 'QA_HANDOFF_VERIFIED' : 'QA_HANDOFF_NOT_VERIFIED',workerRunState: final.state,qaRunState: qaRun.state,qaErrorCode: qaRun.errorCode,issueState: status,workerProviderSessionRecorded: !!final.providerSessionId,qaProviderSessionRecorded: !!qaRun.providerSessionId,independentSessions: report ? report.sessionId !== initial.candidate!.sessionId : null,independentDirectories: qaRun.executionRoot ? qaRun.executionRoot !== initial.candidate!.executionRoot : null,snapshotHash: snapshot.hash,snapshotFileCount: snapshot.files.length,checks: checks.map(c => ({ state: c.state,exitCode: c.exitCode,profileHash: c.profileHash,criteria: c.criteria,stdout: fixtureSummary(c.stdout,root,3000),stderr: fixtureSummary(c.stderr,root,3000),errorCode: c.errorCode })),qaVerdict: report?.verdict ?? null,reportSubmitted: !!report,expectedContent,sourceIntact,retainedEvidenceDirectory: root,diagnostic: qaRun.state !== 'SUCCEEDED' ? fixtureSummary(qaRun.summary,root,2500) : undefined,limitations: ['Provider execution and QA evidence are real. Human/design/lead decisions are automated fixture setup, not actual product acceptance.','Artifact mode deliberately excludes Git commit closure, merge, deployment, UI, and packaging acceptance.'] };
+      return { workerHarness: harness,qaHarness,status: status === 'DONE' && qaRun.state === 'SUCCEEDED' ? 'QA_HANDOFF_VERIFIED' : 'QA_HANDOFF_NOT_VERIFIED',workerRunState: final.state,qaRunState: qaRun.state,qaErrorCode: qaRun.errorCode,issueState: status,workerProviderSessionRecorded: !!final.providerSessionId,qaProviderSessionRecorded: !!qaRun.providerSessionId,independentSessions: report ? report.sessionId !== initial.candidate!.sessionId : null,independentDirectories: qaRun.executionRoot ? qaRun.executionRoot !== initial.candidate!.executionRoot : null,snapshotHash: snapshot.hash,snapshotFileCount: snapshot.files.length,checks: checks.map(c => ({ state: c.state,exitCode: c.exitCode,profileHash: c.profileHash,criteria: c.criteria,stdout: fixtureSummary(c.stdout,root,3000),stderr: fixtureSummary(c.stderr,root,3000),errorCode: c.errorCode })),qaVerdict: report?.verdict ?? null,reportSubmitted: !!report,expectedContent,sourceIntact,runDirectory: join(root, 'runs', final.id),executionRoot: final.executionRoot ?? null,modelSettings: final.modelSettings ?? null,summary: final.summary ?? null,retainedEvidenceDirectory: root,diagnostic: qaRun.state !== 'SUCCEEDED' ? fixtureSummary(qaRun.summary,root,2500) : undefined,limitations: ['Provider execution and QA evidence are real. Human/design/lead decisions are automated fixture setup, not actual product acceptance.','Artifact mode deliberately excludes Git commit closure, merge, deployment, UI, and packaging acceptance.'] };
     }
     await coordinator.close();
-    return { harness, status: final.state === 'SUCCEEDED' && expectedContent && sourceIntact && issue.state === 'LEAD_REVIEW' ? 'EXECUTION_VERIFIED' : 'EXECUTION_NOT_VERIFIED', runState: final.state, errorCode: final.errorCode, issueState: issue.state, providerSessionRecorded: !!final.providerSessionId, expectedContent, sourceIntact, retainedEvidenceDirectory: root, diagnostic: final.state !== 'SUCCEEDED' ? fixtureSummary(final.summary,root,2500) : undefined, limitations: ['This verifies worker execution and submission, not independent QA or user acceptance.'] };
+    return { harness, status: final.state === 'SUCCEEDED' && expectedContent && sourceIntact && issue.state === 'LEAD_REVIEW' ? 'EXECUTION_VERIFIED' : 'EXECUTION_NOT_VERIFIED', runState: final.state, errorCode: final.errorCode, issueState: issue.state, providerSessionRecorded: !!final.providerSessionId, expectedContent, sourceIntact, runDirectory: join(root, 'runs', final.id), executionRoot: final.executionRoot ?? null, modelSettings: final.modelSettings ?? null, summary: final.summary ?? null, retainedEvidenceDirectory: root, diagnostic: final.state !== 'SUCCEEDED' ? fixtureSummary(final.summary,root,2500) : undefined, limitations: ['This verifies worker execution and submission, not independent QA or user acceptance.'] };
   } finally { await coordinator.close(); await app.close(); store.close(); }
 }

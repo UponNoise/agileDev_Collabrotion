@@ -1,6 +1,6 @@
 # Agent guide
 
-For an agent of any harness (Codex, Claude Code, DSH) that joins a running AgileDev instance for the first time, as lead, PM, worker or QA, or only to audit. Read it before your first call. `<release>` is the AgileDev install directory that contains `dist/cli.js`. When this guide and the service disagree, the service is right: read the `remedy` of the refusal.
+For an agent of any harness (Codex, Claude Code, DSH, Antigravity) that joins a running AgileDev instance for the first time, as lead, PM, worker or QA, or only to audit. Read it before your first call. `<release>` is the AgileDev install directory that contains `dist/cli.js`. When this guide and the service disagree, the service is right: read the `remedy` of the refusal.
 
 ## 1. What AgileDev is for an agent
 
@@ -87,7 +87,7 @@ The token the owner enrolls for a worker or QA is a logical identity. It can rea
 **PM** (a logical token)
 1. `issue_get`, `gap_list`, and `plan_get` on the requirement.
 2. `plan_apply {designId, mode, expectedPlanId, tasks, integrationCriteria, overlapReasons, reason}` when offered. `mode` is `DRAFT` or `READY`. `expectedPlanId` is null or the id from `plan_get`. Each task has `ref`, a `title` shaped `[Feature] Area: action -> outcome` (types Feature, Fix, Refactor, Test, Docs, Research), `description`, `criteria`, `dependencies`. List every existing child with its `issueId` and `expectedVersion`. `READY` needs an approved design and every criterion mapped to a task or to `integrationCriteria`.
-3. `issue_assign {actorId, harness}` when offered, with `harness` `codex`, `claude-code` or `dsh`. No operation lists agents. Ask the owner for the worker's and QA's `actorId`.
+3. `issue_assign {actorId, harness}` when offered, with `harness` `codex`, `claude-code`, `dsh` or `agy`. No operation lists agents. Ask the owner for the worker's and QA's `actorId`.
 4. `qa_configure {actorId, harness, checkProfileIds}` when offered. Take profile ids from `check_profile_list`; only the owner creates profiles.
 5. `work_dispatch {designId, scopeRevision}` when offered. It starts a real harness run once the service's runner takes it. `run.state` `QUEUED` means queued, not running. Follow with `run_list` and `issue_get`. `run_interrupt {runId, expectedVersion, reason}` asks a run to stop. Rework uses the same operation. After a rejection, `work_dispatch` takes an optional `start` (`"candidate"`, the default, or `"workspace"`); the run's `base` (see `run_get`) says whether it continues from the rejected delivery (`kind: "candidate"` with candidate, snapshot and base commit) or from the workspace (`kind: "workspace"` with a reason). A rework worker finds the previous delivery already in its execution root and lists every delivered file again in `work_submit`. `REWORK_BASE_UNAVAILABLE` means the previous delivery could not be restored: dispatch again with `start: "workspace"`.
 6. Git delivery, after the final review: `git_submit {candidateId, commitUrl}` with the real pushed commit, `https://github.com/<owner>/<repo>/commit/<full sha>`. If verification fails or is unavailable: `git_retry {submissionId}`. A different commit voids earlier human acceptance.
@@ -202,6 +202,7 @@ work_dispatch {..., "designId":"<designId>", "scopeRevision":1}   (no approved d
 ## 11. Troubleshooting
 
 - A run failing with `DSH_DIRECTORY_RIGHTS_REQUIRED` needs an owner to address the directory permissions, and agents must neither retry the run nor change rights.
+- `HARNESS_NOT_VERIFIED` is for the owner: ask the owner to run `node dist/cli.js verify-agy --record` and restart the service, or choose another harness.
 
 - Service not running: `SERVICE_OWNER_START_REQUIRED` or `SERVICE_UNAVAILABLE`. Agents never start the persistent service. Ask the owner to open the app or run `service-start` with the same data directory.
 - No tools in the harness: the bridge exits at start when the token is missing or invalid or the service is down. Run the `mcp` command by hand with the same environment and read stderr. Compare the harness entry with `connection` output, and ask the owner to correct it and restart the session. The tool list differs by role; human-only operations never appear.

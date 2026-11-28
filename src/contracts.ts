@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 export const roles = ['human', 'lead', 'pm', 'worker', 'qa'] as const;
 export type Role = typeof roles[number];
-export const harnesses = ['codex', 'claude-code', 'dsh'] as const;
+export const harnesses = ['codex', 'claude-code', 'dsh', 'agy'] as const;
 export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];

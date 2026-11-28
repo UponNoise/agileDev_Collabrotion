@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LocalClient } from './client.js';
@@ -10,8 +10,24 @@ import { serve } from './daemon.js';
 import { dataDirectory, ensureService, requireService, ServiceError, stopService } from './service-launcher.js';
 import { verifyExecution,verifyGit } from './verify-execution.js';
 import { verifyConsult, verifyConsultExchange } from './verify-consult.js';
+import { agyAdapterFromRecords, verifyAgy } from './verify-agy.js';
 import { consultLauncherIdentity, readConsultVerification } from './consult-verification.js';
 import { DomainError, harnesses, Harness } from './contracts.js';
+
+export async function runVerifyQa(
+  worker: Harness,
+  qa: Harness,
+  dataDir: string,
+  script: string,
+  execute = verifyExecution,
+) {
+  if (worker === 'agy' || qa === 'agy') {
+    const adapter = await agyAdapterFromRecords(dataDir);
+    if (!adapter.supportsDispatch('agy')) throw new Error('Run verify-agy --record first');
+    return execute(worker, script, qa, { adapter });
+  }
+  return execute(worker, script, qa);
+}
 
 const dataDir = dataDirectory();
 const service = () => ensureService({ dataDir, node: process.execPath, script: resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js') });
@@ -32,7 +48,22 @@ async function main() {
     console.log(JSON.stringify({ url: config.endpoint,code: pairing.code,expiresAt: new Date(pairing.expiresAt).toISOString(),instruction: 'Open the local URL and enter this one-use code. Keep it private; do not add it to the URL.' },null,2)); return;
   }
   if (command === 'verify-git') { console.log(JSON.stringify(await verifyGit(args[0] ?? process.cwd()),null,2)); return; }
+  if (command === 'verify-agy') {
+    if (args.length > 1 || (args.length === 1 && args[0] !== '--record')) {
+      throw new Error('Usage: verify-agy [--record]; starts up to three real Antigravity runs in disposable directories.');
+    }
+    if (process.env.AGILEDEV_TOKEN || process.env.AGILEDEV_ENDPOINT) {
+      throw new Error('Run Antigravity verification locally outside an agent connection.');
+    }
+    const result = await verifyAgy(resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'), {
+      recordDirectory: args[0] === '--record' ? dataDir : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status !== 'AGY_VERIFIED') process.exitCode = 1;
+    return;
+  }
   if (command === 'verify-consult') {
+    if (args[0] === 'agy') throw new Error('Use verify-agy for Antigravity');
     if (!(harnesses as readonly string[]).includes(args[0] ?? '') || args.length > 2 || (args.length === 2 && args[1] !== '--record')) {
       throw new Error('Usage: verify-consult <codex|claude-code|dsh> [--record]; starts one real model run in a disposable workspace.');
     }
@@ -49,6 +80,7 @@ async function main() {
   }
   if (command === 'verify-consult-exchange') {
     const [source, target] = args;
+    if (source === 'agy' || target === 'agy') throw new Error('Use verify-agy for Antigravity');
     if (args.length !== 2 || !harnesses.includes(source as Harness) || !harnesses.includes(target as Harness) || source === target) {
       throw new Error('Usage: verify-consult-exchange <source harness> <different target harness>; starts up to two real model runs in a disposable workspace.');
     }
@@ -60,10 +92,17 @@ async function main() {
     if (result.status !== 'NATIVE_EXCHANGE_VERIFIED') process.exitCode = 1;
     return;
   }
-  if (command === 'verify-execution' || command === 'verify-qa') {
-    if (!(harnesses as readonly string[]).includes(args[0] ?? '')) throw new Error('Choose codex, claude-code, or dsh for the real execution verification.');
-    if (command === 'verify-qa' && !(harnesses as readonly string[]).includes(args[1] ?? '')) throw new Error('Usage: verify-qa <worker harness> <QA harness>; this starts two real model runs.');
-    console.log(JSON.stringify(await verifyExecution(args[0] as Harness, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js'),command === 'verify-qa' ? args[1] as Harness : undefined), null, 2));
+  if (command === 'verify-execution') {
+    if (args[0] === 'agy') throw new Error('Use verify-agy for Antigravity');
+    if (!['codex', 'claude-code', 'dsh'].includes(args[0] ?? '')) throw new Error('Choose codex, claude-code, or dsh for the real execution verification.');
+    console.log(JSON.stringify(await verifyExecution(args[0] as Harness, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js')), null, 2));
+    return;
+  }
+  if (command === 'verify-qa') {
+    if (!(harnesses as readonly string[]).includes(args[0] ?? '') || !(harnesses as readonly string[]).includes(args[1] ?? '')) {
+      throw new Error('Usage: verify-qa <worker harness> <QA harness>; this starts two real model runs.');
+    }
+    console.log(JSON.stringify(await runVerifyQa(args[0] as Harness, args[1] as Harness, dataDir, resolve(dirname(fileURLToPath(import.meta.url)), '../dist/cli.js')), null, 2));
     return;
   }
   if (command === 'probe-hosts') { console.log(JSON.stringify(await probeHosts(), null, 2)); return; }
@@ -128,6 +167,8 @@ async function main() {
     } else throw new Error('Connection format must be codex, claude-code, or dsh.');
     return;
   }
-  console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-consult <harness> [--record] | verify-consult-exchange <source harness> <target harness> | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
+  console.log('agiledev: serve | service-start | stop | ui | doctor | probe-hosts | verify-agy [--record] | verify-consult <harness> [--record] | verify-consult-exchange <source harness> <target harness> | verify-execution <harness> | verify-qa <worker harness> <QA harness> | verify-git [repository root] | command <operation> [JSON file|-] | mcp | connection [codex|claude-code|dsh]');
 }
-main().catch(error => { console.error(error instanceof ServiceError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url)) {
+  main().catch(error => { console.error(error instanceof ServiceError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : 'Command failed'); process.exitCode = 1; });
+}
