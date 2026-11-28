@@ -872,6 +872,8 @@ export const sentencePairs: [string, string][] = [
   ['No reply was sent', '没有用消息回答'],
   ['The workspace has uncommitted changes; not started', '工作区有未提交的改动，没有启动'],
   ['The isolated directory could not be prepared', '隔离目录准备失败'],
+  ['Start over from the workspace instead of the returned delivery', '不沿用被退回的交付，从工作区重新开始'],
+  ['The previous delivery could not be restored; dispatch again from the workspace', '上一版交付没能恢复，请从工作区重新派发'],
   ['Not woken: turned off in Settings', '没有唤起：设置里没有打开'],
   ['Not woken: the agent is not available', '没有唤起：对方暂时不可用'],
   ["Not woken: today's limit is used up", '没有唤起：今天的次数用完了'],
