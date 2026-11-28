@@ -15,7 +15,7 @@ The owner approved the [B27/B28 design](proposals/r2-human-surface-design.md) in
 | ADC-0008 | Done: merged (PR #34) and accepted | Codex worker; DSH QA 13/13 including real operating-system checks; commit `2d51452` |
 | ADC-0009 | Design approved 2026-11-28; not started | Follows ADC-0011 (shared service files) |
 | ADC-0010 | Merged (PR #35); owner acceptance pending | Antigravity (Gemini 4 Hydrogen), resubmitted unchanged by the Claude worker; DSH QA AC54 4/4 and AC55 5/5; commit `f14a4b2` |
-| ADC-0011 | In progress (Codex worker) | Design approved 2026-11-28 |
+| ADC-0011 | Implemented on `agy/adc-0011-agy-harness` (Antigravity, Gemini 4 Hydrogen); owner live `verify-agy --record` and `verify-qa` pending | Adapter, private-home MCP isolation with fail-closed `.agents/mcp_config.json` guard, `HARNESS_NOT_VERIFIED` gate, `doctor` diagnostics, `verify-agy`, `verify-qa` gate, web options, and fake-`agy` tests implemented; nothing verified live against real `agy` or live `agy` QA until owner runs `verify-agy --record` and `verify-qa` |
 
 What the first real dispatches showed, each filed in the hub without a design:
 
@@ -26,6 +26,7 @@ What the first real dispatches showed, each filed in the hub without a design:
 - ADC-0008 adds a read-only Windows permission check before DSH worker and QA launches and the `RUN_DIRECTORY_RIGHTS` and `PIPED_CHILD_PROCESSES` entries in `doctor`. The owner's Full control grant on the run directory unblocked type checks and in-process tests on 2026-11-22. DSH's Windows sandbox still refuses commands that start piped child processes.
 - Agents have no way to ask to join, and a local process can act with the owner credential; agents need a join request that the owner approves, and human decisions need a visible source (ADC-0009). Design approval came from the paired desktop identity.
 - Agent usability fixes and documentation alignment (ADC-0010): item 1 (CLI refusal JSON/remedy output) done via PR #30 and documentation alignment via PR #29; item 2 (listing agents) moved to ADC-0009; items 3 to 7 implemented in service, CLI and docs (`EXECUTION_BINDING_REQUIRED` before version/lease checks on `work_heartbeat`/`work_submit`, `CLOSURE_BLOCKED` refusal with rollback on `delivery_complete`, version-preserving lease renewals, leading UTF-8 BOM stripping in `command` input, and `nextActions` offers for `issue_assign`, `plan_apply` and `qa_configure` when due), while the web edits for `CLOSURE_BLOCKED` (T3) wait for prerequisite merges.
+- Antigravity (`agy`) managed harness (ADC-0011): adapter, discovery, private `agy-home` MCP isolation (plus fail-closed `<cwd>/.agents/mcp_config.json` check), `HARNESS_NOT_VERIFIED` gate across `Workflow`/`NativeAdapter`/`daemon`/web, `doctor` diagnostics, `verify-agy`, `verify-qa` gate, and fake-`agy` test suites are implemented. Nothing is verified live against real `agy`, and QA with `agy` (`verify-qa`) has not been verified live, until the owner runs `node dist/cli.js verify-agy --record`, restarts the service, and runs `verify-qa`.
 
 ## Concurrent ownership, 2026-11-14
 

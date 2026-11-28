@@ -201,22 +201,22 @@ For Antigravity managed MCP isolation, see ADC-0011.
 
 The matrix below records the original plugin-first proposal. The user's 2026-11-09 accepted delivery amendment replaces mandatory native plugin packages and embedded harness views with a primary desktop application plus verified MCP access from all three harnesses and browser fallback. Native plugins/views are optional shortcuts. Other required capability rows remain mandatory and require current evidence.
 
-| Capability | Codex local | Claude Code | DSH |
-| --- | --- | --- | --- |
-| MCP common tools and text fallback | Required | Required | Required |
-| Validated active workspace binding | Required; explicit selection fallback | Required; explicit selection fallback | Required; explicit selection fallback |
-| Same workspace visible from another entry | Required | Required | Required |
-| Scoped worker/QA identity | Required | Required | Required |
-| Owner's other MCP servers excluded from managed runs | `--ignore-user-config`, with `windows.sandbox="elevated"` on Windows | `--strict-mcp-config` | Disable top-level client rows identified by `--dump-config` |
-| Native plugin package and installation | Required | Required | Required |
-| Browser dashboard and approval link | Required | Required | Required |
-| Embedded overview/review view | P1 surface probe; P5 result required | P1 surface probe; browser baseline | P1 surface probe; P5 result required |
-| Native or managed dispatch/start/observe/interrupt | Required | Required | Required |
-| Owner-installed dependencies in managed worker and QA roots | Optional local node_modules link | Optional local node_modules link | Optional local node_modules link |
-| Managed model settings | Newest cached Sol with high effort; optional owner overrides; inherit when no Sol is available | Harness default or optional owner model; report session model when available | DeepSeek Flash/max by default; selected Gemini Hydrogen/high with Google overlay; optional owner overrides in SDK and headless |
-| Reconcile after unknown execution | Required or explicit operator recovery | Required or explicit operator recovery | Required or explicit operator recovery |
-| Resume same provider session | Optional, capability-reported | Optional, capability-reported | Provider-specific, capability-reported |
-| Reconnect to an owner-started daemon across Windows launch contexts | Shared data directory or explicit endpoint | Shared data directory or explicit endpoint; verify packaged launch contexts separately | Shared data directory or explicit endpoint |
+| Capability | Codex local | Claude Code | DSH | Antigravity (`agy`) |
+| --- | --- | --- | --- | --- |
+| MCP common tools and text fallback | Required | Required | Required | unconfirmed until verify-agy |
+| Validated active workspace binding | Required; explicit selection fallback | Required; explicit selection fallback | Required; explicit selection fallback | unconfirmed until verify-agy |
+| Same workspace visible from another entry | Required | Required | Required | unconfirmed until verify-agy |
+| Scoped worker/QA identity | Required | Required | Required | unconfirmed until verify-agy |
+| Owner's other MCP servers excluded from managed runs | `--ignore-user-config`, with `windows.sandbox="elevated"` on Windows | `--strict-mcp-config` | Disable top-level client rows identified by `--dump-config` | Private `agy-home` (`USERPROFILE`/`HOME`) + fail-closed `<cwd>/.agents/mcp_config.json` check; loaded servers unconfirmed until verify-agy |
+| Native plugin package and installation | Required | Required | Required | Out of scope (ADC-0011) |
+| Browser dashboard and approval link | Required | Required | Required | Required |
+| Embedded overview/review view | P1 surface probe; P5 result required | P1 surface probe; browser baseline | P1 surface probe; P5 result required | Out of scope (ADC-0011) |
+| Native or managed dispatch/start/observe/interrupt | Required | Required | Required | Gated by `HARNESS_NOT_VERIFIED`; unconfirmed until verify-agy |
+| Owner-installed dependencies in managed worker and QA roots | Optional local node_modules link | Optional local node_modules link | Optional local node_modules link | Optional local node_modules link |
+| Managed model settings | Newest cached Sol with high effort; optional owner overrides; inherit when no Sol is available | Harness default or optional owner model; report session model when available | DeepSeek Flash/max by default; selected Gemini Hydrogen/high with Google overlay; optional owner overrides in SDK and headless | `gemini-4-hydrogen-high` (worker), `gemini-4-neon-high` (QA/consult); `AGILEDEV_AGY_{WORKER,QA,CONSULT}_MODEL` overrides; effort from slug suffix |
+| Reconcile after unknown execution | Required or explicit operator recovery | Required or explicit operator recovery | Required or explicit operator recovery | Required or explicit operator recovery |
+| Resume same provider session | Optional, capability-reported | Optional, capability-reported | Provider-specific, capability-reported | Out of scope (ADC-0011) |
+| Reconnect to an owner-started daemon across Windows launch contexts | Shared data directory or explicit endpoint | Shared data directory or explicit endpoint; verify packaged launch contexts separately | Shared data directory or explicit endpoint | unconfirmed until verify-agy |
 
 The user requirement for a plugin with a visual interface is met by a native entry opening the shared web experience plus verified embedded views where the host supports them. D10 must be accepted if browser fallback is necessary on a target the user expects to be fully embedded.
 
