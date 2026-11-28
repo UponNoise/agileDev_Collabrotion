@@ -14,7 +14,7 @@ What the first real dispatches showed, each filed in the hub without a design:
 
 - Managed DSH and Codex runs load the owner's other MCP servers (ADC-0006).
 - A rework starts from the workspace commit and lacks the rejected files; a temporary commit of the sealed candidate served as the base (ADC-0007).
-- DSH could not execute commands in a run directory where the user holds only Modify: its sandbox needs `WRITE_OWNER`. The owner granted full control on the run directory, after which type checks and in-process tests run; commands that start piped child processes are still refused by its sandbox (ADC-0008).
+- ADC-0008 adds a read-only Windows permission check before DSH worker and QA launches and the `RUN_DIRECTORY_RIGHTS` and `PIPED_CHILD_PROCESSES` entries in `doctor`. The owner's Full control grant on the run directory unblocked type checks and in-process tests on 2026-11-22. DSH's Windows sandbox still refuses commands that start piped child processes.
 - Agents have no way to ask to join, and a local process can act with the owner credential; agents need a join request that the owner approves, and human decisions need a visible source (ADC-0009). Design approval came from the paired desktop identity.
 - Seven usability gaps for agents and five places where the documents disagree with the source (ADC-0010).
 

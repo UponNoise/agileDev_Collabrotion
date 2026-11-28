@@ -197,6 +197,8 @@ work_dispatch {..., "designId":"<designId>", "scopeRevision":1}   (no approved d
 
 ## 11. Troubleshooting
 
+- A run failing with `DSH_DIRECTORY_RIGHTS_REQUIRED` needs an owner to address the directory permissions, and agents must neither retry the run nor change rights.
+
 - Service not running: `SERVICE_OWNER_START_REQUIRED` or `SERVICE_UNAVAILABLE`. Agents never start the persistent service. Ask the owner to open the app or run `service-start` with the same data directory.
 - No tools in the harness: the bridge exits at start when the token is missing or invalid or the service is down. Run the `mcp` command by hand with the same environment and read stderr. Compare the harness entry with `connection` output, and ask the owner to correct it and restart the session. The tool list differs by role; human-only operations never appear.
 - A checkout that starts from an old commit: fetch, and base your work on `origin/main`. A managed run starts from the workspace's committed HEAD when the coordinator prepares it (`baseSha` in `run_get`). If that is behind `origin/main` and the task needs newer code, tell the PM before you build on it.
