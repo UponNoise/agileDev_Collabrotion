@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { Actor, DomainError, Issue, Run, agentOperations } from '../src/contracts.js';
 import { Store, canonical, hash } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
+import { sealSnapshot } from '../src/snapshots.js';
 import { applyFixturePlan, bindFixtureImplementation, executeFixture } from './fixtures.js';
 
 const cleanup: (() => void)[] = [];
@@ -391,6 +392,206 @@ test('a logical worker is told it needs a managed run before any version, lease 
   assert.throws(() => f.run(execActor, 'work_heartbeat', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence + 1 }), rejects('STALE_FENCE'));
   assert.throws(() => f.run(execActor, 'work_submit', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence + 1, summary: 'Wrong fence', files: ['a.txt'] }), rejects('STALE_FENCE'));
   f.advance();
-  assert.throws(() => f.run(execActor, 'work_heartbeat', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence }), rejects('LEASE_EXPIRED'));
-  assert.throws(() => f.run(execActor, 'work_submit', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence, summary: 'Expired lease', files: ['a.txt'] }), rejects('LEASE_EXPIRED'));
+  assert.throws(() => f.run(execActor, 'work_heartbeat', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence }), (error: unknown) => error instanceof DomainError && error.code === 'LEASE_EXPIRED');
+  assert.throws(() => f.run(execActor, 'work_submit', { issueId: task.id, expectedVersion: claimed.version, fence: claimed.fence, summary: 'Expired lease', files: ['a.txt'] }), (error: unknown) => error instanceof DomainError && error.code === 'LEASE_EXPIRED');
+});
+
+test('nextActions offers assignment, planning and QA configuration exactly when they are due and the service accepts them', () => {
+  const f = setup();
+  const hasAction = (brief: any, op: string) => brief.nextActions.some((a: any) => a.operation === op);
+  const findAction = (brief: any, op: string) => brief.nextActions.find((a: any) => a.operation === op);
+
+  // 1) Task without design / design IN_REVIEW -> issue_assign not offered, waitingOn is lead / human, explicit call accepted
+  const preDesignTask = f.run(f.pm.actor, 'issue_create', {
+    parentId: f.parent.id, expectedParentVersion: f.current(f.parent.id).version,
+    title: '[Feature] Assign: before design -> explicit call works', description: 'Task before design', criteria: ['AC-1']
+  }).issue as Issue;
+  for (const actor of [f.pm.actor, f.lead.actor, f.human.actor]) {
+    assert.equal(hasAction(f.run(actor, 'issue_get', { issueId: f.parent.id }), 'issue_assign'), false);
+    assert.equal(hasAction(f.run(actor, 'issue_get', { issueId: preDesignTask.id }), 'issue_assign'), false);
+    assert.equal(hasAction(f.run(actor, 'issue_get', { issueId: f.parent.id }), 'plan_apply'), false);
+    assert.equal(hasAction(f.run(actor, 'issue_get', { issueId: preDesignTask.id }), 'plan_apply'), false);
+  }
+  assert.equal(f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id }).waitingOn.role, 'lead');
+  assert.equal(f.run(f.pm.actor, 'issue_get', { issueId: preDesignTask.id }).waitingOn.role, 'lead');
+
+  f.change(f.lead.actor, 'design_set', f.parent.id, { content: 'Design in review', criteria: ['AC-1'] });
+  f.change(f.lead.actor, 'design_submit', f.parent.id);
+  for (const actor of [f.pm.actor, f.lead.actor, f.human.actor]) {
+    assert.equal(hasAction(f.run(actor, 'issue_get', { issueId: f.parent.id }), 'issue_assign'), false);
+    assert.equal(hasAction(f.run(actor, 'issue_get', { issueId: preDesignTask.id }), 'issue_assign'), false);
+    assert.equal(hasAction(f.run(actor, 'issue_get', { issueId: f.parent.id }), 'plan_apply'), false);
+  }
+  assert.equal(f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id }).waitingOn.role, 'human');
+  assert.equal(f.run(f.pm.actor, 'issue_get', { issueId: preDesignTask.id }).waitingOn.role, 'human');
+  f.change(f.pm.actor, 'issue_assign', preDesignTask.id, { actorId: f.worker.actor.id, harness: 'codex' });
+  assert.equal(f.current(preDesignTask.id).assignee, f.worker.actor.id);
+
+  // Approve design (before ready plan): requirement has children, approved design, no plan -> plan_apply offered; no task gets plan_apply
+  f.change(f.human.actor, 'design_decide', f.parent.id, { designId: f.current(f.parent.id).designId, decision: 'APPROVED', reason: 'Approve for plan and assign tests' });
+  const unassignedTask = f.run(f.pm.actor, 'issue_create', {
+    parentId: f.parent.id, expectedParentVersion: f.current(f.parent.id).version,
+    title: '[Feature] Assign: unassigned task -> offered when due', description: 'Unassigned task', criteria: ['AC-1']
+  }).issue as Issue;
+  const planOffer = findAction(f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id }), 'plan_apply');
+  assert.deepEqual(planOffer, {
+    operation: 'plan_apply',
+    args: { workspaceId: f.parent.workspaceId, issueId: f.parent.id, expectedVersion: f.current(f.parent.id).version, designId: f.current(f.parent.id).designId, expectedPlanId: null }
+  });
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: unassignedTask.id }), 'plan_apply'), false);
+
+  // Budget check: PM brief carrying both plan_apply and issue_assign with 96-byte title and one pending question <= 1990 bytes
+  const longTitle = 'A'.repeat(96);
+  f.change(f.pm.actor, 'issue_update', f.parent.id, { title: longTitle });
+  f.run(f.lead.actor, 'message_send', { issueId: f.parent.id, recipient: { kind: 'actor', actorId: f.pm.actor.id }, kind: 'QUESTION', body: 'Should integration cover both tasks?' });
+  const crowdedBrief = f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id });
+  assert.ok(hasAction(crowdedBrief, 'plan_apply'));
+  assert.ok(hasAction(crowdedBrief, 'issue_assign'));
+  assert.ok(Buffer.byteLength(JSON.stringify(crowdedBrief)) <= 1990);
+
+  // Worker reading parent (via assigned preDesignTask) never gets plan_apply/issue_assign and keeps waitingOn
+  const workerParentBrief = f.run(f.worker.actor, 'issue_get', { issueId: f.parent.id });
+  assert.equal(hasAction(workerParentBrief, 'plan_apply'), false);
+  assert.equal(hasAction(workerParentBrief, 'issue_assign'), false);
+  assert.ok(workerParentBrief.waitingOn !== null);
+
+  // Apply READY plan -> plan_apply disappears; add new child -> plan_apply reappears with old planId
+  const applied = applyFixturePlan(new Workflow(f.store), f.pm.actor, f.parent.id);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id }), 'plan_apply'), false);
+  const thirdTask = f.run(f.pm.actor, 'issue_create', {
+    parentId: f.parent.id, expectedParentVersion: f.current(f.parent.id).version,
+    title: '[Feature] Plan: third child -> stale plan', description: 'Stales plan', criteria: ['AC-1']
+  }).issue as Issue;
+  assert.deepEqual(findAction(f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id }), 'plan_apply')?.args, {
+    workspaceId: f.parent.workspaceId, issueId: f.parent.id, expectedVersion: f.current(f.parent.id).version,
+    designId: f.current(f.parent.id).designId, expectedPlanId: applied.plan.id
+  });
+  // Live run on requirement hides plan_apply; DONE/ABANDONED/ON_HOLD hide plan_apply
+  const parentLiveRun: Run = { id: randomUUID(), issueId: f.parent.id, workspaceId: f.parent.workspaceId, actorId: f.worker.actor.id, harness: 'codex', kind: 'implementation', state: 'RUNNING', version: 1, createdAt: new Date().toISOString(), designId: f.current(f.parent.id).designId!, scopeRevision: 1 };
+  f.store.put('run', parentLiveRun, f.parent.workspaceId);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id }), 'plan_apply'), false);
+  f.store.put('run', { ...parentLiveRun, state: 'CANCELLED' }, f.parent.workspaceId);
+  for (const state of ['DONE', 'ABANDONED', 'ON_HOLD'] as const) {
+    const saved = f.current(f.parent.id);
+    f.store.put('issue', { ...saved, state }, f.parent.workspaceId);
+    assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: f.parent.id }), 'plan_apply'), false);
+    f.store.put('issue', saved, f.parent.workspaceId);
+  }
+  applyFixturePlan(new Workflow(f.store), f.pm.actor, f.parent.id);
+
+  // Requirement without children never gets plan_apply
+  const solo = f.run(f.lead.actor, 'issue_create', { title: 'Solo requirement', description: 'No children', criteria: ['AC-1'] }).issue as Issue;
+  f.change(f.lead.actor, 'design_set', solo.id, { content: 'Solo design', criteria: ['AC-1'] });
+  f.change(f.lead.actor, 'design_submit', solo.id);
+  f.change(f.human.actor, 'design_decide', solo.id, { designId: f.current(solo.id).designId, decision: 'APPROVED', reason: 'Approve solo' });
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: solo.id }), 'plan_apply'), false);
+
+  // 2) Unassigned task under approved design: issue_assign offered to PM, lead, human; not worker, QA, or consult
+  const profile = f.run(f.human.actor, 'check_profile_create', { name: 'qa-check', command: process.execPath, args: ['-e', 'process.exit(0)'], criteria: ['AC-1'] }).profile;
+  f.change(f.pm.actor, 'qa_configure', unassignedTask.id, { actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] });
+  const pmBrief = f.run(f.pm.actor, 'issue_get', { issueId: unassignedTask.id });
+  assert.deepEqual(findAction(pmBrief, 'issue_assign'), {
+    operation: 'issue_assign',
+    args: { workspaceId: unassignedTask.workspaceId, issueId: unassignedTask.id, expectedVersion: f.current(unassignedTask.id).version }
+  });
+  assert.equal(pmBrief.waitingOn, null);
+  assert.equal(hasAction(f.run(f.lead.actor, 'issue_get', { issueId: unassignedTask.id }), 'issue_assign'), true);
+  assert.equal(hasAction(f.run(f.human.actor, 'issue_get', { issueId: unassignedTask.id }), 'issue_assign'), true);
+  assert.equal(hasAction(f.run(f.qa.actor, 'issue_get', { issueId: unassignedTask.id }), 'issue_assign'), false);
+
+  const qMsg = f.run(f.lead.actor, 'message_send', { issueId: unassignedTask.id, recipient: { kind: 'actor', actorId: f.pm.actor.id }, kind: 'QUESTION', body: 'Consult question' }).message;
+  const consultRunId = randomUUID();
+  const consultActor: Actor = { id: randomUUID(), role: 'pm', name: 'Consult PM', principalId: f.pm.actor.id, runId: consultRunId, workspaceIds: [unassignedTask.workspaceId], sessionId: randomUUID() };
+  f.store.put('actor', consultActor);
+  f.store.put('connection', { id: randomUUID(), actorId: f.pm.actor.id, client: { name: 'codex', version: '1' }, initializedAt: new Date().toISOString() }, unassignedTask.workspaceId);
+  f.store.put('run', { id: consultRunId, issueId: unassignedTask.id, workspaceId: unassignedTask.workspaceId, actorId: f.pm.actor.id, harness: 'codex', kind: 'consult', state: 'RUNNING', version: 1, createdAt: new Date().toISOString(), designId: f.current(f.parent.id).designId, scopeRevision: f.current(unassignedTask.id).scopeRevision, executionActorId: consultActor.id, consult: { questionId: qMsg.id, mode: 'fresh' } }, unassignedTask.workspaceId);
+  assert.equal(hasAction(f.run(consultActor, 'issue_get', { issueId: unassignedTask.id }), 'issue_assign'), false);
+
+  // Calling issue_assign succeeds, removes issue_assign offer, offers work_dispatch, and assigned task never gets issue_assign
+  const assignOffer = findAction(pmBrief, 'issue_assign');
+  f.run(f.pm.actor, assignOffer.operation, { ...assignOffer.args, actorId: f.worker.actor.id, harness: 'codex' });
+  const afterAssign = f.run(f.pm.actor, 'issue_get', { issueId: unassignedTask.id });
+  assert.equal(hasAction(afterAssign, 'issue_assign'), false);
+  assert.equal(hasAction(afterAssign, 'work_dispatch'), true);
+  assert.equal(hasAction(f.run(f.worker.actor, 'issue_get', { issueId: unassignedTask.id }), 'issue_assign'), false);
+
+  // 3) Seeded unassigned states for issue_assign
+  const baseThird = f.current(thirdTask.id);
+  for (const state of ['LEAD_REVIEW', 'QA_TEST', 'USER_ACCEPTANCE', 'ON_HOLD', 'DONE', 'ABANDONED'] as const) {
+    f.store.put('issue', { ...baseThird, state }, thirdTask.workspaceId);
+    assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: thirdTask.id }), 'issue_assign'), false);
+    assert.throws(() => f.change(f.pm.actor, 'issue_assign', thirdTask.id, { actorId: f.worker.actor.id, harness: 'codex' }), rejects('ASSIGNMENT_ACTIVE'));
+  }
+  f.store.put('issue', { ...baseThird, state: 'NOT_STARTED' }, thirdTask.workspaceId);
+  const queuedRun: Run = { id: randomUUID(), issueId: thirdTask.id, workspaceId: thirdTask.workspaceId, actorId: f.worker.actor.id, harness: 'codex', kind: 'implementation', state: 'QUEUED', version: 1, createdAt: new Date().toISOString(), designId: f.current(f.parent.id).designId!, scopeRevision: 1 };
+  f.store.put('run', queuedRun, thirdTask.workspaceId);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: thirdTask.id }), 'issue_assign'), false);
+  assert.throws(() => f.change(f.pm.actor, 'issue_assign', thirdTask.id, { actorId: f.worker.actor.id, harness: 'codex' }), rejects('RUN_EXISTS'));
+  f.store.put('run', { ...queuedRun, state: 'CANCELLED' }, thirdTask.workspaceId);
+
+  for (const state of ['LEAD_REJECTED', 'QA_REJECTED', 'USER_REJECTED'] as const) {
+    f.store.put('issue', { ...f.current(thirdTask.id), state, assignee: null, harness: null }, thirdTask.workspaceId);
+    assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: thirdTask.id }), 'issue_assign'), true);
+    f.change(f.pm.actor, 'issue_assign', thirdTask.id, { actorId: f.worker.actor.id, harness: 'codex' });
+    assert.equal(f.current(thirdTask.id).assignee, f.worker.actor.id);
+  }
+
+  // 4) qa_configure lifecycle offers and acceptance
+  const qaTask = f.run(f.pm.actor, 'issue_create', {
+    parentId: f.parent.id, expectedParentVersion: f.current(f.parent.id).version,
+    title: '[Feature] QA: configure when due -> queued', description: 'QA configure lifecycle', criteria: ['AC-1']
+  }).issue as Issue;
+  applyFixturePlan(new Workflow(f.store), f.pm.actor, f.parent.id);
+  f.assign(qaTask);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure'), false);
+  f.change(f.pm.actor, 'qa_configure', qaTask.id, { actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] });
+
+  f.claim(qaTask);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure'), false);
+  f.change(f.pm.actor, 'qa_configure', qaTask.id, { actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] });
+
+  const exec = f.execution(qaTask.id);
+  writeFileSync(join(exec.root, 'delivered.txt'), 'qa payload');
+  f.change(exec.actor, 'work_submit', qaTask.id, { fence: f.current(qaTask.id).fence, summary: 'Submit for review', files: ['delivered.txt'] });
+  const prodRun = f.store.get<Run>('run', exec.runId);
+  f.store.put('run', { ...prodRun, state: 'SUCCEEDED' }, qaTask.workspaceId);
+  const sealedIssue = f.current(qaTask.id);
+  const snap = sealSnapshot(sealedIssue.candidate!, qaTask.workspaceId, qaTask.id, join(f.root, 'snapshots'), false);
+  sealedIssue.candidate!.snapshotId = snap.id;
+  f.store.put('snapshot', snap, qaTask.workspaceId);
+  f.store.put('issue', sealedIssue, qaTask.workspaceId);
+
+  // LEAD_REVIEW PRE_QA: not offered, accepted
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure'), false);
+  f.change(f.pm.actor, 'qa_configure', qaTask.id, { actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] });
+
+  // Clear qaAssignee so review_submit PASS leaves QA_TEST with no QA run
+  const beforePass = f.current(qaTask.id);
+  beforePass.qaAssignee = undefined; beforePass.qaHarness = undefined; beforePass.checkProfileIds = undefined;
+  f.store.put('issue', beforePass, qaTask.workspaceId);
+  f.change(f.lead.actor, 'review_submit', qaTask.id, { candidateId: beforePass.candidate!.id, verdict: 'PASS', reason: 'Initial lead pass' });
+  assert.equal(f.current(qaTask.id).state, 'QA_TEST');
+
+  const qaOffer = findAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure');
+  assert.deepEqual(qaOffer, {
+    operation: 'qa_configure',
+    args: { workspaceId: qaTask.workspaceId, issueId: qaTask.id, expectedVersion: f.current(qaTask.id).version }
+  });
+  const queuedQa = f.run(f.pm.actor, qaOffer.operation, { ...qaOffer.args, actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] });
+  assert.equal(queuedQa.run.state, 'QUEUED');
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure'), false);
+
+  // Mark QA run FAILED -> qa_configure offered again
+  f.store.put('run', { ...queuedQa.run, state: 'FAILED' }, qaTask.workspaceId);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure'), true);
+
+  // LEAD_REVIEW FINAL and USER_ACCEPTANCE: not offered, refused with INVALID_TRANSITION
+  const forFinal = f.current(qaTask.id);
+  f.store.put('issue', { ...forFinal, state: 'LEAD_REVIEW', stage: 'FINAL' }, qaTask.workspaceId);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure'), false);
+  assert.throws(() => f.change(f.pm.actor, 'qa_configure', qaTask.id, { actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] }), rejects('INVALID_TRANSITION'));
+
+  f.store.put('issue', { ...forFinal, state: 'USER_ACCEPTANCE', stage: null }, qaTask.workspaceId);
+  assert.equal(hasAction(f.run(f.pm.actor, 'issue_get', { issueId: qaTask.id }), 'qa_configure'), false);
+  assert.throws(() => f.change(f.pm.actor, 'qa_configure', qaTask.id, { actorId: f.qa.actor.id, harness: 'codex', checkProfileIds: [profile.id] }), rejects('INVALID_TRANSITION'));
 });

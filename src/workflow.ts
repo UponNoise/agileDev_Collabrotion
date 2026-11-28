@@ -291,7 +291,7 @@ export class Workflow {
     });
     const consult = this.consultRun(actor);
     const nextActions = this.nextActions(actor, issue, workspace, design, activeRun,
-      readiness.ready, deliveryDigest, closureBlocked, submission, qaChecks, decisionRisks?.hash ?? designRisks?.hash);
+      readiness.blocking, deliveryDigest, closureBlocked, submission, qaChecks, decisionRisks?.hash ?? designRisks?.hash);
     if (consult) nextActions.splice(0, nextActions.length, ...nextActions.filter(action => permitsConsultOperation(action.operation)));
     const waitingOn = waitingParty(issue, design, activeRun, blockers, nextActions.length > 0);
     if (!consult && permitsOperation(actor.role, 'defect_propose')) {
@@ -376,8 +376,9 @@ export class Workflow {
       ...(['human','lead','pm'].includes(actor.role) ? { authorizationScopeHash: this.grantScope(issue) } : {})
     };
   }
-  private nextActions(actor: Actor, issue: Issue, workspace: Workspace, design: Design | null, activeRun: Run | undefined, ready: boolean, digest: string | null, closureBlocked: string[], submission: GitSubmission | null, qaChecks: CheckRun[], riskHash?: string) {
+  private nextActions(actor: Actor, issue: Issue, workspace: Workspace, design: Design | null, activeRun: Run | undefined, blocking: string[], digest: string | null, closureBlocked: string[], submission: GitSubmission | null, qaChecks: CheckRun[], riskHash?: string) {
     const actions: IssueAction[] = [];
+    const ready = !blocking.length;
     const { workspaceId, id: issueId, version: expectedVersion, scopeRevision, fence, candidate } = issue;
     const target = { workspaceId, issueId, expectedVersion };
     const offer = (operation: Operation, args: Record<string, unknown> = {}, scoped: Record<string, unknown> = target) => {
@@ -401,6 +402,8 @@ export class Workflow {
         if (design) offer('design_submit');
       }
     }
+    if (!activeRun && !issue.parentId && design?.status === 'APPROVED' && blocking.some(isPlanningBlocker)) offer('plan_apply', { designId: design.id, expectedPlanId: issue.planId ?? null });
+    if (!activeRun && design?.status === 'APPROVED' && blocking.includes('ASSIGNEE_REQUIRED') && this.assignable(issue)) offer('issue_assign');
     if (!activeRun && ready && design && (issue.state === 'NOT_STARTED' || issue.state.endsWith('_REJECTED') || this.integrationIdle(issue))) {
       offer('work_dispatch', { designId: design.id, scopeRevision });
     }
@@ -416,6 +419,7 @@ export class Workflow {
     if (issue.state === 'LEAD_REVIEW' && candidate?.snapshotId && candidate.sessionId !== actor.sessionId && !activeRun) {
       offer('review_submit', { candidateId: candidate.id });
     }
+    if (issue.state === 'QA_TEST' && !activeRun && this.qaConfigurable(issue)) offer('qa_configure');
     if (issue.state === 'QA_TEST' && actor.role === 'qa' && candidate?.snapshotId && activeRun?.kind === 'qa' &&
         activeRun.state === 'RUNNING' && activeRun.id === actor.runId && activeRun.executionActorId === actor.id &&
         activeRun.snapshotId === candidate.snapshotId && activeRun.candidateId === candidate.id && issue.qaAssignee === actor.principalId) {
@@ -552,6 +556,12 @@ export class Workflow {
   }
   private integrationIdle(issue: Issue) {
     return isAggregate(this.store,issue) && issue.state === 'IN_PROGRESS' && !issue.lease && !issue.candidate;
+  }
+  private assignable(issue: Issue) {
+    return issue.state === 'NOT_STARTED' || issue.state.endsWith('REJECTED') || this.integrationIdle(issue);
+  }
+  private qaConfigurable(issue: Issue) {
+    return !['DONE', 'ABANDONED', 'USER_ACCEPTANCE'].includes(issue.state) && !(issue.state === 'LEAD_REVIEW' && issue.stage === 'FINAL');
   }
   private assertParentMutable(issue: Issue) {
     const root = issue.parentId ? this.store.get<Issue>('issue',issue.parentId) : issue;
@@ -1015,7 +1025,7 @@ export class Workflow {
     }
     if (op === 'qa_configure') {
       requireRole(actor,'human','lead','pm');
-      if (['DONE','ABANDONED','USER_ACCEPTANCE'].includes(i.state) || (i.state === 'LEAD_REVIEW' && i.stage === 'FINAL')) throw new DomainError('INVALID_TRANSITION','QA assignment is frozen after acceptance gates');
+      if (!this.qaConfigurable(i)) throw new DomainError('INVALID_TRANSITION','QA assignment is frozen after acceptance gates');
       if (s.list<Run>('run',w.id).some(r => r.issueId === i.id && r.kind === 'qa' && ownsIssueExecution(r))) throw new DomainError('RUN_EXISTS','Reconcile the current QA run first');
       const reviewer = s.get<Actor>('actor',a.actorId);
       if (reviewer.role !== 'qa' || reviewer.runId || !reviewer.workspaceIds.includes(w.id) || reviewer.id === i.assignee) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED','Select an independent logical QA actor in this workspace');
@@ -1118,7 +1128,7 @@ export class Workflow {
     }
     if (op === 'issue_assign') {
       requireRole(actor, 'human', 'lead', 'pm');
-      if (i.state !== 'NOT_STARTED' && !i.state.endsWith('REJECTED') && !this.integrationIdle(i)) throw new DomainError('ASSIGNMENT_ACTIVE', 'Reconcile active work before reassigning');
+      if (!this.assignable(i)) throw new DomainError('ASSIGNMENT_ACTIVE', 'Reconcile active work before reassigning');
       if ((a.actorId === null) !== (a.harness === null)) throw new DomainError('ASSIGNMENT_INVALID','Select a worker and harness together, or clear both');
       const assigned = a.actorId ? s.get<Actor>('actor', a.actorId) : null;
       if (assigned && (assigned.role !== 'worker' || assigned.runId || !assigned.workspaceIds.includes(w.id))) throw new DomainError('SCOPE_DENIED', 'Assignment requires a logical worker in this workspace');
