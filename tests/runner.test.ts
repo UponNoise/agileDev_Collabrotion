@@ -27,14 +27,14 @@ class ControlledAdapter implements ExecutionAdapter {
     return { result: new Promise<AdapterResult>(done => this.finish.set(context.cwd, done)), interrupt: async () => { this.finish.get(context.cwd)?.({ outcome: 'cancelled' }); return true; } };
   }
 }
-async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapter(), concurrency = 2, provisionDependencies = false) {
+async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapter(), concurrency = 2, provisionDependencies = false, now: () => number = Date.now) {
   const root = mkdtempSync(join(tmpdir(), 'agiledev-runner-'));
   const source = join(root, 'source'); mkdirSync(source); writeFileSync(join(source, 'source.txt'), 'original');
   const dependencies = provisionDependencies ? mkdirSync(join(root, 'dependencies'), { recursive: true }) : undefined;
   if (dependencies) writeFileSync(join(dependencies, 'package.txt'), 'owned dependency');
   const git = (...args: string[]) => execFileSync('git', args, { cwd: source, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   git('init'); git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fixture');
-  const store = new Store(join(root, 'service.sqlite')); const flow = new Workflow(store); const owner = store.bootstrap();
+  const store = new Store(join(root, 'service.sqlite')); const flow = new Workflow(store, now); const owner = store.bootstrap();
   const call = (actor: Actor, operation: string, input: object) => executeFixture(flow, actor, operation, { idempotencyKey: randomUUID(), ...input }) as any;
   const workspace = call(owner.actor, 'workspace_register', { root: source, name: 'Runner fixture', prefix: 'RUN' }).workspace;
   const run = (op: string, input: object) => call(owner.actor, op, { workspaceId: workspace.id, ...input });
@@ -51,7 +51,7 @@ async function setup(count = 2, adapter: ExecutionAdapter = new ControlledAdapte
   applyFixturePlan(flow,owner.actor,parent.id);
   const jobs = tasks.map(i => change('work_dispatch', i.id, { designId: store.get<Issue>('issue', parent.id).designId, scopeRevision: 1 }).run as Run);
   const server = createServer(store); const endpoint = await server.listen({ host: '127.0.0.1', port: 0 });
-  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency, executionDependencies: dependencies });
+  const coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency, executionDependencies: dependencies, now });
   const close = async () => {
     await coordinator.close();
     await server.close();
@@ -266,4 +266,115 @@ test('dependency configuration requires an absolute directory and preserves conf
     assert.throws(release, { code: 'DEPENDENCY_LINK_CLEANUP_FAILED' });
     assert.equal(readFileSync(retained, 'utf8'), 'replacement directory');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('lease renewals leave the issue version unchanged and a version read before them still submits', { timeout: 20000 }, async () => {
+  let clock = Date.now();
+  const adapter = new ControlledAdapter();
+  const f = await setup(2, adapter, 2, false, () => clock);
+  try {
+    await f.coordinator.tick();
+    await waitFor(() => adapter.contexts.length === 2);
+    const job0 = f.jobs[0]!;
+    const job1 = f.jobs[1]!;
+    const ctx0 = adapter.contexts.find(c => f.store.authenticate(c.token).runId === job0.id)!;
+    const ctx1 = adapter.contexts.find(c => f.store.authenticate(c.token).runId === job1.id)!;
+    const exec0 = f.store.authenticate(ctx0.token);
+    const exec1 = f.store.authenticate(ctx1.token);
+
+    const V = f.store.get<Issue>('issue', job0.issueId).version;
+    const V1 = f.store.get<Issue>('issue', job1.issueId).version;
+    clock += 61000;
+    await f.coordinator.tick();
+
+    const renewed0 = f.store.get<Issue>('issue', job0.issueId);
+    assert.equal(renewed0.version, V);
+    assert.equal(renewed0.lease!.expiresAt, clock + 300000);
+    const events = f.flow.execute(f.owner.actor, 'event_list', { workspaceId: f.workspace.id, after: 0, limit: 100 }) as { events: any[] };
+    const hbEvent = events.events.findLast(e => e.operation === 'work_heartbeat' && e.targetId === job0.issueId);
+    assert.ok(hbEvent);
+    assert.equal(hbEvent.data.version, V);
+
+    clock += 1000;
+    const hbResult = f.flow.execute(exec0, 'work_heartbeat', {
+      workspaceId: f.workspace.id, issueId: job0.issueId, expectedVersion: V, fence: renewed0.fence, idempotencyKey: randomUUID()
+    }) as any;
+    assert.equal(hbResult.issue.version, V);
+    assert.equal(f.store.get<Issue>('issue', job0.issueId).version, V);
+
+    writeFileSync(join(ctx0.cwd, 'source.txt'), 'submitted after renewals');
+    const submitted = f.flow.execute(exec0, 'work_submit', {
+      workspaceId: f.workspace.id, issueId: job0.issueId, expectedVersion: V, fence: renewed0.fence,
+      summary: 'Submitted using version read before renewals', files: ['source.txt'], idempotencyKey: randomUUID()
+    }) as any;
+    assert.equal(submitted.issue.state, 'LEAD_REVIEW');
+    assert.equal(submitted.issue.version, V + 1);
+
+    const pm = f.flow.execute(f.owner.actor, 'actor_enroll', { workspaceId: f.workspace.id, role: 'pm', name: 'Update PM', idempotencyKey: randomUUID() }) as any;
+    const updated = f.flow.execute(pm.actor, 'issue_update', {
+      workspaceId: f.workspace.id, issueId: job1.issueId, expectedVersion: V1, priority: 1, idempotencyKey: randomUUID()
+    }) as any;
+    assert.equal(updated.issue.version, V1 + 1);
+    writeFileSync(join(ctx1.cwd, 'source.txt'), 'stale submit');
+    assert.throws(() => f.flow.execute(exec1, 'work_submit', {
+      workspaceId: f.workspace.id, issueId: job1.issueId, expectedVersion: V1, fence: f.store.get<Issue>('issue', job1.issueId).fence,
+      summary: 'Stale version after update', files: ['source.txt'], idempotencyKey: randomUUID()
+    }), (e: any) => e.code === 'VERSION_CONFLICT');
+  } finally { await f.close(); }
+});
+
+test('a lost lease is still refused after renewals', { timeout: 20000 }, async () => {
+  let clock = Date.now();
+  const adapter = new ControlledAdapter();
+  const f = await setup(2, adapter, 2, false, () => clock);
+  try {
+    await f.coordinator.tick();
+    await waitFor(() => adapter.contexts.length === 2);
+    const job = f.jobs[0]!;
+    const job1 = f.jobs[1]!;
+    const ctx0 = adapter.contexts.find(c => f.store.authenticate(c.token).runId === job.id)!;
+    const oldExec = f.store.authenticate(ctx0.token);
+    const oldFence = f.store.get<Issue>('issue', job.issueId).fence;
+
+    clock += 61000;
+    await f.coordinator.tick();
+
+    const run0 = f.store.get<Run>('run', job.id);
+    f.flow.execute(f.owner.actor, 'run_interrupt', {
+      workspaceId: f.workspace.id, runId: run0.id, expectedVersion: run0.version, reason: 'Interrupt after renewal', idempotencyKey: randomUUID()
+    });
+    await f.coordinator.tick();
+    await waitFor(() => f.store.get<Run>('run', job.id).state === 'CANCELLED');
+
+    const afterInterrupt = f.store.get<Issue>('issue', job.issueId);
+    assert.throws(() => f.flow.execute(oldExec, 'work_heartbeat', {
+      workspaceId: f.workspace.id, issueId: job.issueId, expectedVersion: afterInterrupt.version, fence: oldFence, idempotencyKey: randomUUID()
+    }), (e: any) => e.code === 'STALE_FENCE');
+    assert.throws(() => f.flow.execute(oldExec, 'work_submit', {
+      workspaceId: f.workspace.id, issueId: job.issueId, expectedVersion: afterInterrupt.version, fence: oldFence, summary: 'Late', files: ['source.txt'], idempotencyKey: randomUUID()
+    }), (e: any) => e.code === 'STALE_FENCE');
+
+    const redispatch = f.change('work_dispatch', job.issueId, { designId: job.designId, scopeRevision: job.scopeRevision }).run as Run;
+    await f.coordinator.tick();
+    await waitFor(() => adapter.contexts.length === 3);
+    const ctx2 = adapter.contexts[2]!;
+    const newExec = f.store.authenticate(ctx2.token);
+    const claimed = f.store.get<Issue>('issue', job.issueId);
+    assert.throws(() => f.flow.execute(oldExec, 'work_heartbeat', {
+      workspaceId: f.workspace.id, issueId: job.issueId, expectedVersion: claimed.version, fence: oldFence, idempotencyKey: randomUUID()
+    }), (e: any) => e.code === 'STALE_FENCE');
+
+    clock += 300001;
+    assert.throws(() => f.flow.execute(newExec, 'work_heartbeat', {
+      workspaceId: f.workspace.id, issueId: job.issueId, expectedVersion: claimed.version, fence: claimed.fence, idempotencyKey: randomUUID()
+    }), (e: any) => e.code === 'LEASE_EXPIRED');
+
+    const issue1 = f.store.get<Issue>('issue', job1.issueId);
+    issue1.lease = null;
+    f.store.put('issue', issue1, f.workspace.id);
+    await f.coordinator.tick();
+    await waitFor(() => f.store.get<Run>('run', job1.id).state === 'CANCELLED');
+    assert.equal(f.store.get<Run>('run', job1.id).errorCode, 'OWNERSHIP_LOST');
+    assert.ok(redispatch.id);
+  } finally { await f.close(); }
 });

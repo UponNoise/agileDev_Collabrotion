@@ -486,10 +486,10 @@ export class Workflow {
     if (admission && isAggregate(this.store,root)) blocking.push(...planCoverage(this.store,root).blocking);
     return { ready: blocking.length === 0, blocking: [...new Set(blocking)] };
   }
-  private save(actor: Actor, op: string, i: Issue, data: unknown = {}) {
+  private save(actor: Actor, op: string, i: Issue, data: unknown = {}, bumpVersion = true) {
     const before = this.store.get<Issue>('issue', i.id);
     if (op !== 'work_reconcile' && (this.unmanagedWork(before) || this.unmanagedWork(i))) i.unmanagedExecution = true;
-    i.version++;
+    if (bumpVersion) i.version++;
     this.store.put('issue', i, i.workspaceId);
     const changes = Object.fromEntries(Object.entries(i).filter(([key, value]) => canonical(value) !== canonical((before as any)[key])).map(([key, value]) => [key, { before: (before as any)[key], after: value }]));
     this.store.event(i.workspaceId, actor, op, i.id, { version: i.version, state: i.state, stage: i.stage, changes, ...data as object });
@@ -1150,7 +1150,7 @@ export class Workflow {
       if (i.lease.expiresAt <= this.now()) throw new DomainError('LEASE_EXPIRED', 'Reconcile execution before renewing or submitting');
       const run = this.implementationRun(actor,i,['RUNNING']);
       if (this.readiness(i,false).blocking.length) throw new DomainError('NOT_READY', 'Work is blocked by a changed requirement or hold');
-      if (op === 'work_heartbeat') { i.lease.expiresAt = this.now() + 300000; return this.save(actor, op, i); }
+      if (op === 'work_heartbeat') { i.lease.expiresAt = this.now() + 300000; return this.save(actor, op, i, {}, false); }
       if (!run.providerSessionId) throw new DomainError('PROVIDER_ID_REQUIRED','Submission requires the actual provider session identity');
       const root = run.executionRoot!;
       const files = (a.files as string[]).map(path => {

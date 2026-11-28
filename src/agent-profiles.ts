@@ -134,7 +134,7 @@ const extraPurposes: Record<string, string> = {
   check_profile_list: 'Read scoped human-approved fixed test profiles; no arbitrary commands can be authorized here.',
   qa_configure: 'Select an independent QA actor, harness and human-approved check profiles for this issue.',
   event_list: 'Read scoped append-only audit events after a sequence cursor; no event grants authority.',
-  work_heartbeat: 'Renew the current bound worker lease using the exact issue version and fence; never revives lost ownership.'
+  work_heartbeat: 'Renew the current bound worker lease using the exact issue version and fence; renewal leaves the issue version unchanged and never revives lost ownership.'
 };
 const specificRejections: Partial<Record<Operation, string>> = {
   artifact_read: 'EVIDENCE_STALE if the sealed artifact changed.',
