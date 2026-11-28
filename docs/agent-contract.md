@@ -27,7 +27,7 @@ Use server namespace `agiledev`; raw tool names below are illustrative stable AP
 | `issue_update` | Allowed metadata fields or new draft content revision, expected version | No status/role/grant patch; material design/scope edits create a revision |
 | `design_submit` | Requirement, exact draft revision, review summary | Lead; freezes review candidate and requests human decision |
 | `plan_apply` | Requirement/design revision, task specs, criterion map, dependencies, assignments/dates, expected aggregate versions | PM/lead; validates whole plan atomically and creates unstarted tasks |
-| `work_dispatch` | Ready issue, assignment, adapter/binding, budget policy, versions | PM/lead coordinator; durable queued run, no duplicate on retry |
+| `work_dispatch` | Ready issue, assignment, adapter/binding, budget policy, versions | PM/lead coordinator; durable queued run with its `base` record (optional input `start: "candidate" \| "workspace"`, default `"candidate"`), no duplicate on retry |
 | `work_claim` | Issue/assignment, acknowledged scope/criteria revision, verified run binding, expected version | Service coordinator only (`claimReservedWork` in `src/workflow.ts`; `work_claim` has no agent role in `src/agent-profiles.ts`); the worker acts inside the managed run with its run token |
 | `work_heartbeat` | Assignment/lease, current fence, expected lease version | Owning run; extends lease without taking another run's ownership |
 | `work_submit` | Issue, round, scope/design revision, artifact manifest, criterion/self-check evidence, lease fence | Owning worker; transitions to initial lead review only |

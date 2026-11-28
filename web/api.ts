@@ -62,6 +62,7 @@ export interface IssueData {
   closureBlocked: string[];
   readiness: { ready: boolean; blocking: string[] };
   executionRecovery: { required: boolean; fence: number; candidateId: string | null };
+  lastRejection?: { candidateId: string } | null;
   planning: {
     planId: string | null;
     ready: boolean;

@@ -1421,6 +1421,8 @@ test('launch, execution and sealing codes use the reviewed sentences', () => {
     assert.equal(translateSentence('zh-CN', errorSentence(code).key), '运行上限设置有误，请检查启动设置');
   }
   assert.equal(errorSentence('RUN_ID_INVALID').key, 'The isolated directory could not be prepared');
+  assert.equal(runResultSentence('REWORK_BASE_UNAVAILABLE').key, 'The previous delivery could not be restored; dispatch again from the workspace');
+  assert.equal(translateSentence('zh-CN', errorSentence('REWORK_BASE_UNAVAILABLE').key), '上一版交付没能恢复，请从工作区重新派发');
   assert.equal(blockerSentence('ARTIFACT_POLICY').key, 'These files cannot be delivered');
   assert.equal(errorSentence('ARTIFACT_POLICY').key, 'These files cannot be delivered');
   assert.equal(runResultSentence('ARTIFACT_POLICY').key, 'These files cannot be delivered');

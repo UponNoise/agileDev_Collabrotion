@@ -39,8 +39,10 @@ export interface RunModelValue {
   source: 'launch' | 'profile' | 'harness' | 'codex-cache' | 'managed-default' | 'harness-default';
 }
 export interface RunModelSettings { provider?: RunModelValue; model?: RunModelValue; reasoningEffort?: RunModelValue }
+export const runBaseReasons = ['NOT_REJECTED', 'REQUESTED', 'NO_CANDIDATE', 'NOT_SEALED', 'DESIGN_CHANGED', 'SCOPE_CHANGED', 'ARTIFACT_MODE'] as const;
+export type RunBase = { kind: 'candidate'; candidateId: string; snapshotId: string; baseSha?: string } | { kind: 'workspace'; reason: typeof runBaseReasons[number] };
 interface RunFields {
-  id: string; issueId: string; workspaceId: string; actorId: string; harness: Harness;
+  id: string; issueId: string; workspaceId: string; actorId: string; harness: Harness; base?: RunBase;
   state: typeof liveRunStates[number] | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
   version: number; createdAt: string; scopeRevision: number;
   coordinatorId?: string; executionActorId?: string; executionRoot?: string; baseSha?: string;
@@ -146,7 +148,7 @@ export const schemas = {
   work_reconcile: z.object({ ...change,fence: z.number().int().nonnegative(),candidateId: id.nullable().default(null),confirmStopped: z.literal(true),reason: text }).strict(),
   review_submit: z.object({ ...change, candidateId: id, verdict: z.enum(['PASS', 'FAIL']), reason: text }).strict(),
   issue_transition: z.object({ ...change, action: z.enum(['hold', 'resume', 'abandon', 'reopen']), reason: text, grantId: id.optional() }).strict(),
-  work_dispatch: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive() }).strict(),
+  work_dispatch: z.object({ ...change, designId: id, scopeRevision: z.number().int().positive(), start: z.enum(['candidate', 'workspace']).default('candidate') }).strict(),
   run_list: z.object({ ...scoped, limit: z.number().int().min(1).max(100).default(20), view: z.enum(['summary','full']).default('summary') }).strict(),
   run_get: z.object({ ...scoped, runId: id }).strict(),
   run_interrupt: z.object({ ...scoped, ...mutation, runId: id, expectedVersion: z.number().int().positive(), reason: text }).strict(),
