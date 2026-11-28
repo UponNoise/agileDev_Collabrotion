@@ -6,6 +6,7 @@ import type { Grant, Issue } from '../src/contracts';
 import { ApiError, command, errorText, formKey, harnessName, lines, mutation } from './api';
 import type { IssueData, ScopeData, WorkspaceData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
+import { harnessChoices } from './harness-options';
 import { PlanningForm } from './Planning';
 
 type ReviewedMutation = (operation: string, input: object) => Promise<unknown>;
@@ -362,9 +363,11 @@ export function IssueForm({
             </Field>
             <Field label={t('Harness')}>
               <select name="harness" defaultValue={issue.harness ?? 'codex'}>
-                <option value="codex">Codex</option>
-                <option value="dsh">DSH</option>
-                <option value="claude-code">Claude Code</option>
+                {harnessChoices(workspace.dispatchHarnesses, issue.harness).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {t(option.label)}
+                  </option>
+                ))}
               </select>
             </Field>
             <p className="muted">
@@ -410,9 +413,11 @@ export function IssueForm({
             </Field>
             <Field label={t('QA harness')}>
               <select name="harness" defaultValue={issue.qaHarness ?? 'dsh'}>
-                <option value="codex">Codex</option>
-                <option value="dsh">DSH</option>
-                <option value="claude-code">Claude Code</option>
+                {harnessChoices(workspace.dispatchHarnesses, issue.qaHarness).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {t(option.label)}
+                  </option>
+                ))}
               </select>
             </Field>
             <h3>{t('Approved check profiles')}</h3>

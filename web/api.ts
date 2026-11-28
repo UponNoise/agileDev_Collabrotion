@@ -48,6 +48,7 @@ export interface WorkspaceData {
   profiles: CheckProfile[];
   designs: Pick<Design, 'id' | 'issueId' | 'status'>[];
   connections: { id: string; actorId: string; client: { name: string; version: string }; initializedAt: string }[];
+  dispatchHarnesses?: string[];
 }
 export interface WakeSettingsData {
   settings: { workspaceId: string; enabled: boolean; version: number };
@@ -185,7 +186,7 @@ export const errorText = (error: unknown) =>
     : 'The local service could not be reached. Your input has been kept.';
 export const dateText = (value?: string | number | null) => (value ? new Date(value).toLocaleString() : 'Not recorded');
 export const harnessName = (value?: string | null) =>
-  value === 'codex' ? 'Codex' : value === 'dsh' ? 'DSH' : value === 'claude-code' ? 'Claude Code' : '—';
+  value === 'codex' ? 'Codex' : value === 'dsh' ? 'DSH' : value === 'claude-code' ? 'Claude Code' : value === 'agy' ? 'Antigravity' : '—';
 export function stateLabel(issue: Issue, designs: WorkspaceData['designs'] = []) {
   if (
     issue.state === 'NOT_STARTED' &&
