@@ -11,7 +11,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
-import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, ScopeDecision, Snapshot, Workspace, harnesses, liveRunStates, ownsIssueExecution, schemas } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, RunBase, ScopeDecision, Snapshot, Workspace, harnesses, liveRunStates, ownsIssueExecution, runBaseReasons, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, integrationManifest, qaChecksPending, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding, normalizeLegacyAttempt, submissionEntries } from './git.js';
@@ -300,7 +300,8 @@ export class Workflow {
     const rejection = rejectionContext(s, issue);
     const lastRejection = rejection ? {
       stage: rejection.stage, at: rejection.at, reason: rejection.reason,
-      findingCount: rejection.findingCount, evidenceKind: rejection.evidenceKind, evidenceId: rejection.evidenceId
+      findingCount: rejection.findingCount, evidenceKind: rejection.evidenceKind, evidenceId: rejection.evidenceId,
+      candidateId: rejection.candidateId
     } : null;
     const status = issue.state === 'NOT_STARTED' && activeRun?.state === 'QUEUED'
       ? 'Managed dispatch is queued.' : issueStatus(issue, readiness.ready && !activeRun);
@@ -337,7 +338,7 @@ export class Workflow {
         design: designBrief?.decision
           ? { ...designBrief, decision: { ...designBrief.decision, reason: shorten(designBrief.decision.reason) } }
           : designBrief,
-        lastRejection: lastRejection ? { ...lastRejection, reason: shorten(lastRejection.reason) } : null,
+        lastRejection: lastRejection ? { stage: lastRejection.stage, at: lastRejection.at, reason: shorten(lastRejection.reason), findingCount: lastRejection.findingCount, evidenceKind: lastRejection.evidenceKind, evidenceId: lastRejection.evidenceId } : null,
         defects: {
           ...defectCounts, topBlocking,
           expand: { operation: 'defect_list', args: { workspaceId: workspace.id, issueId: issue.id } }
@@ -517,6 +518,25 @@ export class Workflow {
     const root = realpathSync(run.executionRoot); const rel = relative(source,root);
     if (root !== run.executionRoot || !rel || !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)) throw new DomainError('EXECUTION_ROOT_INVALID','The execution directory must retain its prepared identity outside the source workspace');
     return run;
+  }
+  private reworkBase(issue: Issue, workspace: Workspace, start: 'candidate' | 'workspace'): RunBase {
+    const none = (reason: typeof runBaseReasons[number]): RunBase => ({ kind: 'workspace', reason });
+    const find = <T,>(kind: string, id: string | undefined) => { if (!id) return undefined; try { return this.store.get<T>(kind, id); } catch { return undefined; } };
+    const rejection = rejectionContext(this.store, issue);
+    const returned = issue.candidate ? rejection?.candidateId === issue.candidate.id : issue.state.endsWith('_REJECTED');
+    if (!returned) return none('NOT_REJECTED');
+    if (start === 'workspace') return none('REQUESTED');
+    const candidate = issue.candidate;
+    if (!candidate) return none('NO_CANDIDATE');
+    if (!candidate.snapshotId) return none('NOT_SEALED');
+    if (candidate.designId !== this.design(issue)?.id) return none('DESIGN_CHANGED');
+    const produced = find<Run>('run', candidate.runId);
+    if (!produced || produced.scopeRevision !== issue.scopeRevision) return none('SCOPE_CHANGED');
+    const snapshot = find<Snapshot>('snapshot', candidate.snapshotId);
+    if (!snapshot) return none('NOT_SEALED');
+    const git = !!workspace.commonDir; const baseSha = candidate.baseSha ?? produced.baseSha;
+    if (snapshot.files.some(f => !!f.blob !== git) || (git && !baseSha)) return none('ARTIFACT_MODE');
+    return { kind: 'candidate', candidateId: candidate.id, snapshotId: snapshot.id, ...(baseSha ? { baseSha } : {}) };
   }
   private draftDesign(actor: Actor, issue: Issue, content: string, criteria: string[]) {
     const workspace = this.store.get<Workspace>('workspace',issue.workspaceId);
@@ -1110,8 +1130,9 @@ export class Workflow {
       if (this.design(i)?.id !== a.designId || i.scopeRevision !== a.scopeRevision) throw new DomainError('APPROVAL_STALE', 'Acknowledge the current design and task scope');
       if (op === 'work_dispatch') {
         if (s.list<Run>('run', w.id).some(r => r.issueId === i.id && ownsIssueExecution(r))) throw new DomainError('RUN_EXISTS', 'A live or uncertain dispatch already owns this task');
-        const run: Run = { id: randomUUID(), issueId: i.id, workspaceId: w.id, actorId: i.assignee!, harness: i.harness!,kind: 'implementation',state: 'QUEUED', version: 1, createdAt: new Date(this.now()).toISOString(), designId: a.designId, scopeRevision: a.scopeRevision };
-        s.put('run', run, w.id); this.save(actor, op, i, { runId: run.id });
+        const base = this.reworkBase(i, w, a.start);
+        const run: Run = { id: randomUUID(), issueId: i.id, workspaceId: w.id, actorId: i.assignee!, harness: i.harness!,kind: 'implementation',state: 'QUEUED', version: 1, createdAt: new Date(this.now()).toISOString(), designId: a.designId, scopeRevision: a.scopeRevision, base };
+        s.put('run', run, w.id); this.save(actor, op, i, { runId: run.id, base });
         return { run, issue: this.display(i) };
       }
       this.implementationRun(actor,i,['STARTING']);
