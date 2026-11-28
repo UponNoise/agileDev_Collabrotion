@@ -69,21 +69,37 @@ export function useDesktopAttention({ authenticated, blockingCount, stale, openD
 
 export function DesktopAttentionSettings({ attention }: { attention: ReturnType<typeof useDesktopAttention> }) {
   const { attentionPaused, setAttentionPaused, t } = usePreferences();
-  return <section className="appearance" aria-labelledby="desktop-attention-title">
-    <h2 id="desktop-attention-title">{t('Desktop attention')}</h2>
-    <label className="check-row">
-      <input type="checkbox" checked={attentionPaused} onChange={event => setAttentionPaused(event.target.checked)} />
-      <span>{t('Pause desktop attention')}</span>
-    </label>
-    <p className="muted">{t('Pausing stops attention flashes. The in-app count, title, and passive taskbar indicator remain available.')}</p>
-    {!attention.available ? <p>{t('Taskbar attention requires the desktop app. In-app counts and the title remain available in this browser.')}</p> : attention.failed ? <div role="alert">
-      <p>{t('Desktop attention could not connect. In-app decisions remain available.')}</p>
-      <button type="button" onClick={attention.retry}>{t('Retry desktop attention')}</button>
-    </div> : !attention.capabilities ? <p role="status">{t('Checking desktop attention capabilities…')}</p> : <dl className="metadata">
-      <dt>{t('Taskbar flash')}</dt><dd>{t(attention.capabilities.taskbarFlash ? 'Available' : 'Unavailable')}</dd>
-      <dt>{t('Taskbar indicator')}</dt><dd>{t(attention.capabilities.taskbarOverlay ? 'Available' : 'Unavailable')}</dd>
-    </dl>}
-    <p>{t('Operating-system notifications')}: {t(attention.available ? 'Unavailable in this portable package: installation support has not been verified.' : 'Unavailable in the browser; no notification permission is requested.')}</p>
-    <p className="muted">{t('Attention only opens the current decision view. It never approves or accepts work.')}</p>
-  </section>;
+  const enabled = !attentionPaused;
+  return (
+    <div className="slist">
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Alert me when something waits for me')}</b>
+          <small>
+            {attention.available
+              ? t('Flashes the taskbar and shows the count in the title.')
+              : t('Shows the count in the title. Taskbar flashing requires the desktop app.')}
+          </small>
+        </div>
+        <button
+          type="button"
+          className="sw"
+          role="switch"
+          aria-checked={enabled}
+          aria-label={t('Alert me when something waits for me')}
+          onClick={() => setAttentionPaused(enabled)}
+        />
+      </div>
+      {attention.available && attention.failed ? (
+        <div className="srow" role="alert">
+          <div className="sl">
+            <b>{t('Desktop attention could not connect. In-app decisions remain available.')}</b>
+          </div>
+          <button type="button" className="btn" onClick={attention.retry}>
+            {t('Retry desktop attention')}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }

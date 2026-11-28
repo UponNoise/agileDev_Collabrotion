@@ -1,146 +1,335 @@
-import { useDateText } from './Preferences';
-import { useText } from './Preferences';
-import { useEffect, useState } from 'react';
-import { AppearanceSettings } from './Preferences';
-import type { Actor, Run, Workspace } from '../src/contracts';
-import { command, errorText, formKey, harnessName, lines, mutation, stateLabel } from './api';
-import type { DisplayIssue, WorkspaceData } from './api';
-import { AsyncForm, Empty, Field, Icon, JsonView, Modal, Status } from './components';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Actor, GitBinding, Run, Workspace } from '../src/contracts';
+import { ApiError, command, errorText, formKey, harnessName, lines, mutation } from './api';
+import type { DisplayIssue, InboxEntry, WakeSettingsData, WorkspaceData } from './api';
+import { AuditDetails, useCodeText, useSentence } from './CardKit';
+import { AsyncForm, Empty, Field, Modal } from './components';
+import { openDecisionCard } from './Decisions';
+import { DesktopAttentionSettings, useDesktopAttention } from './DesktopAttention';
+import { Avatar, ProgressRing, StatusIcon, UiIcon } from './Icons';
+import { useDateText, usePreferences, useRoleWords, useText } from './Preferences';
+import type { Theme } from './Preferences';
+import type { SettingsSection, WorkMode } from './routes';
+import { runResultSentence } from './sentences';
+import {
+  activeRunForIssue,
+  actorInitials,
+  boardColumns,
+  formatElapsed,
+  inferAgentHarness,
+  isNeedsYou,
+  issueIconKind,
+  issueStatusForWorkspace,
+  matchesFilter,
+  requirementProgress
+} from './work-model';
+import type { WorkData } from './work-model';
 
-export function Backlog({
-  data,
-  selected,
-  onSelect,
-  board
-}: {
-  data: WorkspaceData;
-  selected: string | null;
-  onSelect(id: string): void;
-  board: boolean;
-}) {
-  const t = useText();
-  const [collapsed, setCollapsed] = useState(new Set<string>());
-  const name = (id?: string | null) => data.actors.find((actor) => actor.id === id)?.name ?? t('Unassigned');
-  const issueTitle = (issue: DisplayIssue) => issue.titleSuffix;
-  if (!data.issues.length)
-    return (
-      <Empty title={t('No matching issues')}>
-        <p>{t('Create a requirement or adjust the filters.')}</p>
-      </Empty>
-    );
-  if (board) {
-    const columns = [
-      { name: 'Not started', states: ['NOT_STARTED'] },
-      { name: 'Development', states: ['IN_PROGRESS'] },
-      { name: 'Lead review', states: ['LEAD_REVIEW'] },
-      { name: 'QA', states: ['QA_TEST'] },
-      { name: 'Acceptance', states: ['USER_ACCEPTANCE'] },
-      { name: 'Implemented', states: ['DONE'] },
-      {
-        name: 'Needs attention',
-        states: ['LEAD_REJECTED', 'QA_REJECTED', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED']
-      }
-    ];
-    return (
-      <div className="board">
-        {columns.map((column) => {
-          const items = data.issues.filter((issue) => column.states.includes(issue.state));
-          return (
-            <section className="board-lane" key={column.name}>
-              <h2>
-                {t(column.name)}
-                <span>{items.length}</span>
-              </h2>
-              {items.map((issue) => (
-                <button
-                  key={issue.id}
-                  className={`board-issue ${selected === issue.id ? 'selected' : ''}`}
-                  onClick={() => onSelect(issue.id)}
-                >
-                  <small>{issue.key}</small>
-                  <strong>{issueTitle(issue)}</strong>
-                  <Status value={issue.state} label={stateLabel(issue, data.designs)} />
-                  <small>{name(issue.state === 'QA_TEST' ? issue.qaAssignee : issue.assignee)}</small>
-                </button>
-              ))}
-            </section>
-          );
-        })}
-      </div>
-    );
+function useTick(active: boolean) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+function whoActs(issue: DisplayIssue, actors: readonly Actor[], youLabel: string): { name: string | null; isYou: boolean } {
+  if (issue.state === 'USER_ACCEPTANCE') return { name: youLabel, isYou: true };
+  if (issue.state === 'QA_TEST') {
+    return { name: actors.find((actor) => actor.id === issue.qaAssignee)?.name ?? null, isYou: false };
   }
+  if (issue.state === 'LEAD_REVIEW') {
+    const leads = actors.filter((actor) => actor.role === 'lead');
+    return { name: leads.length === 1 ? leads[0]!.name : null, isYou: false };
+  }
+  return { name: actors.find((actor) => actor.id === issue.assignee)?.name ?? null, isYou: false };
+}
+
+function LiveChip({ startedAt, now }: { startedAt: string; now: number }) {
+  const elapsed = Math.max(0, now - Date.parse(startedAt));
   return (
-    <div className="table-wrap">
-      <table className="issue-table">
-        <thead>
-          <tr>
-            <th>{t('Issue')}</th>
-            <th>{t('Status')}</th>
-            <th>{t('Owner')}</th>
-            <th>{t('Harness')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.issues
-            .filter((issue) => !issue.parentId || !collapsed.has(issue.parentId))
-            .map((issue) => {
-              const children = !issue.parentId && data.issues.some((child) => child.parentId === issue.id);
-              return (
-                <tr
-                  key={issue.id}
-                  className={`${selected === issue.id ? 'selected' : ''} ${issue.parentId ? 'child-row' : ''}`}
-                >
-                  <td>
-                    <div className="issue-cell">
-                      {children ? (
-                        <button
-                          className={`icon-button expand ${collapsed.has(issue.id) ? '' : 'expanded'}`}
-                          aria-label={`${collapsed.has(issue.id) ? t('Expand') : t('Collapse')} ${issue.key}`}
-                          onClick={() =>
-                            setCollapsed((previous) => {
-                              const next = new Set(previous);
-                              if (next.has(issue.id)) next.delete(issue.id);
-                              else next.add(issue.id);
-                              return next;
-                            })
-                          }
-                        >
-                          <Icon name="chevron" />
-                        </button>
-                      ) : (
-                        <span className="tree-branch" />
-                      )}
-                      <button
-                        className="issue-link"
-                        onClick={() => onSelect(issue.id)}
-                        aria-current={selected === issue.id ? 'page' : undefined}
-                      >
-                        <strong>{issue.key}</strong>
-                        <span>{issueTitle(issue)}</span>
-                      </button>
-                    </div>
-                  </td>
-                  <td>
-                    <Status
-                      value={stateLabel(issue, data.designs) === 'Design review' ? 'IN_REVIEW' : issue.state}
-                      label={stateLabel(issue, data.designs)}
-                    />
-                    {issue.scope?.status === 'EXCLUDED' ? (
-                      <small className="scope-label">{t('Excluded from delivery')}</small>
-                    ) : issue.scope?.status === 'STALE' ? (
-                      <small className="scope-label">{t('Scope decision stale')}</small>
-                    ) : null}
-                  </td>
-                  <td>{name(issue.state === 'QA_TEST' ? issue.qaAssignee : issue.assignee)}</td>
-                  <td>{harnessName(issue.state === 'QA_TEST' ? issue.qaHarness : issue.harness)}</td>
-                </tr>
-              );
-            })}
-        </tbody>
-      </table>
-    </div>
+    <span className="chip">
+      <span className="live" aria-hidden="true" />
+      <span className="mono">{formatElapsed(elapsed)}</span>
+    </span>
   );
 }
+
+export function TaskRow({
+  issue,
+  workspace,
+  entries,
+  now,
+  onSelect
+}: {
+  issue: DisplayIssue;
+  workspace: WorkData;
+  entries: readonly InboxEntry[];
+  now: number;
+  onSelect(issueId: string): void;
+}) {
+  const { locale, t } = usePreferences();
+  const youChip = locale === 'zh-CN' ? '等你' : 'You';
+  const render = useSentence();
+  const roleWords = useRoleWords();
+  const run = activeRunForIssue(workspace.activeRuns, issue.id);
+  const needsYou = entries.some((entry) => entry.issueId === issue.id && isNeedsYou(entry));
+  const icon = issueIconKind(issue, run);
+  const statusText = render(issueStatusForWorkspace(issue, workspace, entries, roleWords));
+  const actor = whoActs(issue, workspace.actors, t('You'));
+  const live = run && ['STARTING', 'RUNNING', 'STOPPING'].includes(run.state);
+  return (
+    <a
+      className="row"
+      href={`/w/${encodeURIComponent(issue.workspaceId)}/issues/${encodeURIComponent(issue.id)}`}
+      onClick={(event) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        onSelect(issue.id);
+      }}
+    >
+      <StatusIcon kind={icon.kind} progress={icon.progress} />
+      <span className="key mono">{issue.key}</span>
+      <span className="grow cut">{issue.titleSuffix}</span>
+      {needsYou ? <span className="chip you">{youChip}</span> : null}
+      {live ? <LiveChip startedAt={run.startedAt ?? run.createdAt} now={now} /> : null}
+      <span className="st">{statusText}</span>
+      <Avatar name={actor.name} initials={actor.isYou ? t('You').slice(0, 1) : actor.name ? actorInitials(actor.name) : undefined} isYou={actor.isYou} />
+    </a>
+  );
+}
+
+export function WorkView({
+  data,
+  entries,
+  mode,
+  filter,
+  online,
+  onFilter,
+  onMode,
+  onSelect,
+  onNew,
+  onMenu
+}: {
+  data: WorkData;
+  entries: readonly InboxEntry[];
+  mode: WorkMode;
+  filter: string;
+  online: boolean;
+  onFilter(value: string): void;
+  onMode(mode: WorkMode): void;
+  onSelect(issueId: string): void;
+  onNew(): void;
+  onMenu(): void;
+}) {
+  const { locale, t } = usePreferences();
+  const youChip = locale === 'zh-CN' ? '等你' : 'You';
+  const render = useSentence();
+  const roleWords = useRoleWords();
+  const [toggled, setToggled] = useState<Set<string>>(() => new Set());
+  const hasLiveRuns = data.activeRuns.some((run) => ['STARTING', 'RUNNING', 'STOPPING'].includes(run.state));
+  const now = useTick(hasLiveRuns);
+  const byId = useMemo(() => new Map(data.issues.map((issue) => [issue.id, issue])), [data.issues]);
+  const roots = useMemo(() => {
+    const top = data.issues.filter((issue) => !issue.parentId);
+    return [...top.filter((issue) => issue.state !== 'DONE'), ...top.filter((issue) => issue.state === 'DONE')];
+  }, [data.issues]);
+
+  const toggleGroup = (id: string) => {
+    setToggled((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const board = mode === 'board';
+  const boardData = useMemo(() => (board ? boardColumns(data.issues, filter) : null), [board, data.issues, filter]);
+
+  return (
+    <>
+      <header className="bar">
+        <button type="button" className="icon-btn menu-btn" aria-label={t('Open navigation')} onClick={onMenu}>
+          <UiIcon name="menu" />
+        </button>
+        <h1>{t('Work')}</h1>
+        <span className="grow" />
+        <label className="search">
+          <UiIcon name="search" size={14} />
+          <span className="sr-only">{t('Filter')}</span>
+          <input
+            value={filter}
+            placeholder={t('Filter')}
+            aria-label={t('Filter')}
+            onChange={(event) => onFilter(event.target.value)}
+          />
+        </label>
+        <span className="seg" role="group" aria-label={t('View')}>
+          <button type="button" aria-pressed={!board} onClick={() => onMode('list')}>
+            <UiIcon name="list" size={14} />
+            {t('List')}
+          </button>
+          <button type="button" aria-pressed={board} onClick={() => onMode('board')}>
+            <UiIcon name="board" size={14} />
+            {t('Board')}
+          </button>
+        </span>
+        <button type="button" className="btn primary" disabled={!online} onClick={onNew}>
+          <UiIcon name="plus" size={14} />
+          {t('New requirement')}
+        </button>
+      </header>
+      <div className="scroll">
+        {board && boardData ? (
+          <div className="board-wrap">
+            <div className="board">
+              {boardData.columns.map((column) => (
+                <section className="col" key={column.id}>
+                  <h2 className="col-h">
+                    <StatusIcon kind={column.icon} progress={column.progress} />
+                    <span>{column.id === 'done' ? render({ key: 'Done', values: {} }) : t(column.labelKey)}</span>
+                    <span className="col-count">{column.items.length}</span>
+                  </h2>
+                  {column.items.map((issue) => {
+                    const parent = issue.parentId ? byId.get(issue.parentId) : null;
+                    const run = activeRunForIssue(data.activeRuns, issue.id);
+                    const live = run && ['STARTING', 'RUNNING', 'STOPPING'].includes(run.state);
+                    const needsYou = entries.some((entry) => entry.issueId === issue.id && isNeedsYou(entry));
+                    const isRework = ['LEAD_REJECTED', 'QA_REJECTED', 'USER_REJECTED'].includes(issue.state);
+                    const actor = whoActs(issue, data.actors, t('You'));
+                    return (
+                      <a
+                        key={issue.id}
+                        className="bcard"
+                        href={`/w/${encodeURIComponent(issue.workspaceId)}/issues/${encodeURIComponent(issue.id)}`}
+                        onClick={(event) => {
+                          if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                          event.preventDefault();
+                          onSelect(issue.id);
+                        }}
+                      >
+                        <span className="ct">{issue.titleSuffix}</span>
+                        {parent ? <span className="par cut">{parent.titleSuffix}</span> : null}
+                        <span className="cf">
+                          {issue.state === 'LEAD_REVIEW' ? (
+                            <span className="chip">{issue.stage === 'FINAL' ? t('Final') : t('Initial')}</span>
+                          ) : null}
+                          {issue.state === 'USER_ACCEPTANCE' && issue.acceptedDigest ? (
+                            <span className="chip ok">{render({ key: 'Accepted', values: {} })}</span>
+                          ) : null}
+                          {isRework ? <span className="chip rework">{t('Rework')}</span> : null}
+                          {needsYou ? <span className="chip you">{youChip}</span> : null}
+                          {live ? <LiveChip startedAt={run.startedAt ?? run.createdAt} now={now} /> : null}
+                          <Avatar
+                            name={actor.name}
+                            initials={actor.isYou ? t('You').slice(0, 1) : actor.name ? actorInitials(actor.name) : undefined}
+                            isYou={actor.isYou}
+                          />
+                        </span>
+                      </a>
+                    );
+                  })}
+                </section>
+              ))}
+              {boardData.notOnBoard.length ? (
+                <p className="muted board-rest">
+                  {t('Not on the board')}:{' '}
+                  {boardData.notOnBoard.map((issue, index) => (
+                    <span key={issue.id}>
+                      {index > 0 ? ', ' : ''}
+                      <a
+                        className="lnk"
+                        href={`/w/${encodeURIComponent(issue.workspaceId)}/issues/${encodeURIComponent(issue.id)}`}
+                        onClick={(event) => {
+                          if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                          event.preventDefault();
+                          onSelect(issue.id);
+                        }}
+                      >
+                        {issue.titleSuffix} ({render({ key: issue.state === 'ON_HOLD' ? 'On hold' : 'abandoned', values: {} })})
+                      </a>
+                    </span>
+                  ))}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <div className="list">
+            {(() => {
+              const rendered = roots
+                .map((req) => {
+                  const children = data.issues
+                    .filter((child) => child.parentId === req.id)
+                    .filter((child) => matchesFilter(child, filter, req.titleSuffix));
+                  const selfMatch = matchesFilter(req, filter);
+                  if (filter.trim() && !selfMatch && !children.length) return null;
+                  const defaultClosed = req.state === 'DONE' && !filter.trim();
+                  const closed = defaultClosed ? !toggled.has(req.id) : toggled.has(req.id);
+                  const prog = requirementProgress(req.id, data.issues, entries);
+                  const needsYou = entries.some((entry) => entry.issueId === req.id && isNeedsYou(entry));
+                  const statusText = render(issueStatusForWorkspace(req, data, entries, roleWords));
+                  return (
+                    <div key={req.id}>
+                      <div className={`ghead ${closed ? 'closed' : ''}`}>
+                        <button
+                          type="button"
+                          className="tg"
+                          aria-expanded={!closed}
+                          aria-label={`${closed ? t('Expand') : t('Collapse')} ${req.titleSuffix}`}
+                          onClick={() => toggleGroup(req.id)}
+                        >
+                          <UiIcon name="chev" size={14} />
+                        </button>
+                        <a
+                          href={`/w/${encodeURIComponent(req.workspaceId)}/issues/${encodeURIComponent(req.id)}`}
+                          onClick={(event) => {
+                            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                            event.preventDefault();
+                            onSelect(req.id);
+                          }}
+                        >
+                          {req.state === 'DONE' ? <StatusIcon kind="done" /> : <ProgressRing done={prog.done} total={prog.total} />}
+                          <span className="cut">{req.titleSuffix}</span>
+                        </a>
+                        {needsYou ? <span className="chip you">{youChip}</span> : null}
+                        <span className="gm">{prog.total > 0 ? `${prog.done}/${prog.total}` : statusText}</span>
+                      </div>
+                      {!closed
+                        ? children.map((child) => (
+                            <TaskRow
+                              key={child.id}
+                              issue={child}
+                              workspace={data}
+                              entries={entries}
+                              now={now}
+                              onSelect={onSelect}
+                            />
+                          ))
+                        : null}
+                    </div>
+                  );
+                })
+                .filter(Boolean);
+              if (rendered.length) return rendered;
+              return (
+                <div className="center">
+                  <Empty title={data.issues.length ? t('No matching issues') : t('No requirements yet')}>
+                    <p>{data.issues.length ? t('Try another filter.') : t('Create a requirement to get started.')}</p>
+                  </Empty>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function WorkspaceRegistration({ onRegistered }: { onRegistered(workspace: Workspace): void }) {
   const t = useText();
   return (
@@ -168,13 +357,108 @@ export function WorkspaceRegistration({ onRegistered }: { onRegistered(workspace
       <Field label={t('Issue prefix')}>
         <input name="prefix" required pattern="[A-Z][A-Z0-9]{1,9}" maxLength={10} placeholder="APP" />
       </Field>
-      <button className="primary" type="submit">
+      <button className="btn primary" type="submit">
         {t('Register workspace')}
       </button>
     </AsyncForm>
   );
 }
-export function Settings({
+
+const SECTION_TITLE: Record<SettingsSection, string> = {
+  general: 'General',
+  notify: 'Notifications',
+  workspace: 'Workspace',
+  agents: 'Agents',
+  checks: 'Test commands',
+  runs: 'Runs'
+};
+
+const ROLE_LABEL: Record<Actor['role'], string> = {
+  human: 'Owner',
+  lead: 'Lead',
+  pm: 'PM',
+  worker: 'Developer',
+  qa: 'Independent QA'
+};
+
+function GeneralSettings({ onLogout }: { onLogout(): void }) {
+  const { locale, theme, zoom, setLocale, setTheme, setZoom, t } = usePreferences();
+  const themes: [Theme, string][] = [
+    ['system', 'System'],
+    ['light', 'Light'],
+    ['dark', 'Dark']
+  ];
+  return (
+    <div className="slist">
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Language')}</b>
+        </div>
+        <span className="seg" role="group" aria-label={t('Language')}>
+          <button type="button" aria-pressed={locale === 'zh-CN'} onClick={() => setLocale('zh-CN')}>
+            中文
+          </button>
+          <button type="button" aria-pressed={locale === 'en'} onClick={() => setLocale('en')}>
+            English
+          </button>
+        </span>
+      </div>
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Appearance')}</b>
+        </div>
+        <span className="seg" role="group" aria-label={t('Appearance')}>
+          {themes.map(([value, label]) => (
+            <button key={value} type="button" aria-pressed={theme === value} onClick={() => setTheme(value)}>
+              {t(label)}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="srow srow-wrap">
+        <div className="sl">
+          <b id="zoom-label">{t('Zoom')}</b>
+          <small>{t('Hold Ctrl and scroll; Ctrl+0 resets to 100%.')}</small>
+        </div>
+        <div className="zoom-controls">
+          <button type="button" className="btn sm" aria-label={t('Zoom out')} disabled={zoom <= 50} onClick={() => setZoom(zoom - 5)}>
+            −
+          </button>
+          <input
+            type="range"
+            min="50"
+            max="200"
+            step="5"
+            value={zoom}
+            aria-labelledby="zoom-label"
+            aria-valuetext={`${zoom}%`}
+            onChange={(event) => setZoom(Number(event.target.value))}
+          />
+          <button type="button" className="btn sm" aria-label={t('Zoom in')} disabled={zoom >= 200} onClick={() => setZoom(zoom + 5)}>
+            +
+          </button>
+          <output className="mono muted" aria-live="polite">{zoom}%</output>
+          {zoom !== 100 ? (
+            <button type="button" className="btn sm" onClick={() => setZoom(100)}>
+              {t('Reset')}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Session')}</b>
+          <small>{t('Disconnect this browser from the local workspace.')}</small>
+        </div>
+        <button type="button" className="btn" onClick={onLogout}>
+          {t('Sign out')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceSection({
   data,
   onSaved,
   onRegistered
@@ -183,11 +467,170 @@ export function Settings({
   onSaved(): void;
   onRegistered(workspace: Workspace): void;
 }) {
-  const dateText = useDateText();
   const t = useText();
+  const [binding, setBinding] = useState<GitBinding | null>(null);
+  const [showBind, setShowBind] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const firstIssueId = data.issues[0]?.id ?? null;
+
+  useEffect(() => {
+    setBinding(null);
+    if (!data.workspace.gitBindingId || !firstIssueId) return;
+    let active = true;
+    command<{ evidence: GitBinding }>('evidence_get', {
+      workspaceId: data.workspace.id,
+      issueId: firstIssueId,
+      kind: 'git_binding',
+      evidenceId: data.workspace.gitBindingId
+    })
+      .then((result) => {
+        if (active) setBinding(result.evidence);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [data.workspace.id, data.workspace.gitBindingId, firstIssueId]);
+
+  const repoText = binding
+    ? `${binding.repository} (${binding.remote})`
+    : data.workspace.gitBindingId
+      ? t('GitHub repository bound')
+      : data.workspace.commonDir
+        ? t('Not bound; delivered as files.')
+        : t('Not a Git directory; delivered as files.');
+
+  return (
+    <div className="slist">
+      <div className="srow">
+        <div className="sl">
+          <b>{data.workspace.name}</b>
+          <small className="mono">{data.workspace.root}</small>
+        </div>
+      </div>
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Git repository')}</b>
+          <small>{repoText}</small>
+        </div>
+        {data.workspace.commonDir ? (
+          <button type="button" className="btn" onClick={() => setShowBind((value) => !value)}>
+            {data.workspace.gitBindingId ? t('Rebind') : t('Bind')}
+          </button>
+        ) : null}
+      </div>
+      {showBind && data.workspace.commonDir ? (
+        <div className="sform-box">
+          <AsyncForm
+            className="settings-form"
+            onDone={() => {
+              setShowBind(false);
+              onSaved();
+            }}
+            onSave={(form) =>
+              mutation('workspace_git_bind', {
+                workspaceId: data.workspace.id,
+                ...formKey(form),
+                expectedBindingId: data.workspace.gitBindingId ?? null,
+                remote: String(form.get('remote'))
+              })
+            }
+          >
+            <Field label={t('Local Git remote')}>
+              <input name="remote" required defaultValue={binding?.remote ?? 'origin'} />
+            </Field>
+            <button type="submit" className="btn primary">
+              {t('Bind GitHub remote')}
+            </button>
+          </AsyncForm>
+        </div>
+      ) : null}
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Other projects')}</b>
+        </div>
+        <button type="button" className="btn" onClick={() => setShowAdd((value) => !value)}>
+          <UiIcon name="plus" size={14} />
+          {t('Add a workspace')}
+        </button>
+      </div>
+      {showAdd ? (
+        <div className="sform-box">
+          <WorkspaceRegistration
+            onRegistered={(workspace) => {
+              setShowAdd(false);
+              onRegistered(workspace);
+            }}
+          />
+        </div>
+      ) : null}
+      <AuditDetails
+        rows={[
+          ['Workspace ID', data.workspace.id],
+          ['Issue prefix', data.workspace.prefix],
+          ['Git binding', data.workspace.gitBindingId]
+        ]}
+      />
+    </div>
+  );
+}
+
+function AgentsSection({
+  data,
+  online,
+  onSaved
+}: {
+  data: WorkspaceData;
+  online: boolean;
+  onSaved(): void;
+}) {
+  const t = useText();
+  const codeText = useCodeText();
+  const dateText = useDateText();
+  const [wake, setWake] = useState<WakeSettingsData | null>(null);
+  const [wakeBusy, setWakeBusy] = useState(false);
+  const [wakeError, setWakeError] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
   const [credential, setCredential] = useState<{ actor: Actor; token?: string } | null>(null);
   const [copied, setCopied] = useState('');
-  async function copy() {
+
+  const loadWake = useCallback(async () => {
+    try {
+      const result = await command<WakeSettingsData>('wake_settings_get', { workspaceId: data.workspace.id });
+      setWake(result);
+      setWakeError(null);
+    } catch (failure) {
+      setWakeError(failure instanceof ApiError ? failure.code : 'SERVICE_UNAVAILABLE');
+    }
+  }, [data.workspace.id]);
+
+  useEffect(() => {
+    void loadWake();
+  }, [loadWake]);
+
+  async function toggleWake() {
+    if (!wake || wakeBusy || !online) return;
+    setWakeBusy(true);
+    setWakeError(null);
+    try {
+      const result = await mutation<{ settings: WakeSettingsData['settings'] }>('wake_settings_update', {
+        workspaceId: data.workspace.id,
+        expectedVersion: wake.settings.version,
+        enabled: !wake.settings.enabled
+      });
+      setWake((current) => (current ? { ...current, settings: result.settings } : current));
+      onSaved();
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.code === 'VERSION_CONFLICT') {
+        await loadWake();
+      }
+      setWakeError(failure instanceof ApiError ? failure.code : 'SERVICE_UNAVAILABLE');
+    } finally {
+      setWakeBusy(false);
+    }
+  }
+
+  async function copyToken() {
     try {
       await navigator.clipboard.writeText(credential?.token ?? '');
       setCopied('Credential copied.');
@@ -195,42 +638,73 @@ export function Settings({
       setCopied('Select and copy the credential manually.');
     }
   }
+
+  const agents = data.actors.filter((actor) => actor.role !== 'human');
+  const modeByHarness = new Map((wake?.modes ?? []).map((mode) => [mode.harness, mode.fresh]));
+
   return (
-    <div className="settings">
-      <AppearanceSettings />
-      <section>
-        <h2>{t('Workspace')}</h2>
-        <dl className="metadata">
-          <dt>{t('Directory')}</dt>
-          <dd className="mono">{data.workspace.root}</dd>
-          <dt>{t('Workspace ID')}</dt>
-          <dd className="mono">{data.workspace.id}</dd>
-          <dt>{t('Git binding')}</dt>
-          <dd className="mono">{data.workspace.gitBindingId ?? t('Not bound')}</dd>
-        </dl>
-        <details>
-          <summary>{t('Register another workspace')}</summary>
-          <WorkspaceRegistration onRegistered={onRegistered} />
-        </details>
-      </section>
-      <section>
-        <h2>{t('Agents')}</h2>
-        <p className="muted">
-          {t('Roles are workflow identities. Enrolling an agent does not start a model run.')}
+    <div className="slist">
+      {agents.length ? (
+        agents.map((actor) => {
+          const harness = inferAgentHarness(actor, data.connections, data.issues);
+          const verified = harness ? modeByHarness.get(harness) === 'AVAILABLE' : false;
+          return (
+            <div className="srow" key={actor.id}>
+              <div className="sl">
+                <b>{actor.name}</b>
+                <small>
+                  {t(ROLE_LABEL[actor.role])}
+                  {harness ? ` · ${harnessName(harness)}` : ''}
+                </small>
+              </div>
+              <span className={`chip ${verified ? 'ok' : ''}`}>
+                {verified ? t('Can be woken') : t('Wake not verified')}
+              </span>
+            </div>
+          );
+        })
+      ) : (
+        <div className="srow">
+          <div className="sl">
+            <small>{t('No agents enrolled yet.')}</small>
+          </div>
+        </div>
+      )}
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Let agents wake each other')}</b>
+          <small>{t("Uses the other agent's quota. At most 3 times per issue per day, 10 minutes each.")}</small>
+        </div>
+        <button
+          type="button"
+          className="sw"
+          role="switch"
+          disabled={!wake || wakeBusy || !online}
+          aria-checked={Boolean(wake?.settings.enabled)}
+          aria-label={t('Let agents wake each other')}
+          onClick={() => void toggleWake()}
+        />
+      </div>
+      {wakeError ? (
+        <p className="error" role="alert">
+          {codeText(wakeError)}
         </p>
-        <ul className="simple-list">
-          {data.actors.map((actor) => (
-            <li key={actor.id}>
-              <span>{actor.name}</span>
-              <small>{t(actor.role)}</small>
-            </li>
-          ))}
-        </ul>
-        <details>
-          <summary>{t('Enroll an agent')}</summary>
+      ) : null}
+      <div className="srow">
+        <div className="sl" />
+        <button type="button" className="btn" disabled={!online} onClick={() => setShowAdd((value) => !value)}>
+          <UiIcon name="plus" size={14} />
+          {t('Add an agent')}
+        </button>
+      </div>
+      {showAdd ? (
+        <div className="sform-box">
           <AsyncForm
             className="settings-form"
-            onDone={onSaved}
+            onDone={() => {
+              setShowAdd(false);
+              onSaved();
+            }}
             onSave={async (form) => {
               const result = await mutation<{ actor: Actor; token?: string }>('actor_enroll', {
                 workspaceId: data.workspace.id,
@@ -247,61 +721,91 @@ export function Settings({
             </Field>
             <Field label={t('Role')}>
               <select name="role">
-                <option value="worker">{t('Worker')}</option>
+                <option value="worker">{t('Developer')}</option>
                 <option value="qa">{t('Independent QA')}</option>
-                <option value="lead">{t('Product lead')}</option>
+                <option value="lead">{t('Lead')}</option>
                 <option value="pm">{t('PM')}</option>
               </select>
             </Field>
-            <button type="submit">{t('Enroll agent')}</button>
+            <button type="submit" className="btn primary">
+              {t('Enroll agent')}
+            </button>
           </AsyncForm>
-        </details>
-        {credential ? (
-          <div className="credential">
-            <h3>{credential.actor.name}</h3>
-            {credential.token ? (
-              <>
-                <p>{t('Shown once. Keep this scoped credential private.')}</p>
-                <input
-                  aria-label={t('New agent credential')}
-                  type="password"
-                  readOnly
-                  value={credential.token}
-                />
-                <button onClick={() => void copy()}>{t('Copy credential')}</button>
-                <button onClick={() => setCredential(null)}>{t('Hide credential')}</button>
-                <p role="status">{t(copied)}</p>
-              </>
-            ) : (
-              <p>
-                {t(
-                  'Replayed enrollment does not return the credential. Enroll a new identity if the original response was lost.'
-                )}
-              </p>
-            )}
-          </div>
-        ) : null}
-      </section>
-      <section>
-        <h2>{t('Approved test commands')}</h2>
-        <p className="muted">
-          {t(
-            'An independent QA agent selects approved profiles. Commands and arguments are fixed; tests and generated reports belong under .qa.'
+        </div>
+      ) : null}
+      {credential ? (
+        <div className="credential" role="region" aria-label={t('New agent credential')}>
+          <h3>{credential.actor.name}</h3>
+          {credential.token ? (
+            <>
+              <p>{t('Shown once. Keep this scoped credential private.')}</p>
+              <input
+                aria-label={t('New agent credential')}
+                type="password"
+                readOnly
+                value={credential.token}
+              />
+              <div className="abar-row">
+                <button type="button" className="btn primary" onClick={() => void copyToken()}>
+                  {t('Copy credential')}
+                </button>
+                <button type="button" className="btn" onClick={() => setCredential(null)}>
+                  {t('Hide credential')}
+                </button>
+              </div>
+              {copied ? <p role="status">{t(copied)}</p> : null}
+            </>
+          ) : (
+            <p>{t('Replayed enrollment does not return the credential. Enroll a new identity if the original response was lost.')}</p>
           )}
-        </p>
-        {data.profiles.map((profile) => (
-          <details key={profile.id}>
-            <summary>
-              {profile.name} · {profile.criteria.join(', ')}
-            </summary>
-            <JsonView value={profile} />
-          </details>
-        ))}
-        <details>
-          <summary>{t('Approve a check profile')}</summary>
+        </div>
+      ) : null}
+      <AuditDetails
+        rows={[
+          ...agents.map((actor): [string, string] => [actor.name, actor.id]),
+          ...data.connections.map((conn): [string, string] => [
+            `${conn.client.name} (${dateText(conn.initializedAt)})`,
+            conn.actorId
+          ])
+        ]}
+      />
+    </div>
+  );
+}
+
+function ChecksSection({ data, online, onSaved }: { data: WorkspaceData; online: boolean; onSaved(): void }) {
+  const t = useText();
+  const [showAdd, setShowAdd] = useState(false);
+  return (
+    <div className="slist">
+      {data.profiles.map((profile) => (
+        <div className="srow" key={profile.id}>
+          <div className="sl">
+            <b>{profile.name}</b>
+            <small className="mono">{[profile.command, ...profile.args].join(' ')}</small>
+            <small>
+              {profile.criteria.join(', ')} · {Math.round(profile.timeoutMs / 1000)} {t('seconds')}
+            </small>
+          </div>
+        </div>
+      ))}
+      <div className="srow">
+        <div className="sl">
+          <small>{t('Only these commands count as independent QA evidence.')}</small>
+        </div>
+        <button type="button" className="btn" disabled={!online} onClick={() => setShowAdd((value) => !value)}>
+          <UiIcon name="plus" size={14} />
+          {t('Add a command')}
+        </button>
+      </div>
+      {showAdd ? (
+        <div className="sform-box">
           <AsyncForm
             className="settings-form"
-            onDone={onSaved}
+            onDone={() => {
+              setShowAdd(false);
+              onSaved();
+            }}
             onSave={(form) =>
               mutation('check_profile_create', {
                 workspaceId: data.workspace.id,
@@ -332,286 +836,304 @@ export function Settings({
             <Field label={t('Timeout in milliseconds')}>
               <input name="timeout" type="number" min={100} max={300000} defaultValue={30000} required />
             </Field>
-            <button type="submit">{t('Approve profile')}</button>
+            <button type="submit" className="btn primary">
+              {t('Approve profile')}
+            </button>
           </AsyncForm>
-        </details>
-      </section>
-      {data.workspace.commonDir ? (
-        <section>
-          <h2>{t('GitHub repository binding')}</h2>
-          <p className="muted">
-            {t(
-              'Read the chosen remote from the registered project. A changed approved scope must be reset before rebinding.'
-            )}
-          </p>
-          <AsyncForm
-            className="settings-form"
-            onDone={onSaved}
-            onSave={(form) =>
-              mutation('workspace_git_bind', {
-                workspaceId: data.workspace.id,
-                ...formKey(form),
-                expectedBindingId: data.workspace.gitBindingId ?? null,
-                remote: String(form.get('remote'))
-              })
-            }
-          >
-            <Field label={t('Local Git remote')}>
-              <input name="remote" required defaultValue="origin" />
-            </Field>
-            <button type="submit">{t('Bind GitHub remote')}</button>
-          </AsyncForm>
-        </section>
+        </div>
       ) : null}
-      <section>
-        <h2>{t('Harness connections')}</h2>
-        <p className="muted">
-          {t(
-            'Last reported MCP initialization. This does not prove that a connection is currently live or authenticated for inference.'
-          )}
-        </p>
-        {data.connections.length ? (
-          <ul className="simple-list">
-            {data.connections.map((connection) => (
-              <li key={connection.id}>
-                <span>
-                  {connection.client.name} · {connection.client.version}
-                  <small>{dateText(connection.initializedAt)}</small>
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted">
-            {t(
-              'No harness connection reported yet. Use the CLI connection command with an enrolled agent credential.'
-            )}
-          </p>
-        )}
-      </section>
+      {data.profiles.length ? (
+        <AuditDetails rows={data.profiles.map((profile): [string, string] => [profile.name, profile.id])} />
+      ) : null}
     </div>
   );
 }
-export function Runs({
-  workspaceId,
+
+const RUN_STATE_LABEL: Record<Run['state'], [string, string]> = {
+  QUEUED: ['Queued', ''],
+  STARTING: ['Starting', ''],
+  RUNNING: ['Running', ''],
+  STOPPING: ['Stopping', 'warn'],
+  UNCERTAIN: ['Lost', 'crit'],
+  SUCCEEDED: ['Completed', 'ok'],
+  FAILED: ['Failed', 'crit'],
+  CANCELLED: ['Stopped', '']
+};
+
+function RunsSection({
+  data,
   runId,
   online,
-  onSelect
+  onSelectIssue
 }: {
-  workspaceId: string;
-  runId?: string | null;
+  data: WorkspaceData;
+  runId: string | null;
   online: boolean;
-  onSelect(id: string): void;
+  onSelectIssue(issueId: string): void;
 }) {
-  const dateText = useDateText();
   const t = useText();
+  const render = useSentence();
+  const dateText = useDateText();
   const [offset, setOffset] = useState(0);
-  const [data, setData] = useState<{ runs: Run[]; total: number; nextOffset: number | null } | null>(null);
+  const [page, setPage] = useState<{ runs: Run[]; total: number; nextOffset: number | null } | null>(null);
+  const [targeted, setTargeted] = useState<Run | null>(null);
   const [error, setError] = useState('');
-  const [selected, setSelected] = useState<Run | null>(null);
-  const [targetedRun, setTargetedRun] = useState<Run | null>(null);
-  const [targetError, setTargetError] = useState('');
-  const [action, setAction] = useState<'interrupt' | 'reconcile' | null>(null);
+  const [stopping, setStopping] = useState<Run | null>(null);
+  const targetRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    setTargetedRun(null);
-    setTargetError('');
-    setSelected(null);
-    setAction(null);
+    setOffset(0);
+  }, [data.workspace.id]);
+
+  useEffect(() => {
+    setTargeted(null);
     if (!runId) return;
+    let active = true;
+    command<{ run: Run }>('run_get', { workspaceId: data.workspace.id, runId })
+      .then((result) => {
+        if (active) setTargeted(result.run);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [data.workspace.id, runId]);
+
+  useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const result = await command<{ run: Run }>('run_get', { workspaceId, runId });
-        if (active) { setTargetedRun(result.run); setTargetError(''); }
-      } catch (failure) { if (active) setTargetError(errorText(failure)); }
-      finally { if (active) timer = setTimeout(load, 1000); }
-    };
-    void load();
-    return () => { active = false; clearTimeout(timer); };
-  }, [workspaceId, runId]);
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      try {
-        const result = await command<typeof data>('ui_runs', { workspaceId, offset });
-        if (!cancelled) {
-          setData(result);
+        const result = await command<{ runs: Run[]; total: number; nextOffset: number | null }>('ui_runs', {
+          workspaceId: data.workspace.id,
+          offset
+        });
+        if (active) {
+          setPage(result);
           setError('');
         }
       } catch (failure) {
-        if (!cancelled) setError(errorText(failure));
+        if (active) setError(errorText(failure));
       } finally {
-        if (!cancelled) timer = setTimeout(load, 1000);
+        if (active) timer = setTimeout(load, 1500);
       }
     };
     void load();
     return () => {
-      cancelled = true;
+      active = false;
       clearTimeout(timer);
     };
-  }, [workspaceId, offset]);
-  const selection = selected ?? targetedRun;
-  const current = data?.runs.find((run) => run.id === selection?.id) ?? (targetedRun?.id === selection?.id ? targetedRun : selection);
+  }, [data.workspace.id, offset]);
+
+  useEffect(() => {
+    if (runId && targetRef.current) {
+      targetRef.current.scrollIntoView({ block: 'center' });
+    }
+  }, [runId, page, targeted]);
+
+  const runs = useMemo(() => {
+    const list = page?.runs ?? [];
+    if (targeted && !list.some((item) => item.id === targeted.id)) return [targeted, ...list];
+    return list;
+  }, [page, targeted]);
+
+  const issueById = useMemo(() => new Map(data.issues.map((issue) => [issue.id, issue])), [data.issues]);
+  const actorById = useMemo(() => new Map(data.actors.map((actor) => [actor.id, actor.name])), [data.actors]);
+
+  const kindLabel = (kind: Run['kind']) =>
+    kind === 'consult' ? t('Answering') : kind === 'qa' ? t('Independent QA') : t('Development');
+
   return (
-    <div className="runs">
-      {targetError || error ? (
+    <div className="slist">
+      {error ? (
         <p className="error" role="alert">
-          {t(targetError || error)}
+          {t(error)}
         </p>
       ) : null}
-      {data?.runs.length ? (
-        <table>
-          <thead>
-            <tr>
-              <th>{t('Assignment')}</th>
-              <th>{t('Harness')}</th>
-              <th>{t('Run state')}</th>
-              <th>{t('Started')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.runs.map((run) => (
-              <tr key={run.id}>
-                <td>
-                  <button className="text-button" onClick={() => setSelected(run)}>
-                    {run.kind === 'consult' ? t('Consult') : run.kind === 'qa' ? t('QA') : t('Worker')} · {run.id.slice(0, 8)}
-                  </button>
-                </td>
-                <td>{harnessName(run.harness)}</td>
-                <td>
-                  <Status value={run.state} />
-                </td>
-                <td>{dateText(run.startedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {runs.length ? (
+        runs.map((run) => {
+          const issue = issueById.get(run.issueId);
+          const who = actorById.get(run.actorId) ?? t('Agent');
+          const [stateLabel, tone] = RUN_STATE_LABEL[run.state];
+          const live = ['QUEUED', 'STARTING', 'RUNNING', 'STOPPING'].includes(run.state);
+          const resultLine = run.errorCode
+            ? render(runResultSentence(run.errorCode, { harness: harnessName(run.harness) }))
+            : null;
+          const highlighted = runId === run.id;
+          return (
+            <div
+              key={run.id}
+              ref={highlighted ? targetRef : undefined}
+              className={`srow ${highlighted ? 'srow-hi' : ''}`}
+            >
+              <div className="sl">
+                <b>
+                  <a
+                    className="lnk-plain"
+                    href={`/w/${encodeURIComponent(data.workspace.id)}/issues/${encodeURIComponent(run.issueId)}`}
+                    onClick={(event) => {
+                      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      onSelectIssue(run.issueId);
+                    }}
+                  >
+                    {issue ? issue.titleSuffix : t('Open issue')}
+                  </a>
+                </b>
+                <small>
+                  {who} · {harnessName(run.harness)} · {kindLabel(run.kind)} · {dateText(run.startedAt ?? run.createdAt)}
+                </small>
+                {resultLine ? <small>{resultLine}</small> : null}
+              </div>
+              <span className={`chip ${tone}`}>{t(stateLabel)}</span>
+              {live ? (
+                <button type="button" className="btn sm" disabled={!online} onClick={() => setStopping(run)}>
+                  {t('Stop')}
+                </button>
+              ) : null}
+              {run.state === 'UNCERTAIN' ? (
+                <button
+                  type="button"
+                  className="btn sm primary"
+                  disabled={!online}
+                  onClick={() => openDecisionCard(data.workspace.id, run.issueId, 'RUN_RECONCILE')}
+                >
+                  {t('Check the run')}
+                </button>
+              ) : null}
+            </div>
+          );
+        })
       ) : (
-        <Empty title={t('No managed runs')}>
-          <p>{t('Assign a ready issue, then dispatch it from the issue details.')}</p>
-        </Empty>
+        <div className="srow">
+          <div className="sl">
+            <small>{t('No runs recorded yet.')}</small>
+          </div>
+        </div>
       )}
-      <div className="pagination">
-        <span>
-          {data?.total ?? 0}
-          {t(' runs')}
-        </span>
-        <button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 20))}>
-          {t('Previous')}
-        </button>
-        <button disabled={data?.nextOffset == null} onClick={() => setOffset(data!.nextOffset!)}>
-          {t('Next')}
-        </button>
-      </div>
-      {current ? (
-        <section className="run-details">
-          <h2>
-            {t('Run ')}
-            {current.id.slice(0, 8)}
-          </h2>
-          <p>
-            <Status value={current.state} />
-          </p>
-          <button onClick={() => onSelect(current.issueId)}>{t('Open assigned issue')}</button>
-          <dl className="metadata">
-            <dt>{t('Provider session')}</dt>
-            <dd className="mono">{current.providerSessionId ?? t('Not recorded')}</dd>
-            <dt>{t('Execution directory')}</dt>
-            <dd className="mono">{current.executionRoot ?? t('Not prepared')}</dd>
-            <dt>{t('Recorded PID')}</dt>
-            <dd>{current.pid ?? t('Not recorded')}</dd>
-            <dt>{t('Error')}</dt>
-            <dd>{current.errorCode ?? t('None recorded')}</dd>
-            <dt>{t('Run budget')}</dt>
-            <dd>{current.budgetMs ? `${current.budgetMs / 1000} ${t('seconds')}` : t('Applied when reserved')}</dd>
-          </dl>
-          {current.summary ? <pre className="json">{current.summary}</pre> : null}
-          {['QUEUED', 'STARTING', 'RUNNING', 'STOPPING'].includes(current.state) ? (
-            <button
-              disabled={!online}
-              onClick={() => {
-                setSelected(current);
-                setAction('interrupt');
-              }}
-            >
-              {t('Request stop')}
+      {page && (offset > 0 || page.nextOffset !== null) ? (
+        <div className="srow">
+          <div className="sl" />
+          <div className="abar-row">
+            <button type="button" className="btn sm" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 20))}>
+              {t('Previous')}
             </button>
-          ) : null}
-          {current.state === 'UNCERTAIN' ? (
-            <button
-              disabled={!online}
-              onClick={() => {
-                setSelected(current);
-                setAction('reconcile');
-              }}
-            >
-              {t('Reconcile stopped execution')}
+            <button type="button" className="btn sm" disabled={page.nextOffset === null} onClick={() => setOffset(page.nextOffset!)}>
+              {t('Next')}
             </button>
-          ) : null}
-        </section>
+          </div>
+        </div>
       ) : null}
-      {action && selected ? (
-        <Modal
-          title={action === 'interrupt' ? t('Stop managed execution') : t('Reconcile uncertain execution')}
-          subtitle={selected.id}
-          onClose={() => setAction(null)}
-        >
+      {runs.length ? (
+        <AuditDetails
+          rows={runs.flatMap((run): [string, string | number | undefined][] => [
+            [`${kindLabel(run.kind)} (${dateText(run.createdAt)})`, run.id],
+            ...(run.pid ? [[t('Process ID'), run.pid] as [string, number]] : []),
+            ...(run.errorCode ? [[t('Error'), run.errorCode] as [string, string]] : [])
+          ])}
+        />
+      ) : null}
+      {stopping ? (
+        <Modal title={t('Stop run')} onClose={() => setStopping(null)}>
           <AsyncForm
-            onDone={() => setAction(null)}
+            onDone={() => setStopping(null)}
             onSave={(form) =>
-              mutation(action === 'interrupt' ? 'run_interrupt' : 'run_reconcile', {
-                workspaceId,
-                runId: selected.id,
-                expectedVersion: selected.version,
+              mutation('run_interrupt', {
+                workspaceId: data.workspace.id,
+                runId: stopping.id,
+                expectedVersion: stopping.version,
                 ...formKey(form),
-                reason: String(form.get('reason')),
-                ...(action === 'reconcile' ? { confirmStopped: true } : {})
+                reason: String(form.get('reason'))
               })
             }
           >
             <div className="form-body">
-              {action === 'reconcile' ? (
-                <>
-                  <p>
-                    {t(
-                      'Inspect and stop the recorded process and related external execution before confirming. A still-existing provider or test PID blocks reconciliation.'
-                    )}
-                  </p>
-                  <p>
-                    {t('Recorded PID: ')}
-                    {selected.pid ?? t('unavailable')}
-                  </p>
-                  <label className="check-row">
-                    <input type="checkbox" required />
-                    <span>
-                      {t('I have confirmed that this execution and related processes have stopped.')}
-                    </span>
-                  </label>
-                </>
-              ) : (
-                <p>
-                  {t(
-                    'The service requests interruption. STOPPING or UNCERTAIN does not mean the process has stopped.'
-                  )}
-                </p>
-              )}
               <Field label={t('Reason')}>
-                <textarea name="reason" required rows={4} />
+                <textarea name="reason" required rows={3} autoFocus />
               </Field>
             </div>
             <footer className="form-footer">
-              <button type="button" onClick={() => setAction(null)}>
+              <button type="button" className="btn" onClick={() => setStopping(null)}>
                 {t('Cancel')}
               </button>
-              <button type="submit" className="primary">
-                {action === 'interrupt' ? t('Request stop') : t('Confirm stopped')}
+              <button type="submit" className="btn primary">
+                {t('Stop')}
               </button>
             </footer>
           </AsyncForm>
         </Modal>
       ) : null}
     </div>
+  );
+}
+
+export function SettingsView({
+  section,
+  data,
+  runId,
+  online,
+  attention,
+  onSaved,
+  onRegistered,
+  onSelectIssue,
+  onLogout,
+  onMenu
+}: {
+  section: SettingsSection;
+  data: WorkspaceData | null;
+  runId: string | null;
+  online: boolean;
+  attention: ReturnType<typeof useDesktopAttention>;
+  onSaved(): void;
+  onRegistered(workspace: Workspace): void;
+  onSelectIssue(issueId: string): void;
+  onLogout(): void;
+  onMenu(): void;
+}) {
+  const t = useText();
+  return (
+    <>
+      <header className="bar">
+        <button type="button" className="icon-btn menu-btn" aria-label={t('Open navigation')} onClick={onMenu}>
+          <UiIcon name="menu" />
+        </button>
+        <h1>{t('Settings')}</h1>
+      </header>
+      <div className="scroll">
+        <div className="set">
+          <h2>{t(SECTION_TITLE[section])}</h2>
+          {section === 'general' ? <GeneralSettings onLogout={onLogout} /> : null}
+          {section === 'notify' ? <DesktopAttentionSettings attention={attention} /> : null}
+          {section === 'workspace' ? (
+            data ? (
+              <WorkspaceSection data={data} onSaved={onSaved} onRegistered={onRegistered} />
+            ) : (
+              <WorkspaceRegistration onRegistered={onRegistered} />
+            )
+          ) : null}
+          {section === 'agents' ? (
+            data ? (
+              <AgentsSection data={data} online={online} onSaved={onSaved} />
+            ) : (
+              <p className="muted">{t('Create a workspace first.')}</p>
+            )
+          ) : null}
+          {section === 'checks' ? (
+            data ? (
+              <ChecksSection data={data} online={online} onSaved={onSaved} />
+            ) : (
+              <p className="muted">{t('Create a workspace first.')}</p>
+            )
+          ) : null}
+          {section === 'runs' ? (
+            data ? (
+              <RunsSection data={data} runId={runId} online={online} onSelectIssue={onSelectIssue} />
+            ) : (
+              <p className="muted">{t('Create a workspace first.')}</p>
+            )
+          ) : null}
+        </div>
+      </div>
+    </>
   );
 }
