@@ -371,3 +371,64 @@ test('refused CLI commands print one-line JSON with code and remedy on stderr wh
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('command reads input that starts with a UTF-8 byte order mark', { timeout: 20000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agiledev-service-bom-'));
+  const env = fixtureEnvironment(directory);
+  const runStdin = (cliArgs: string[], stdin: Buffer | string, runEnv: NodeJS.ProcessEnv) =>
+    new Promise<{ stdout: string; stderr: string; code: number | null }>((done) => {
+      const child = execFile(process.execPath, [script, ...cliArgs], { env: runEnv, windowsHide: true, timeout: 5000 }, (error: any, stdout, stderr) => {
+        done({ stdout, stderr, code: error ? (typeof error.code === 'number' ? error.code : 1) : 0 });
+      });
+      child.stdin!.end(stdin);
+    });
+  try {
+    await exec(process.execPath, [script, 'service-start'], { env, windowsHide: true });
+    const descriptor = readDescriptor(directory)!;
+    const owner = new LocalClient(descriptor.endpoint, descriptor.ownerToken);
+    const workspace = (await owner.command('workspace_register', { root: directory, name: 'BOM fixture', prefix: 'BOM', idempotencyKey: 'workspace' })).workspace;
+    const lead = await owner.command('actor_enroll', { workspaceId: workspace.id, role: 'lead', name: 'BOM lead', idempotencyKey: 'lead' });
+    const callEnv = { ...env, AGILEDEV_ENDPOINT: descriptor.endpoint, AGILEDEV_TOKEN: lead.token };
+
+    const json = JSON.stringify({ workspaceId: workspace.id });
+    const plainFile = join(directory, 'plain.json');
+    const bomFile = join(directory, 'bom.json');
+    const bomBytes = Buffer.from([0xEF, 0xBB, 0xBF]);
+    writeFileSync(plainFile, json, 'utf8');
+    writeFileSync(bomFile, Buffer.concat([bomBytes, Buffer.from(json, 'utf8')]));
+
+    const plainFileResult = await exec(process.execPath, [script, 'command', 'issue_list', plainFile], { env: callEnv, windowsHide: true, timeout: 5000 });
+    const bomFileResult = await exec(process.execPath, [script, 'command', 'issue_list', bomFile], { env: callEnv, windowsHide: true, timeout: 5000 });
+    assert.equal(bomFileResult.stdout, plainFileResult.stdout);
+
+    const plainStdinResult = await runStdin(['command', 'issue_list', '-'], json, callEnv);
+    const bomStdinResult = await runStdin(['command', 'issue_list', '-'], Buffer.concat([bomBytes, Buffer.from(json, 'utf8')]), callEnv);
+    assert.equal(plainStdinResult.code, 0);
+    assert.equal(bomStdinResult.code, 0);
+    assert.equal(bomStdinResult.stdout, plainStdinResult.stdout);
+    assert.equal(bomStdinResult.stdout, plainFileResult.stdout);
+
+    for (const [name, content] of [
+      ['double-bom.json', Buffer.concat([bomBytes, bomBytes, Buffer.from(json, 'utf8')])],
+      ['inner-bom.json', Buffer.from(`{\uFEFF"workspaceId":${JSON.stringify(workspace.id)}}`, 'utf8')],
+      ['empty.json', Buffer.alloc(0)],
+      ['invalid.json', Buffer.from('{', 'utf8')]
+    ] as const) {
+      const badFile = join(directory, name);
+      writeFileSync(badFile, content);
+      await assert.rejects(
+        exec(process.execPath, [script, 'command', 'issue_list', badFile], { env: callEnv, windowsHide: true, timeout: 5000 }),
+        (error: any) => {
+          assert.equal(error.code, 1, name);
+          assert.equal(error.stdout, '', name);
+          assert.ok(!error.stderr.trim().startsWith('{'), name);
+          assert.ok(error.stderr.trim().length > 0, name);
+          return true;
+        }
+      );
+    }
+  } finally {
+    await stopService(directory);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

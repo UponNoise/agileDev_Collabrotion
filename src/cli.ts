@@ -89,7 +89,8 @@ async function main() {
   if (command === 'command') {
     if (!args[0]) throw new Error('Usage: command <operation> [JSON file|-]; input defaults to stdin');
     const client = await commandClient();
-    const input = JSON.parse(readFileSync(!args[1] || args[1] === '-' ? 0 : args[1], 'utf8'));
+    const text = readFileSync(!args[1] || args[1] === '-' ? 0 : args[1], 'utf8');
+    const input = JSON.parse(text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
     try {
       console.log(JSON.stringify(await client.command(args[0], input), null, 2));
     } catch (error) {
