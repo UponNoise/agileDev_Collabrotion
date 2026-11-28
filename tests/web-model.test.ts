@@ -8,6 +8,7 @@ import {
   UNKNOWN_CODE_KEY,
   allSentenceKeys,
   blockerSentence,
+  channelSentence,
   codeSentence,
   errorSentence,
   hasSentence,
@@ -38,6 +39,36 @@ import {
   listGroup
 } from '../web/decision-model.ts';
 import type { ContentKeyInput, DecisionEntryView } from '../web/decision-model.ts';
+import { joinAuditRows, joinCardState, matchOpenEntry } from '../web/card-model.ts';
+import { historyAuditRow } from '../web/work-model.ts';
+
+test('join card identity and request version survive a changed feed row', () => {
+  const base = { id: 'first', workspaceId: 'a', issueId: '', kind: 'JOIN_REQUEST' as const, target: { requestId: 'request', requestVersion: 1 } };
+  const update = { ...base, id: 'updated', target: { requestId: 'request', requestVersion: 2 } };
+  assert.notEqual(contentKey(base), contentKey(update));
+  assert.equal(matchOpenEntry([update], base), update);
+  assert.equal(matchOpenEntry([{ ...update, target: { ...update.target, requestId: 'different' } }], base), null);
+  const entry = { ...update, target: { issueVersion: 0, revisionHash: null, ...update.target } };
+  assert.equal(joinCardState(entry).issueVersion, 2);
+  assert.deepEqual(joinAuditRows(entry, 'Fixture time'), [['Request ID', 'request'], ['Request version', 2], ['Expires at', 'Fixture time']]);
+  assert.equal(listGroup({ kind: 'JOIN_REQUEST', blocking: false }), 'needs-you');
+});
+
+test('audit channel labels and disabled role names are localized', () => {
+  const expected = { desktop: '桌面', browser: '浏览器', confirmed: '已确认', agent: '智能体',
+    run: '托管运行', system: '服务', owner_credential: '文件凭据', applicant: '加入申请' };
+  for (const [channel, label] of Object.entries(expected))
+    assert.equal(renderSentence(channelSentence(channel), 'zh-CN'), label);
+  assert.equal(renderSentence(channelSentence(undefined), 'zh-CN'), '未记录');
+  const history = { sequence: 2, operation: 'issue_create', actorName: 'Fixture', actorId: 'owner', targetId: 'issue', data: { channel: 'desktop' }, at: '2026-11-28' };
+  const render = (sentence: Sentence) => renderSentence(sentence, 'zh-CN');
+  assert.equal(historyAuditRow(history, render), '#2 issue_create · Fixture · 桌面 (issue)');
+  assert.match(historyAuditRow({ ...history, data: {} }, render), /未记录/);
+  const roleWords = { lead: 'lead', pm: 'PM', dev: 'developer', qa: 'QA' };
+  const disabled = { role: 'pm' as const, name: 'Retired', disabledAt: '2026-11-28' };
+  assert.equal(resolvePartyNames([disabled], null, roleWords).pm, 'PM');
+  assert.equal(resolvePartyNames([disabled, { role: 'pm', name: 'Active' }], null, roleWords).pm, 'Active');
+});
 
 function textOf(parts: readonly InlinePart[]): string {
   return parts
@@ -1528,7 +1559,14 @@ test('sentence coverage collects every source code and requires both languages',
   assert.ok(workflowErrors.includes('EXTERNAL_STOP_CONFIRMED'), 'workflow extraction missed EXTERNAL_STOP_CONFIRMED');
   for (const code of issueBriefBlockers) assertKnown(blockerSentence(code), code);
   for (const code of [...workflow, ...planning, ...scope]) assertKnown(blockerSentence(code), code);
-  for (const code of issueBriefErrors) assertKnown(errorSentence(code), code);
+  const cliAndPublicApiCodes = new Set([
+    'NO_WORKSPACE', 'WORKSPACE_REQUIRED', 'JOIN_REQUEST_PENDING', 'JOIN_REQUEST_REFUSED_RECENTLY',
+    'JOIN_REQUESTS_PENDING_LIMIT', 'JOIN_RATE_LIMIT', 'JOIN_REQUEST_NOT_FOUND', 'OWNER_ALREADY_CLAIMED',
+    'OWNER_CREDENTIAL_MISSING', 'OWNER_CREDENTIAL_PROTECTED', 'SERVICE_RUNNING', 'AGENT_CREDENTIAL_REQUIRED'
+  ]);
+  for (const code of issueBriefErrors) {
+    if (!cliAndPublicApiCodes.has(code)) assertKnown(errorSentence(code), code);
+  }
   for (const code of [...workflowErrors, ...checks, ...git, ...gitVerifier, ...runner, ...adapters, ...execution, ...snapshots, ...consult]) {
     assert.ok(hasSentence(code), `${code} has no sentence`);
     assertKnown(codeSentence(code), code);

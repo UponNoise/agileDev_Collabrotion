@@ -52,6 +52,7 @@ const statusKeys = {
 } as const;
 
 const blockerKeys: Record<string, string> = {
+  ASSIGNEE_DISABLED: 'The developer was disabled; {pm} assigns another',
   RUN_UNCERTAIN: statusKeys.runUncertain,
   UNMANAGED_EXECUTION: 'An unrecorded execution needs your confirmation that it stopped',
   DESIGN_APPROVAL_REQUIRED: 'Waiting for design approval',
@@ -119,6 +120,9 @@ const blockerKeys: Record<string, string> = {
 };
 
 const errorKeys: Record<string, string> = {
+  JOIN_REQUEST_EXPIRED: 'The request has expired; the agent must apply again',
+  ACTOR_DISABLED: 'This agent was disabled',
+  HUMAN_SESSION_REQUIRED: 'Human decisions are made in the desktop app',
   NOT_READY: 'Not ready: {blockers}',
   INVALID_TRANSITION: 'It has already changed',
   RUN_EXISTS: 'A run has not ended; try again later',
@@ -274,8 +278,77 @@ const kindKeys: Record<InboxKind, string> = {
   RUN_RECONCILE: 'Lost run',
   CLOSURE_BLOCKED: 'Waiting to close',
   DEFECT_TRIAGE: 'Problem report',
-  AGENT_QUESTION: 'Agent question'
+  AGENT_QUESTION: 'Agent question',
+  JOIN_REQUEST: 'Join request'
 };
+
+const channelKeys: Record<string, string> = {
+  desktop: 'Desktop', browser: 'Browser', confirmed: 'Confirmed', agent: 'Agent', run: 'Managed run',
+  system: 'Service', owner_credential: 'File credential', applicant: 'Join request',
+};
+
+export function channelSentence(channel: string | undefined): Sentence {
+  if (channel === undefined) return { key: 'Not recorded', values: {} };
+  const key = ownKey(channelKeys, channel);
+  return key ? { key, values: {} } : unknownCodeSentence(channel);
+}
+
+export const joinRoleScope: Record<PartyActor['role'], string> = {
+  lead: 'Writes designs and reviews deliveries. Cannot approve anything for you.',
+  pm: 'Plans tasks, assigns agents and starts runs, which use model quota. Cannot approve anything for you.',
+  worker: 'Implements the tasks assigned to it. Cannot start runs itself.',
+  qa: 'Tests deliveries independently of the developer. Cannot accept anything for you.',
+};
+
+const joinSentences = [
+  "Join request",
+  "{name} asks to join as {role}",
+  "Allow",
+  "Refuse",
+  "Tool (claimed)",
+  "Role scope",
+  "Already in workspace",
+  "Other (not managed)",
+  "Allow only if you just started this agent.",
+  "Writes designs and reviews deliveries. Cannot approve anything for you.",
+  "Plans tasks, assigns agents and starts runs, which use model quota. Cannot approve anything for you.",
+  "Implements the tasks assigned to it. Cannot start runs itself.",
+  "Tests deliveries independently of the developer. Cannot accept anything for you.",
+  "Allowed. {name} can pick up its access for the next 10 minutes.",
+  "Refused.",
+  "This request is no longer pending (decided or expired).",
+  "Request ID",
+  "Request version",
+  "Expires at",
+  "Disable",
+  "Disabled",
+  "Disable {name}?",
+  "It can no longer connect, and its runs are stopped. Tasks assigned to it need another agent. This cannot be undone; to bring it back, it must apply again.",
+  "Reason (optional)",
+  "Added by you",
+  "Joined by request",
+  "Added before join requests",
+  "Owner credential",
+  "Encrypted by your operating system when protected; open the desktop app to protect a file credential.",
+  "Protected",
+  "In file",
+  "Open in a browser",
+  "Show a one-use pairing code for a local browser.",
+  "Show code",
+  "Works once; expires in 5 minutes.",
+  "Open the AgileDev desktop app, then go to Settings → General → Open in a browser to get a one-use code.",
+  "Desktop",
+  "Browser",
+  "Confirmed",
+  "Managed run",
+  "Service",
+  "File credential",
+  "The request has expired; the agent must apply again",
+  "This agent was disabled",
+  "The developer was disabled; {pm} assigns another",
+  "Human decisions are made in the desktop app",
+  "Review the join request",
+];
 
 const rejectionKeys: Record<string, string> = {
   DEFECT: 'Needs fixes',
@@ -293,6 +366,7 @@ export interface PartyNames {
 export interface PartyActor {
   role: 'lead' | 'pm' | 'worker' | 'qa';
   name: string;
+  disabledAt?: string;
 }
 
 export function resolvePartyNames(
@@ -303,7 +377,7 @@ export function resolvePartyNames(
   const pick = (party: keyof PartyNames, role: PartyActor['role']): string => {
     const name = recorded?.[party]?.trim();
     if (name) return name;
-    const matches = actors.filter((actor) => actor.role === role && actor.name.trim());
+    const matches = actors.filter((actor) => actor.role === role && !actor.disabledAt && actor.name.trim());
     return matches.length === 1 ? matches[0]!.name : roleWords[party];
   };
   return { lead: pick('lead', 'lead'), pm: pick('pm', 'pm'), dev: pick('dev', 'worker'), qa: pick('qa', 'qa') };
@@ -399,6 +473,9 @@ export function allSentenceKeys(): string[] {
       ...Object.values(historyKeys),
       ...Object.values(severityKeys),
       ...Object.values(kindKeys),
+      ...Object.values(channelKeys),
+      ...joinSentences,
+      'Agent', 'Not recorded',
       ...Object.values(rejectionKeys),
       UNKNOWN_CODE_KEY
     ])

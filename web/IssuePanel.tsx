@@ -15,6 +15,8 @@ import {
   actorInitials,
   decisionActionVerb,
   enrichHistoryEvents,
+  historyAuditRow,
+  isActiveAgent,
   isActionableEntry,
   issueIconKind,
   issueStatusForPacket,
@@ -337,7 +339,7 @@ export function IssuePanel({
   // Eligible agents for NOTE composer (lead, pm, assigned developer, assigned QA)
   const eligibleRecipients = useMemo(() => {
     const allowed = workspace.actors.filter((actor) => {
-      if (actor.role === 'human') return false;
+      if (!isActiveAgent(actor)) return false;
       if (actor.role === 'lead' || actor.role === 'pm') return true;
       if (actor.role === 'worker' && issue.assignee === actor.id) return true;
       if (actor.role === 'qa' && issue.qaAssignee === actor.id) return true;
@@ -466,7 +468,7 @@ export function IssuePanel({
   };
 
   const singleLead = useMemo(() => {
-    const leads = workspace.actors.filter((actor) => actor.role === 'lead');
+    const leads = workspace.actors.filter((actor) => isActiveAgent(actor) && actor.role === 'lead');
     return leads.length === 1 ? leads[0]!.name : null;
   }, [workspace.actors]);
 
@@ -844,7 +846,7 @@ export function IssuePanel({
                     .reverse()
                     .map((item): [string, string] => [
                       dateText(item.at),
-                      `#${item.sequence} ${item.operation} · ${item.actorName} (${item.targetId})`
+                      historyAuditRow(item, render)
                     ])}
                 />
               </div>

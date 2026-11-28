@@ -32,7 +32,7 @@ export class IssueMessages {
     const unavailable = () => new DomainError('MESSAGE_RECIPIENT_UNAVAILABLE', 'Select an enrolled agent with access to this issue');
     try {
       const actor = this.store.get<Actor>('actor', id);
-      if (actor.role === 'human' || actor.runId || actor.principalId) throw unavailable();
+      if (actor.role === 'human' || actor.runId || actor.principalId || actor.disabledAt) throw unavailable();
       this.store.issue(actor, issue.workspaceId, issue.id);
       return actor;
     } catch (error) {
@@ -52,7 +52,7 @@ export class IssueMessages {
     else if (input.role === 'qa') id = issue.qaAssignee;
     else {
       const candidates = this.store.list<Actor>('actor').filter(actor => actor.role === input.role && !actor.runId &&
-        !actor.principalId && actor.workspaceIds.includes(issue.workspaceId));
+        !actor.principalId && !actor.disabledAt && actor.workspaceIds.includes(issue.workspaceId));
       if (candidates.length > 1) throw new DomainError('MESSAGE_RECIPIENT_AMBIGUOUS', 'Choose a named agent for this role');
       id = candidates[0]?.id;
     }

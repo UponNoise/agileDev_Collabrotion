@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Actor, Workspace } from '../src/contracts';
 import { ApiError, command, errorText, request, setCsrf } from './api';
-import type { IssueData, WorkspaceData } from './api';
+import type { IssueData, UiStatus, WorkspaceData } from './api';
 import { useCodeText, useSentence } from './CardKit';
 import { AsyncForm, Empty, Field, Modal, OnlineContext } from './components';
 import { DecisionPane, DecisionRailList, useDecisionInbox, useDecisionSelection } from './Decisions';
@@ -32,7 +32,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return Boolean(el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)));
 }
 
-function Login({ connected }: { connected(actor: Actor, csrf: string): void }) {
+function Login({ connected, ownerClaimed }: { connected(actor: Actor, csrf: string): void; ownerClaimed: boolean }) {
   const t = useText();
   return (
     <main className="login">
@@ -43,9 +43,9 @@ function Login({ connected }: { connected(actor: Actor, csrf: string): void }) {
         </div>
         <h1>{t('Connect to your workspace')}</h1>
         <p className="dim">
-          {t('Run ')}
-          <code>node dist/cli.js ui</code>
-          {t(' in your local installation, then enter the one-use code.')}
+          {ownerClaimed ? t('Open the AgileDev desktop app, then go to Settings → General → Open in a browser to get a one-use code.') : <>
+            {t('Run ')}<code>node dist/cli.js ui</code>{t(' in your local installation, then enter the one-use code.')}
+          </>}
         </p>
         <AsyncForm
           onSave={async (form) => {
@@ -217,6 +217,7 @@ export function App() {
   const renderSentenceText = useSentence();
   const codeText = useCodeText();
   const [actor, setActor] = useState<Actor | null>(null);
+  const [ownerClaimed, setOwnerClaimed] = useState(false);
   const [initializing, setInitializing] = useState(true);
   const [fatal, setFatal] = useState('');
   const [parsed, setParsed] = useState(() => parseLocation(location.pathname, location.search));
@@ -280,6 +281,7 @@ export function App() {
     if (error instanceof ApiError && error.status === 401) {
       setCsrf(null);
       setActor(null);
+      void request<UiStatus>('/api/ui/status').then(status => setOwnerClaimed(status.ownerClaimed), () => {});
       return true;
     }
     return false;
@@ -320,17 +322,13 @@ export function App() {
 
   // Monitor inbox errors for auth expiry and connectivity
   useEffect(() => {
-    if (inbox.error instanceof ApiError && inbox.error.status === 401) {
-      setCsrf(null);
-      setActor(null);
-      return;
-    }
+    if (expired(inbox.error)) return;
     if (inbox.error && !(inbox.error instanceof ApiError)) {
       markOffline();
     } else if (inbox.data && !inbox.error) {
       if (!workspaceId) markOnline();
     }
-  }, [inbox.error, inbox.data, workspaceId, markOnline, markOffline]);
+  }, [inbox.error, inbox.data, workspaceId, markOnline, markOffline, expired]);
 
   const attentionCount = actor ? inbox.global?.summary.attention : undefined;
   const desktopAttention = useDesktopAttention({
@@ -357,9 +355,11 @@ export function App() {
   // Bootstrap session check
   useEffect(() => {
     let active = true;
-    request<{ authenticated: boolean; actor?: Actor; csrf?: string }>('/api/ui/status')
+    request<UiStatus>('/api/ui/status')
       .then((result) => {
-        if (active && result.authenticated) connected(result.actor!, result.csrf!);
+        if (!active) return;
+        setOwnerClaimed(result.ownerClaimed);
+        if (result.authenticated) connected(result.actor!, result.csrf!);
       })
       .catch((error) => {
         if (active) setFatal(errorText(error));
@@ -727,7 +727,7 @@ export function App() {
             {t(fatal)}
           </p>
         ) : null}
-        <Login connected={connected} />
+        <Login connected={connected} ownerClaimed={ownerClaimed} />
       </>
     );
   }
@@ -747,7 +747,7 @@ export function App() {
   // Contextual Work rail requirements list
   const renderWorkRail = () => {
     if (!currentWorkspaceData) return null;
-    const attentionIssueIds = new Set(allEntries.filter(isNeedsYou).map((entry) => entry.issueId));
+    const attentionIssueIds = new Set(allEntries.filter((entry) => entry.issueId && isNeedsYou(entry)).map((entry) => entry.issueId));
     const hasAttention = (reqId: string) =>
       attentionIssueIds.has(reqId) ||
       currentWorkspaceData.issues.some((child) => child.parentId === reqId && attentionIssueIds.has(child.id));
@@ -978,6 +978,8 @@ export function App() {
               runId={currentRoute.runId}
               online={online}
               attention={desktopAttention}
+              ownerClaimed={ownerClaimed}
+              desktopSession={actor.channel === 'desktop'}
               onSaved={saved}
               onRegistered={registered}
               onSelectIssue={(issueId) =>

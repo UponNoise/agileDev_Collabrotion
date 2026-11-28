@@ -6,13 +6,19 @@ import { z } from 'zod';
 
 export const roles = ['human', 'lead', 'pm', 'worker', 'qa'] as const;
 export type Role = typeof roles[number];
+export const agentRoles = ['lead', 'pm', 'worker', 'qa'] as const;
+export type AgentRole = typeof agentRoles[number];
+export const joinHarnesses = ['codex', 'claude-code', 'dsh', 'other'] as const;
+export type JoinHarness = typeof joinHarnesses[number];
+export const channels = ['desktop', 'browser', 'confirmed', 'agent', 'run', 'system', 'owner_credential', 'applicant'] as const;
+export type Channel = typeof channels[number];
 export const harnesses = ['codex', 'claude-code', 'dsh', 'agy'] as const;
 export type Harness = typeof harnesses[number];
 export const states = ['NOT_STARTED', 'IN_PROGRESS', 'LEAD_REVIEW', 'LEAD_REJECTED', 'QA_TEST', 'QA_REJECTED', 'USER_ACCEPTANCE', 'USER_REJECTED', 'ON_HOLD', 'ABANDONED', 'DONE'] as const;
 export type State = typeof states[number];
-export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED', 'AGENT_QUESTION', 'DEFECT_TRIAGE'] as const;
+export const inboxKinds = ['DESIGN_REVIEW', 'DELIVERY_ACCEPTANCE', 'SCOPE_DECISION', 'RUN_RECONCILE', 'CLOSURE_BLOCKED', 'AGENT_QUESTION', 'DEFECT_TRIAGE', 'JOIN_REQUEST'] as const;
 export type InboxKind = typeof inboxKinds[number];
-export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string }
+export interface Actor { id: string; role: Role; name: string; workspaceIds: string[]; sessionId: string; principalId?: string; runId?: string; channel?: Channel; harness?: JoinHarness; joinedVia?: 'owner' | 'join_request'; joinedAt?: string; disabledAt?: string }
 export interface Workspace { id: string; name: string; root: string; prefix: string; sequence: number; commonDir: string | null; gitBindingId?: string }
 export interface GitBinding { id: string; workspaceId: string; repository: string; subdirectory: string; remote: string; actorId: string; createdAt: string }
 export interface GitRepositoryEntry { repository: string; subdirectory: string; sha: string; url: string }
@@ -113,7 +119,10 @@ export const schemas = {
   ui_runs: z.object({ ...scoped,offset: z.number().int().nonnegative().default(0),limit: z.number().int().min(1).max(100).default(20) }).strict(),
   workspace_git_bind: z.object({ ...scoped, ...mutation, remote: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/).default('origin'), expectedBindingId: id.nullable().default(null) }).strict(),
   connection_list: z.object(scoped).strict(),
-  actor_enroll: z.object({ ...scoped, ...mutation, role: z.enum(['lead', 'pm', 'worker', 'qa']), name: z.string().min(1).max(120) }).strict(),
+  agent_list: z.object({ ...scoped, agentRole: z.enum(agentRoles).optional(), includeDisabled: z.boolean().default(false), limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().nonnegative().default(0) }).strict(),
+  agent_disable: z.object({ ...scoped, ...mutation, actorId: id, reason: z.string().min(1).max(1000).optional() }).strict(),
+  join_request_decide: z.object({ ...scoped, ...mutation, requestId: id, expectedVersion: z.number().int().positive(), decision: z.enum(['APPROVE', 'REFUSE']) }).strict(),
+  actor_enroll: z.object({ ...scoped, ...mutation, role: z.enum(agentRoles), name: z.string().min(1).max(120) }).strict(),
   issue_create: z.object({ ...scoped, ...mutation, parentId: id.optional(), expectedParentVersion: z.number().int().positive().optional(), title: z.string().min(1).max(300), description: z.string().max(65536).default(''), criteria: z.array(id).max(100).default([]), artifactMode: z.enum(['git', 'artifact']).optional(), artifactReason: text.optional() }).strict(),
   issue_get: z.object({ ...target, view: z.enum(['summary','full']).default('summary') }).strict(),
   design_get: z.object({

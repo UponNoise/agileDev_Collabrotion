@@ -7,6 +7,7 @@ import { ApiError, command, errorText, formKey, harnessName, lines, mutation } f
 import type { IssueData, ScopeData, WorkspaceData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
 import { harnessChoices } from './harness-options';
+import { isActiveAgent } from './work-model';
 import { PlanningForm } from './Planning';
 
 type ReviewedMutation = (operation: string, input: object) => Promise<unknown>;
@@ -353,7 +354,7 @@ export function IssueForm({
                   {t('Select an enrolled worker')}
                 </option>
                 {workspace.actors
-                  .filter((a) => a.role === 'worker')
+                  .filter((a) => isActiveAgent(a) && a.role === 'worker')
                   .map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
@@ -403,7 +404,7 @@ export function IssueForm({
                   {t('Select an independent reviewer')}
                 </option>
                 {workspace.actors
-                  .filter((a) => a.role === 'qa')
+                  .filter((a) => isActiveAgent(a) && a.role === 'qa')
                   .map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
@@ -913,7 +914,7 @@ function GrantForm({
                   {t('Select a lead or PM')}
                 </option>
                 {workspace.actors
-                  .filter((actor) => ['lead', 'pm'].includes(actor.role))
+                  .filter((actor) => isActiveAgent(actor) && ['lead', 'pm'].includes(actor.role))
                   .map((actor) => (
                     <option key={actor.id} value={actor.id}>
                       {actor.name} ({t(actor.role)})

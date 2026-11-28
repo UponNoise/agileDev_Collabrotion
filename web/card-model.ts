@@ -1,5 +1,7 @@
 import type { InboxKind, QaReport, State } from '../src/contracts';
 import type { DecisionRiskView, DefectSeverity } from '../src/defect-contracts';
+import type { InboxEntry } from './api';
+import { cardShown } from './decision-model.ts';
 
 export const SEVERITY_ORDER: readonly DefectSeverity[] = ['BLOCKER', 'MAJOR', 'MINOR', 'INFO'];
 
@@ -207,6 +209,7 @@ export interface OpenEntryRef {
     defectId?: string;
     messageId?: string;
     runId?: string;
+    requestId?: string;
   };
 }
 
@@ -216,10 +219,21 @@ export function matchOpenEntry<T extends OpenEntryRef>(entries: readonly T[], op
   return entries.find((entry) => {
     if (entry.workspaceId !== open.workspaceId || entry.issueId !== open.issueId || entry.kind !== open.kind) return false;
     if (open.kind === 'DEFECT_TRIAGE') return !!open.target.defectId && entry.target.defectId === open.target.defectId;
+    if (open.kind === 'JOIN_REQUEST') return !!open.target.requestId && entry.target.requestId === open.target.requestId;
     if (open.kind === 'AGENT_QUESTION') return !!open.target.messageId && entry.target.messageId === open.target.messageId;
     if (open.kind === 'RUN_RECONCILE') return (entry.target.runId ?? null) === (open.target.runId ?? null);
     return true;
   }) ?? null;
+}
+
+export function joinCardState(entry: Pick<InboxEntry, 'id' | 'target'>) {
+  const { requestId, requestVersion } = entry.target;
+  return cardShown({ kind: 'JOIN_REQUEST', entryId: entry.id, issueVersion: requestVersion!, riskHash: null,
+    target: { requestId, requestVersion } });
+}
+
+export function joinAuditRows(entry: Pick<InboxEntry, 'target'>, expiresAt: string): [string, string | number | undefined][] {
+  return [['Request ID', entry.target.requestId], ['Request version', entry.target.requestVersion], ['Expires at', expiresAt]];
 }
 
 export interface InboxNextRef {

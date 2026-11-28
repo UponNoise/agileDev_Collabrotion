@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-export interface ServiceDescriptor { endpoint: string; ownerToken: string; pid: number; instance: string }
+export interface ServiceDescriptor { endpoint: string; ownerToken?: string; stopToken?: string; pid: number; instance: string }
 export interface LaunchOptions { dataDir: string; node: string; script: string; timeoutMs?: number; env?: NodeJS.ProcessEnv }
 export class ServiceError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
@@ -23,8 +23,9 @@ export function readDescriptor(directory: string): ServiceDescriptor | null {
   try {
     const value = JSON.parse(readFileSync(path, 'utf8'));
     const endpoint = new URL(value.endpoint);
-    if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !endpoint.port || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash || !Number.isSafeInteger(value.pid) || value.pid <= 0 || !/^[0-9a-f-]{36}$/i.test(value.instance) || !/^[A-Za-z0-9_-]{43}$/.test(value.ownerToken)) throw new Error();
-    return { endpoint: endpoint.origin, ownerToken: value.ownerToken, pid: value.pid, instance: value.instance };
+    const validToken = (token: unknown) => token === undefined || (typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token));
+    if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !endpoint.port || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash || !Number.isSafeInteger(value.pid) || value.pid <= 0 || !/^[0-9a-f-]{36}$/i.test(value.instance) || !validToken(value.ownerToken) || !validToken(value.stopToken)) throw new Error();
+    return { endpoint: endpoint.origin, ...(value.ownerToken ? { ownerToken: value.ownerToken } : {}), ...(value.stopToken ? { stopToken: value.stopToken } : {}), pid: value.pid, instance: value.instance };
   } catch { throw new ServiceError('INVALID_SERVICE_METADATA', 'The local service descriptor needs inspection; it was not replaced.'); }
 }
 function readLock(directory: string): { pid: number; instance: string } | null {
@@ -78,11 +79,19 @@ export async function ensureService(options: LaunchOptions): Promise<ServiceDesc
   } while (Date.now() < deadline);
   throw new ServiceError('SERVICE_UNAVAILABLE', 'The service did not become available. Inspect its lock, port, and runtime before retrying.');
 }
+export function assertServiceStopped(directory: string, heldPid?: number) {
+  const lock = readLock(directory);
+  const descriptor = readDescriptor(directory);
+  if ((heldPid && processExists(heldPid)) || (lock && processExists(lock.pid)) || (descriptor && processExists(descriptor.pid)))
+    throw new ServiceError('SERVICE_RUNNING', 'Stop the service first: run "node dist/cli.js stop" in the installation folder. 请先停止服务：在安装目录运行 "node dist/cli.js stop"。');
+}
+
 export async function stopService(directory: string, timeoutMs = 25000) {
   const descriptor = readDescriptor(directory);
   if (!descriptor || !processExists(descriptor.pid)) return false;
   if (!await serviceAvailable(descriptor, directory)) throw new ServiceError('SERVICE_UNAVAILABLE', 'The recorded service cannot be stopped through its verified endpoint.');
-  const response = await fetch(`${descriptor.endpoint}/api/service/stop`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { authorization: `Bearer ${descriptor.ownerToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ instance: descriptor.instance }) });
+  if (!descriptor.stopToken) throw new ServiceError('SERVICE_STOP_DENIED', 'The service rejected the stop request.');
+  const response = await fetch(`${descriptor.endpoint}/api/service/stop`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { authorization: `Bearer ${descriptor.stopToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ instance: descriptor.instance }) });
   if (!response.ok) throw new ServiceError('SERVICE_STOP_DENIED', 'The service rejected the stop request.');
   const deadline = Date.now() + timeoutMs;
   while (processExists(descriptor.pid) && Date.now() < deadline) await delay(100);

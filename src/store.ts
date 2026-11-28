@@ -59,7 +59,8 @@ export class Store {
   }
   token(actor: Actor): string {
     const token = randomBytes(32).toString('base64url');
-    this.put('actor', actor);
+    const { channel, ...stored } = actor;
+    this.put('actor', stored);
     this.db.prepare('INSERT INTO credentials(hash,actor_id) VALUES(?,?)').run(hash(token), actor.id);
     return token;
   }
@@ -70,7 +71,9 @@ export class Store {
   authenticate(token: string): Actor {
     const row = this.db.prepare('SELECT actor_id FROM credentials WHERE hash=?').get(hash(token)) as { actor_id: string } | undefined;
     if (!row) throw new DomainError('UNAUTHENTICATED', 'A valid scoped credential is required', 401);
-    return this.get<Actor>('actor', row.actor_id);
+    const actor = this.get<Actor>('actor', row.actor_id);
+    if (actor.disabledAt) throw new DomainError('UNAUTHENTICATED', 'A valid scoped credential is required', 401);
+    return actor;
   }
   revokeActor(id: string) { this.db.prepare('DELETE FROM credentials WHERE actor_id=?').run(id); }
   workspace(actor: Actor, id: string): Workspace {
@@ -91,8 +94,8 @@ export class Store {
     if (actor.role === 'qa' && issue.qaAssignee !== principalId && !this.list<Issue>('issue', workspaceId).some(child => child.parentId === issue.id && child.qaAssignee === principalId)) throw new DomainError('SCOPE_DENIED','QA can only access assigned reviews and their parent context',403);
     return issue;
   }
-  event(workspaceId: string, actor: Actor, operation: string, targetId: string | null, data: unknown) {
-    this.db.prepare('INSERT INTO events(workspace_id,actor_id,operation,target_id,data,at) VALUES(?,?,?,?,?,?)').run(workspaceId, actor.id, operation, targetId, JSON.stringify(data), new Date().toISOString());
+  event(workspaceId: string, actor: Pick<Actor, 'id' | 'channel'>, operation: string, targetId: string | null, data: unknown, now = Date.now()) {
+    this.db.prepare('INSERT INTO events(workspace_id,actor_id,operation,target_id,data,at) VALUES(?,?,?,?,?,?)').run(workspaceId, actor.id, operation, targetId, JSON.stringify({ ...(data as object), channel: actor.channel ?? 'system' }), new Date(now).toISOString());
   }
   close() { this.db.close(); }
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Actor, GitBinding, Run, Workspace } from '../src/contracts';
-import { ApiError, command, errorText, formKey, harnessName, lines, mutation } from './api';
+import { ApiError, command, errorText, formKey, harnessName, lines, mutation, request } from './api';
 import type { DisplayIssue, InboxEntry, WakeSettingsData, WorkspaceData } from './api';
 import { AuditDetails, useCodeText, useSentence } from './CardKit';
 import { AsyncForm, Empty, Field, Modal } from './components';
@@ -17,6 +17,8 @@ import {
   boardColumns,
   formatElapsed,
   inferAgentHarness,
+  isActiveAgent,
+  ROLE_LABEL,
   isNeedsYou,
   issueIconKind,
   issueStatusForWorkspace,
@@ -35,8 +37,9 @@ function useTick(active: boolean) {
   return now;
 }
 
-function whoActs(issue: DisplayIssue, actors: readonly Actor[], youLabel: string): { name: string | null; isYou: boolean } {
+function whoActs(issue: DisplayIssue, allActors: readonly Actor[], youLabel: string): { name: string | null; isYou: boolean } {
   if (issue.state === 'USER_ACCEPTANCE') return { name: youLabel, isYou: true };
+  const actors = allActors.filter(isActiveAgent);
   if (issue.state === 'QA_TEST') {
     return { name: actors.find((actor) => actor.id === issue.qaAssignee)?.name ?? null, isYou: false };
   }
@@ -373,16 +376,23 @@ const SECTION_TITLE: Record<SettingsSection, string> = {
   runs: 'Runs'
 };
 
-const ROLE_LABEL: Record<Actor['role'], string> = {
-  human: 'Owner',
-  lead: 'Lead',
-  pm: 'PM',
-  worker: 'Developer',
-  qa: 'Independent QA'
-};
-
-function GeneralSettings({ onLogout }: { onLogout(): void }) {
+function GeneralSettings({ onLogout, ownerClaimed, desktopSession, online }: {
+  onLogout(): void; ownerClaimed: boolean; desktopSession: boolean; online: boolean;
+}) {
   const { locale, theme, zoom, setLocale, setTheme, setZoom, t } = usePreferences();
+  const codeText = useCodeText();
+  const [pairingCode, setPairingCode] = useState('');
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
+  async function showCode() {
+    setPairingBusy(true);
+    setPairingError(null);
+    setCodeCopied(false);
+    try { setPairingCode((await request<{ code: string }>('/api/ui/pairing', {})).code); }
+    catch (error) { setPairingError(error instanceof ApiError ? error.code : 'SERVICE_UNAVAILABLE'); }
+    finally { setPairingBusy(false); }
+  }
   const themes: [Theme, string][] = [
     ['system', 'System'],
     ['light', 'Light'],
@@ -445,6 +455,33 @@ function GeneralSettings({ onLogout }: { onLogout(): void }) {
           ) : null}
         </div>
       </div>
+      <div className="srow">
+        <div className="sl">
+          <b>{t('Owner credential')}</b>
+          <small>{t('Encrypted by your operating system when protected; open the desktop app to protect a file credential.')}</small>
+        </div>
+        <span className={ownerClaimed ? 'chip ok' : 'chip'}>{t(ownerClaimed ? 'Protected' : 'In file')}</span>
+      </div>
+      {desktopSession ? <>
+        <div className="srow">
+          <div className="sl">
+            <b>{t('Open in a browser')}</b>
+            <small>{t('Show a one-use pairing code for a local browser.')}</small>
+          </div>
+          <button type="button" className="btn sm" disabled={!online || pairingBusy} onClick={() => void showCode()}>{t('Show code')}</button>
+        </div>
+        {pairingCode ? <div className="srow">
+          <div className="sl">
+            <span>{location.origin}</span>
+            <code>{pairingCode}</code>
+            <small>{t('Works once; expires in 5 minutes.')}</small>
+          </div>
+          <button type="button" className="btn sm" onClick={() => {
+            void navigator.clipboard.writeText(pairingCode).then(() => setCodeCopied(true), () => setCodeCopied(false));
+          }}>{t(codeCopied ? 'Copied' : 'Copy')}</button>
+        </div> : null}
+        {pairingError ? <p className="error" role="alert">{codeText(pairingError)}</p> : null}
+      </> : null}
       <div className="srow">
         <div className="sl">
           <b>{t('Session')}</b>
@@ -591,6 +628,7 @@ function AgentsSection({
   const [wakeBusy, setWakeBusy] = useState(false);
   const [wakeError, setWakeError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [disabling, setDisabling] = useState<Actor | null>(null);
   const [credential, setCredential] = useState<{ actor: Actor; token?: string } | null>(null);
   const [copied, setCopied] = useState('');
 
@@ -640,12 +678,14 @@ function AgentsSection({
   }
 
   const agents = data.actors.filter((actor) => actor.role !== 'human');
-  const modeByHarness = new Map((wake?.modes ?? []).map((mode) => [mode.harness, mode.fresh]));
+  const active = agents.filter(isActiveAgent);
+  const disabled = agents.filter(actor => actor.disabledAt);
+  const modeByHarness = new Map<string, string>((wake?.modes ?? []).map((mode) => [mode.harness, mode.fresh]));
 
   return (
     <div className="slist">
-      {agents.length ? (
-        agents.map((actor) => {
+      {active.length ? (
+        active.map((actor) => {
           const harness = inferAgentHarness(actor, data.connections, data.issues);
           const verified = harness ? modeByHarness.get(harness) === 'AVAILABLE' : false;
           return (
@@ -654,22 +694,29 @@ function AgentsSection({
                 <b>{actor.name}</b>
                 <small>
                   {t(ROLE_LABEL[actor.role])}
-                  {harness ? ` · ${harnessName(harness)}` : ''}
+                  {' · '}{harness === 'other' ? t('Other (not managed)') : harnessName(harness)}
                 </small>
               </div>
               <span className={`chip ${verified ? 'ok' : ''}`}>
                 {verified ? t('Can be woken') : t('Wake not verified')}
               </span>
+              <button type="button" className="btn sm" disabled={!online} onClick={() => setDisabling(actor)}>{t('Disable')}</button>
             </div>
           );
         })
-      ) : (
+      ) : disabled.length ? null : (
         <div className="srow">
           <div className="sl">
             <small>{t('No agents enrolled yet.')}</small>
           </div>
         </div>
       )}
+      {disabled.length ? <>
+        <h3 className="muted">{t('Disabled')}</h3>
+        {disabled.map(actor => <div className="srow" key={actor.id}>
+          <div className="sl"><b>{actor.name}</b><small>{t(ROLE_LABEL[actor.role])} · {t('Disabled')} {dateText(actor.disabledAt)}</small></div>
+        </div>)}
+      </> : null}
       <div className="srow">
         <div className="sl">
           <b>{t('Let agents wake each other')}</b>
@@ -762,13 +809,35 @@ function AgentsSection({
       ) : null}
       <AuditDetails
         rows={[
-          ...agents.map((actor): [string, string] => [actor.name, actor.id]),
+          ...agents.map((actor): [string, string] => {
+            const via = t(actor.joinedVia === 'owner' ? 'Added by you' : actor.joinedVia === 'join_request' ? 'Joined by request' : 'Added before join requests');
+            return [`${actor.name} · ${actor.id}`, [actor.id, `${via} · ${dateText(actor.joinedAt)}`,
+              actor.disabledAt ? `${t('Disabled')} ${dateText(actor.disabledAt)}` : null].filter(Boolean).join(' · ')];
+          }),
           ...data.connections.map((conn): [string, string] => [
             `${conn.client.name} (${dateText(conn.initializedAt)})`,
             conn.actorId
           ])
         ]}
       />
+      {disabling ? <Modal title={t('Disable {name}?').replace('{name}', () => disabling.name)} onClose={() => setDisabling(null)}>
+        <AsyncForm
+          onDone={() => { setDisabling(null); onSaved(); }}
+          onSave={(form) => {
+            const reason = String(form.get('reason') ?? '').trim();
+            return mutation('agent_disable', { workspaceId: data.workspace.id, actorId: disabling.id, ...formKey(form), ...(reason ? { reason } : {}) });
+          }}
+        >
+          <div className="form-body">
+            <p>{t('It can no longer connect, and its runs are stopped. Tasks assigned to it need another agent. This cannot be undone; to bring it back, it must apply again.')}</p>
+            <Field label={t('Reason (optional)')}><textarea name="reason" rows={3} maxLength={1000} /></Field>
+          </div>
+          <footer className="form-footer">
+            <button type="button" className="btn" onClick={() => setDisabling(null)}>{t('Cancel')}</button>
+            <button type="submit" className="btn primary" disabled={!online}>{t('Disable')}</button>
+          </footer>
+        </AsyncForm>
+      </Modal> : null}
     </div>
   );
 }
@@ -1073,6 +1142,8 @@ export function SettingsView({
   runId,
   online,
   attention,
+  ownerClaimed,
+  desktopSession,
   onSaved,
   onRegistered,
   onSelectIssue,
@@ -1084,6 +1155,8 @@ export function SettingsView({
   runId: string | null;
   online: boolean;
   attention: ReturnType<typeof useDesktopAttention>;
+  ownerClaimed: boolean;
+  desktopSession: boolean;
   onSaved(): void;
   onRegistered(workspace: Workspace): void;
   onSelectIssue(issueId: string): void;
@@ -1102,7 +1175,7 @@ export function SettingsView({
       <div className="scroll">
         <div className="set">
           <h2>{t(SECTION_TITLE[section])}</h2>
-          {section === 'general' ? <GeneralSettings onLogout={onLogout} /> : null}
+          {section === 'general' ? <GeneralSettings onLogout={onLogout} ownerClaimed={ownerClaimed} desktopSession={desktopSession} online={online} /> : null}
           {section === 'notify' ? <DesktopAttentionSettings attention={attention} /> : null}
           {section === 'workspace' ? (
             data ? (

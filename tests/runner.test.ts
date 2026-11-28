@@ -99,6 +99,69 @@ test('cross-harness dispatch isolates real Git worktrees and requires authentica
   } finally { await f.close(); }
 });
 
+test('disabling a worker stops its controlled run and preserves the assignment', { timeout: 20000 }, async () => {
+  const adapter = new ControlledAdapter();
+  const f = await setup(2, adapter, 1);
+  try {
+    const [job, queued] = f.jobs;
+    const worker = f.store.get<Actor>('actor', job!.actorId);
+    await f.coordinator.start();
+    await waitFor(() => adapter.contexts.length === 1);
+    const client = new LocalClient(adapter.contexts[0]!.endpoint, f.owner.token);
+    const runClient = new LocalClient(adapter.contexts[0]!.endpoint, adapter.contexts[0]!.token);
+    const disable = { workspaceId: f.workspace.id, actorId: worker.id, idempotencyKey: 'disable-worker', reason: 'Fixture retirement' };
+    assert.equal((await client.command('agent_disable', disable)).actor.id, worker.id);
+    await assert.rejects(runClient.request('/api/session'), { code: 'UNAUTHENTICATED' });
+    assert.equal(f.store.get<Run>('run', queued!.id).state, 'CANCELLED');
+    await waitFor(() => f.store.get<Run>('run', job!.id).state === 'CANCELLED');
+    const issue = f.store.get<Issue>('issue', job!.issueId);
+    assert.equal(issue.lease, null);
+    assert.equal(issue.assignee, worker.id);
+    assert.throws(() => f.change('work_dispatch', issue.id, { designId: job!.designId, scopeRevision: issue.scopeRevision }),
+      { code: 'NOT_READY', details: { blockers: ['ASSIGNEE_DISABLED'] } });
+    assert.throws(() => f.change('issue_assign', issue.id, { actorId: worker.id, harness: 'codex' }), { code: 'ACTOR_DISABLED' });
+    const before = f.store.db.prepare('SELECT count(*) AS count FROM receipts').get();
+    assert.ok((await client.command('agent_disable', { ...disable, idempotencyKey: 'disable-again' })).actor.disabledAt);
+    assert.deepEqual(f.store.db.prepare('SELECT count(*) AS count FROM receipts').get(), before);
+    assert.deepEqual(f.store.db.prepare("SELECT count(*) AS count FROM events WHERE operation='agent_disable'").get(), { count: 1 });
+  } finally { await f.close(); }
+});
+
+test('a fake managed Codex run receives scoped credentials in its isolated workspace', { timeout: 20000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agiledev-run-environment-'));
+  const fake = join(directory, 'fake-codex.cjs');
+  writeFileSync(fake, [
+    "const { readdirSync, writeFileSync } = require('node:fs');",
+    "const { AGILEDEV_TOKEN, AGILEDEV_ENDPOINT, AGILEDEV_DATA_DIR, AGILEDEV_GITHUB_TOKEN } = process.env;",
+    "writeFileSync('observed.json', JSON.stringify({ tokenPresent: !!AGILEDEV_TOKEN && AGILEDEV_TOKEN !== 'owner-token-fixture',",
+    "  endpointPresent: !!AGILEDEV_ENDPOINT, dataDirPresent: !!AGILEDEV_DATA_DIR, githubPresent: !!AGILEDEV_GITHUB_TOKEN,",
+    "  files: readdirSync('.').sort() }));",
+    "process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'fixture-environment'}) + '\\n');",
+    "process.stdout.write(JSON.stringify({type:'turn.completed'}) + '\\n');",
+  ].join('\n'));
+  const adapter = new NativeAdapter(() => [{ id: 'codex', command: process.execPath, args: [fake], env: {
+    AGILEDEV_TOKEN: 'owner-token-fixture', AGILEDEV_ENDPOINT: 'owner-endpoint-fixture', AGILEDEV_DATA_DIR: directory,
+    AGILEDEV_GITHUB_TOKEN: 'github-fixture',
+  } }]);
+  const f = await setup(1, adapter);
+  try {
+    writeFileSync(join(directory, 'daemon.json'), '{"fixture":true}');
+    await f.coordinator.start();
+    await waitFor(() => !!f.store.get<Run>('run', f.jobs[0]!.id).finishedAt);
+    const run = f.store.get<Run>('run', f.jobs[0]!.id);
+    const observed = JSON.parse(readFileSync(join(run.executionRoot!, 'observed.json'), 'utf8'));
+    assert.equal(observed.tokenPresent, true);
+    assert.equal(observed.endpointPresent, true);
+    assert.equal(observed.dataDirPresent, false);
+    assert.equal(observed.githubPresent, false);
+    assert.ok(observed.files.includes('source.txt'));
+    assert.ok(!observed.files.includes('daemon.json'));
+  } finally {
+    await f.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('provider success without a submission fails the run and preserves the business gate', { timeout: 20000 }, async () => {
   const adapter = new ControlledAdapter(); const f = await setup(1, adapter);
   try {
