@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Grant, Issue } from '../src/contracts';
 import { ApiError, command, errorText, formKey, harnessName, lines, mutation } from './api';
-import type { IssueData, WorkspaceData } from './api';
+import type { IssueData, ScopeData, WorkspaceData } from './api';
 import { AsyncForm, Field, Modal, Status } from './components';
 import { PlanningForm } from './Planning';
 
@@ -18,6 +18,7 @@ export type IssueDialog = {
     | 'assignment'
     | 'qa'
     | 'transition'
+    | 'restore'
     | 'dispatch'
     | 'git'
     | 'grants'
@@ -34,13 +35,15 @@ export function IssueForm({
   workspace,
   onClose,
   onSaved,
-  onReload
+  onReload,
+  onCreated
 }: {
   dialog: IssueDialog;
   workspace: WorkspaceData;
   onClose(): void;
   onSaved(): void;
   onReload(packet: IssueData): void;
+  onCreated?(issue: Issue): void;
 }) {
   const t = useText();
   const packet = dialog.packet;
@@ -77,10 +80,46 @@ export function IssueForm({
       </button>
     </footer>
   );
+  if (dialog.kind === 'create' && !dialog.parent)
+    return (
+      <Modal title={t('New requirement')} onClose={onClose}>
+        <AsyncForm
+          onDone={done}
+          onSave={async (data) => {
+            const result = await mutation<{ issue: Issue }>('issue_create', {
+              workspaceId: workspace.workspace.id,
+              ...formKey(data),
+              title: String(data.get('title')),
+              description: String(data.get('description') ?? ''),
+              ...(!workspace.workspace.commonDir
+                ? { artifactMode: 'artifact', artifactReason: 'Non-Git workspace delivery' }
+                : {})
+            });
+            onCreated?.(result.issue);
+          }}
+        >
+          <div className="form-body">
+            <Field label={t('Title')}>
+              <input
+                name="title"
+                maxLength={300}
+                required
+                autoFocus
+                placeholder={t('What should this requirement achieve?')}
+              />
+            </Field>
+            <Field label={t('What you want (optional)')}>
+              <textarea name="description" rows={5} />
+            </Field>
+          </div>
+          {footer('Create')}
+        </AsyncForm>
+      </Modal>
+    );
   if (dialog.kind === 'create')
     return (
       <Modal
-        title={dialog.parent ? t('New task') : t('New issue')}
+        title={t('New task')}
         subtitle={dialog.parent?.title}
         onClose={onClose}
       >
@@ -95,10 +134,7 @@ export function IssueForm({
                 : {}),
               title: String(data.get('title')),
               description: String(data.get('description')),
-              criteria: lines(data.get('criteria')),
-              ...(!dialog.parent && data.get('mode') === 'artifact'
-                ? { artifactMode: 'artifact', artifactReason: String(data.get('reason')) }
-                : {})
+              criteria: lines(data.get('criteria'))
             })
           }
         >
@@ -108,21 +144,13 @@ export function IssueForm({
             </p>
             <Field
               label={t('Title')}
-              hint={
-                dialog.parent
-                  ? t('Use [Type] Area: action -> outcome. The parent prefix is added automatically.')
-                  : undefined
-              }
+              hint={t('Use [Type] Area: action -> outcome. The parent prefix is added automatically.')}
             >
               <input
                 name="title"
                 maxLength={300}
                 required
-                placeholder={
-                  dialog.parent
-                    ? t('[Feature] Area: action -> outcome')
-                    : t('What should this requirement achieve?')
-                }
+                placeholder={t('[Feature] Area: action -> outcome')}
               />
             </Field>
             <Field label={t('Requirement description')}>
@@ -134,33 +162,14 @@ export function IssueForm({
             >
               <textarea name="criteria" rows={3} />
             </Field>
-            {!dialog.parent ? (
-              <>
-                <Field label={t('Delivery mode')}>
-                  <select name="mode" defaultValue={workspace.workspace.commonDir ? 'git' : 'artifact'}>
-                    <option value="git" disabled={!workspace.workspace.commonDir}>
-                      {t('Git commit')}
-                    </option>
-                    <option value="artifact">{t('Document or artifact')}</option>
-                  </select>
-                </Field>
-                <Field
-                  label={t('Artifact reason')}
-                  hint={t('Required when using artifact mode in a Git workspace.')}
-                >
-                  <input
-                    name="reason"
-                    defaultValue={workspace.workspace.commonDir ? '' : 'Non-Git workspace delivery'}
-                  />
-                </Field>
-              </>
-            ) : null}
           </div>
-          {footer(dialog.parent ? t('Create task') : t('Create issue'))}
+          {footer(t('Create task'))}
         </AsyncForm>
       </Modal>
     );
   if (!packet || !issue || !root) return null;
+  if (dialog.kind === 'restore')
+    return <RestoreScopeForm issue={issue} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'decomposition')
     return <PlanningForm packet={packet} onClose={onClose} onSaved={onSaved} />;
   if (dialog.kind === 'grants')
@@ -554,6 +563,94 @@ export function IssueForm({
       </Modal>
     );
   return null;
+}
+
+function RestoreScopeForm({
+  issue,
+  onClose,
+  onSaved
+}: {
+  issue: Issue;
+  onClose(): void;
+  onSaved(): void;
+}) {
+  const t = useText();
+  const [data, setData] = useState<ScopeData | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    command<ScopeData>('scope_get', { workspaceId: issue.workspaceId, issueId: issue.id, limit: 100 })
+      .then((result) => {
+        if (active) setData(result);
+      })
+      .catch((failure) => {
+        if (active) setError(errorText(failure));
+      });
+    return () => {
+      active = false;
+    };
+  }, [issue.id, issue.workspaceId]);
+  const target = data?.children.find((child) => child.issue.id === issue.id) ?? null;
+  const parentClosed = !!data && ['DONE', 'ABANDONED'].includes(data.issue.state);
+  return (
+    <Modal title={t('Restore to the scope')} subtitle={issue.key} onClose={onClose}>
+      {error ? (
+        <p className="error" role="alert">
+          {t(error)}
+        </p>
+      ) : null}
+      {!data && !error ? <p className="muted">{t('Loading the current parent and task scope…')}</p> : null}
+      {data && target ? (
+        <AsyncForm
+          onDone={() => {
+            onSaved();
+            onClose();
+          }}
+          onSave={(form) =>
+            mutation('scope_decide', {
+              workspaceId: issue.workspaceId,
+              issueId: issue.id,
+              expectedVersion: target.issue.version,
+              expectedParentVersion: data.issue.version,
+              designId: data.design?.id,
+              expectedDecisionId: target.issue.scopeDecisionId ?? null,
+              scopeHash: data.scopeHash,
+              childScopeHash: target.scopeHash,
+              action: 'RESTORE',
+              replacements: [],
+              reason: String(form.get('reason')),
+              reopenParent: parentClosed ? form.get('reopenParent') === 'on' : false,
+              reopenChild: false,
+              ...formKey(form)
+            })
+          }
+        >
+          <div className="form-body">
+            <p className="muted">
+              {t('It stays abandoned. Decide its scope again afterwards, or reopen it.')}
+            </p>
+            {parentClosed ? (
+              <label className="check-row">
+                <input type="checkbox" name="reopenParent" required />
+                <span>{t('Reopen the closed requirement; its acceptance will be invalidated.')}</span>
+              </label>
+            ) : null}
+            <Field label={t('Reason')}>
+              <textarea name="reason" rows={4} required />
+            </Field>
+          </div>
+          <footer className="form-footer">
+            <button type="button" onClick={onClose}>
+              {t('Cancel')}
+            </button>
+            <button type="submit" className="primary">
+              {t('Restore to the scope')}
+            </button>
+          </footer>
+        </AsyncForm>
+      ) : null}
+    </Modal>
+  );
 }
 
 function RiskEvidence({ risks }: { risks?: IssueData['decisionRisks'] }) {

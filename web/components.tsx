@@ -122,6 +122,14 @@ export function Modal({
       close.current();
     };
     const trap = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.isComposing) {
+        const form = element.querySelector('form');
+        if (form) {
+          event.preventDefault();
+          form.requestSubmit();
+        }
+        return;
+      }
       if (event.key !== 'Tab') return;
       const controls = [
         ...element.querySelectorAll<HTMLElement>(
