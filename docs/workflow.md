@@ -107,6 +107,8 @@ Roles are resolved from a server-issued credential/actor binding. Supplying `rol
 
 A lead reviewer cannot approve implementation produced by that same execution identity. If the product lead also implements a task, assign a different lead-review execution identity for that task. This is separate from the additional worker/QA independence rule.
 
+The service derives an audit channel from authenticated desktop or paired browser sessions, the unclaimed file credential, an agent credential, or a managed execution credential. In-process writes and unauthenticated applications have their own channels. Only identity creation after an approved join uses the confirmed channel. Once the desktop claims the owner credential, its bearer opens sessions and human decisions require a human session.
+
 ## 5. Approval and authorization records
 
 Design approval binds `workspace_id`, `requirement_id`, `design_revision_id`, `content_hash`, human identity, decision, timestamp, and optional explanation. Task execution references that approved revision and its own reviewed scope revision.
@@ -133,7 +135,7 @@ Attention signals (inbox count, window title, taskbar flash and overlay, and ope
 
 ### Local human web session, 2026-11-06
 
-Implementation refinement for FR14/FR16/FR24 and AC04/05/14/26/27/36: the owner runs `agiledev ui` against the local daemon to obtain a one-use pairing code with a five-minute lifetime. The code is entered on the same-origin login page, never in a URL. Owner API credentials are not included in HTML, assets, browser storage, or agent connection configuration. An agent credential cannot create a human pairing code.
+Implementation refinement for FR14/FR16/FR24 and AC04/05/14/26/27/36: the owner obtains a five-minute, one-use pairing code from Settings, General, Open in a browser in the desktop app. Before takeover, an unclaimed development installation can obtain a code with `node dist/cli.js ui`. The code is entered on the same-origin login page, never in a URL. Owner API credentials are not included in HTML, assets, browser storage, or agent connection configuration. An agent credential cannot create a human pairing code.
 
 Pairing creates a distinct human browser actor/session, an eight-hour HttpOnly SameSite=Strict cookie, and a session-bound CSRF value held in JavaScript memory. Browser writes require the exact local Origin plus that CSRF value. Logout revokes the session. Pairing/expiry/reuse and authentication failures cannot create approvals. The local HTTP boundary still cannot isolate a hostile process running as the same OS user.
 

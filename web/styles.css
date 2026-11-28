@@ -703,6 +703,7 @@ dl.plain dd { min-width: 0; overflow-wrap: anywhere; }
   gap: 6px;
 }
 .audit-row { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; align-items: baseline; }
+.join-metadata { display: grid; gap: 8px; }
 .audit-row dt { color: var(--fg-3); }
 .audit-row dd { min-width: 0; overflow-wrap: anywhere; }
 .copyable { display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

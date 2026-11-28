@@ -2,13 +2,16 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Actor, DomainError } from './contracts.js';
 import { Store, hash } from './store.js';
 
+export type SessionKind = 'desktop' | 'browser' | 'owner_credential';
 interface Pairing {
+  kind?: SessionKind;
   id: string;
   actorId: string;
   expiresAt: number;
   usedAt?: number;
 }
 interface BrowserSession {
+  kind?: SessionKind;
   id: string;
   actorId: string;
   expiresAt: number;
@@ -21,12 +24,12 @@ export class WebSessions {
     private store: Store,
     private now = Date.now
   ) {}
-  createPairing(actor: Actor) {
+  createPairing(actor: Actor, kind: SessionKind = 'owner_credential') {
     if (actor.role !== 'human')
       throw new DomainError('ROLE_DENIED', 'Only the local owner can pair a human browser', 403);
     const code = randomBytes(18).toString('base64url');
     const expiresAt = this.now() + 300000;
-    this.store.put<Pairing>('ui_pairing', { id: hash(code), actorId: actor.principalId ?? actor.id, expiresAt });
+    this.store.put<Pairing>('ui_pairing', { id: hash(code), actorId: actor.principalId ?? actor.id, expiresAt, kind });
     return { code, expiresAt };
   }
   pair(code: string) {
@@ -58,10 +61,11 @@ export class WebSessions {
           const cookie = randomBytes(32).toString('base64url');
           const expiresAt = this.now() + 28800000;
           this.store.put('actor', actor);
-          this.store.put<BrowserSession>('ui_session', { id: hash(cookie), actorId: actor.id, expiresAt });
+          const kind = pairing.kind ?? 'owner_credential';
+          this.store.put<BrowserSession>('ui_session', { id: hash(cookie), actorId: actor.id, expiresAt, kind });
           pairing.usedAt = this.now();
           this.store.put('ui_pairing', pairing);
-          return { actor, cookie, expiresAt, csrf: this.csrf(cookie) };
+          return { actor: { ...actor, channel: kind }, cookie, expiresAt, csrf: this.csrf(cookie) };
         })
         .immediate();
     } catch (error) {
@@ -88,7 +92,7 @@ export class WebSessions {
       throw new DomainError('UNAUTHENTICATED', 'The browser session expired; pair again', 401);
     const actor = this.store.get<Actor>('actor', session.actorId);
     if (actor.role !== 'human') throw new DomainError('ROLE_DENIED', 'Human browser authority is unavailable', 403);
-    return actor;
+    return { ...actor, channel: session.kind ?? 'owner_credential' };
   }
   csrf(cookie: string) {
     return hash(`agiledev-ui-csrf-v1:${cookie}`);

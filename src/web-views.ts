@@ -51,6 +51,8 @@ export function workspaceView(
   const activeRuns = store.db.prepare(
     `SELECT data FROM records WHERE kind='run' AND workspace_id=? AND json_extract(data,'$.state') IN (${liveRunStates.map(() => '?').join(',')}) ORDER BY rowid`
   ).all(workspace.id, ...liveRunStates) as { data: string }[];
+  const enrollments = store.db.prepare("SELECT target_id AS id, MIN(at) AS at FROM events WHERE workspace_id=? AND operation='actor_enroll' GROUP BY target_id").all(workspace.id) as { id: string; at: string }[];
+  const enrolledAt = new Map(enrollments.map(({ id, at }) => [id, at]));
   return {
     workspace,
     cursor,
@@ -62,7 +64,8 @@ export function workspaceView(
       const { id, issueId, kind = 'implementation', state, actorId, harness, createdAt, startedAt = null } = JSON.parse(data) as Run;
       return { id, issueId, kind, state, actorId, harness, createdAt, startedAt };
     }),
-    actors: store.list<Actor>('actor').filter((actor) => !actor.runId && actor.workspaceIds.includes(workspace.id)),
+    actors: store.list<Actor>('actor').filter((actor) => !actor.runId && actor.workspaceIds.includes(workspace.id))
+      .map(actor => ({ ...actor, joinedAt: actor.joinedAt ?? enrolledAt.get(actor.id) })),
     profiles: store.list('check_profile', workspace.id),
     connections: store.list('connection', workspace.id),
     designs: store.list<Design>('design', workspace.id).map(({ id, issueId, status }) => ({ id, issueId, status })),

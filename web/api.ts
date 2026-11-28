@@ -1,5 +1,6 @@
 import type {
   Actor,
+  AgentRole,
   CheckProfile,
   CheckRun,
   Coverage,
@@ -10,6 +11,7 @@ import type {
   Harness,
   Issue,
   InboxKind,
+  JoinHarness,
   Plan,
   Run,
   ScopeState,
@@ -26,7 +28,8 @@ export interface InboxSettings {
 type ActorIdentity = Pick<Actor, 'id' | 'name'>;
 export interface InboxEntry {
   id: string; kind: InboxKind; workspaceId: string; workspaceName: string; issueId: string; key: string; title: string; url: string;
-  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string; defectId?: string; defectVersion?: number };
+  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string; defectId?: string; defectVersion?: number; requestId?: string; requestVersion?: number };
+  join?: { requestId: string; name: string; role: AgentRole; harness: JoinHarness; requestedAt: string; expiresAt: string; existing: Pick<Actor, 'id' | 'name' | 'role'>[] };
   question?: { body: string; senderId: string; senderName: string };
   defect?: { key: string; proposedSeverity: DefectSeverity; reporterId: string | null; reporterName: string | null; summary: string; confirmable: boolean };
   pendingBy: ActorIdentity | null;
@@ -34,6 +37,7 @@ export interface InboxEntry {
   blocking: boolean; status: 'WAITING' | 'BLOCKED' | 'READY_TO_COMPLETE'; blockers: string[]; nextAction: string;
   pendingSince: string | null; pendingSequence: number | null; ageMs: number | null; ageProvenance: 'AUDIT_EVENT' | 'UNAVAILABLE'; clockSkew: boolean;
 }
+export interface UiStatus { authenticated: boolean; ownerClaimed: boolean; actor?: Actor; csrf?: string }
 export interface GitEntryView extends GitRepositoryEntry { attempt: GitAttempt | null }
 export type GitSubmissionView = Omit<GitSubmission, 'entries'> & { entries: GitEntryView[] };
 export interface WorkspaceData {

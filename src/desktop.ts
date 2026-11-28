@@ -1,10 +1,11 @@
-import { app, BrowserWindow, dialog, Menu, screen, session, shell } from 'electron';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { app, BrowserWindow, dialog, Menu, screen, session, shell, safeStorage } from 'electron';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
-import { dataDirectory, readDescriptor, serviceAvailable } from './service-launcher.js';
+import { dataDirectory, readDescriptor, serviceAvailable, type ServiceDescriptor } from './service-launcher.js';
 import { desktopClipboardAllowed, desktopCommitLink, isWorkspaceUrl } from './desktop-policy.js';
 import { installDesktopAttention } from './desktop-attention-runtime.js';
 
@@ -27,11 +28,61 @@ function startService() {
   // Spawn the bounded bootstrap before Chromium launches helpers: Windows children inherit their IPC endpoints, and a service holding one keeps this process alive after its window closes.
   return promisify(execFile)(node, [join(serviceRoot, 'dist', 'cli.js'), 'service-start'], { env, windowsHide: true, timeout: 25000, maxBuffer: 65536 });
 }
+const credentialMissing = 'OWNER_CREDENTIAL_MISSING: This desktop app cannot read its saved owner credential. Stop the service, run "node dist/cli.js owner-reset" in the installation folder, then reopen the app. 桌面应用无法读取已保存的所有者凭据。请先停止服务，在安装目录运行 "node dist/cli.js owner-reset"，再重新打开应用。';
+const credentialClaimed = 'OWNER_ALREADY_CLAIMED: The owner credential was already taken over. If it was not this computer\'s desktop app, stop the service, then run "node dist/cli.js owner-reset" in the installation folder. 所有者凭据已被接管。如果不是这台电脑上的桌面应用做的，请先停止服务，再在安装目录运行 "node dist/cli.js owner-reset"。';
+
+function ownerRequest(endpoint: string, path: string, token: string, body?: object) {
+  return fetch(endpoint + path, {
+    method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
+    headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+async function desktopCredential(config: ServiceDescriptor) {
+  const saved = join(profile, 'owner-credential.bin');
+  const pending = saved + '.pending';
+  if (!safeStorage.isEncryptionAvailable()) {
+    if (config.ownerToken) return config.ownerToken;
+    throw new Error(credentialMissing);
+  }
+  const read = (path: string) => {
+    try { return safeStorage.decryptString(readFileSync(path)); } catch { return undefined; }
+  };
+  const accepts = async (token: string | undefined): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const response = await ownerRequest(config.endpoint, '/api/session', token);
+      return response.ok && (await response.json()).actor.channel === 'desktop';
+    } catch { return false; }
+  };
+  const deferred = read(pending);
+  if (config.ownerToken || !existsSync(saved)) {
+    if (deferred && await accepts(deferred)) { renameSync(pending, saved); return deferred; }
+  }
+  const current = read(saved);
+  if (current && await accepts(current)) return current;
+  if (!config.ownerToken) throw new Error(credentialMissing);
+  const token = randomBytes(32).toString('base64url');
+  writeFileSync(pending, safeStorage.encryptString(token), { mode: 0o600 });
+  const response = await ownerRequest(config.endpoint, '/api/owner/claim', config.ownerToken, {
+    credentialHash: createHash('sha256').update(token).digest('hex'),
+  });
+  if (!response.ok) {
+    const { error } = await response.json();
+    if (error?.code === 'OWNER_ALREADY_CLAIMED') throw new Error(credentialClaimed);
+    throw new Error('The desktop could not take over the owner credential. 桌面应用无法接管所有者凭据。');
+  }
+  renameSync(pending, saved);
+  return token;
+}
+
 async function openWorkspace(serviceStart: Promise<unknown>) {
   await serviceStart;
   const config = readDescriptor(directory);
   if (!config || !await serviceAvailable(config, directory)) throw new Error('The local service did not establish a verified endpoint.');
-  const pairing = await fetch(`${config.endpoint}/api/ui/pairing`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { authorization: `Bearer ${config.ownerToken}`, 'content-type': 'application/json' }, body: '{}' });
+  const ownerToken = await desktopCredential(config);
+  const pairing = await ownerRequest(config.endpoint, '/api/ui/pairing', ownerToken, {});
   if (!pairing.ok) throw new Error('The local owner session could not pair this application.');
   const { code } = await pairing.json() as { code: string };
   const login = await fetch(`${config.endpoint}/api/ui/login`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { origin: config.endpoint, 'content-type': 'application/json' }, body: JSON.stringify({ code }) });

@@ -53,7 +53,8 @@ const INBOX_KINDS = new Set<string>([
   'RUN_RECONCILE',
   'CLOSURE_BLOCKED',
   'DEFECT_TRIAGE',
-  'AGENT_QUESTION'
+  'AGENT_QUESTION',
+  'JOIN_REQUEST'
 ]);
 
 function isSettingsSection(value: string | null): value is SettingsSection {

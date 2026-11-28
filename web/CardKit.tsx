@@ -14,6 +14,8 @@ import { usePreferences, useText } from './Preferences';
 import { blockerSentence, codeSentence, renderSentence, resolvePartyNames, severitySentence } from './sentences';
 import type { PartyNames, Sentence, SentenceValues } from './sentences';
 
+import { isActiveAgent } from './work-model';
+
 export interface CardProps {
   entry: InboxEntry;
   gone: boolean;
@@ -25,7 +27,7 @@ export async function partyNames(workspaceId: string, roleWords: PartyNames): Pr
   try {
     const view = await command<WorkspaceData>('ui_workspace', { workspaceId, limit: 1 });
     return resolvePartyNames(
-      view.actors.filter((actor) => actor.role !== 'human') as { role: 'lead' | 'pm' | 'worker' | 'qa'; name: string }[],
+      view.actors.filter(isActiveAgent),
       null,
       roleWords
     );

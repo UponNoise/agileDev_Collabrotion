@@ -7,6 +7,7 @@ import { useCodeText, useSentence } from './CardKit';
 import type { CardProps } from './CardKit';
 import { DefectCard, QuestionCard } from './DefectCard';
 import { DeliveryCard } from './DeliveryCard';
+import { JoinCard } from './JoinCard';
 import { DesignCard } from './DesignCard';
 import { groupEntries } from './decision-model';
 import type { ListGroup } from './decision-model';
@@ -82,6 +83,7 @@ function Card(props: CardProps) {
     case 'CLOSURE_BLOCKED': return <ClosureCard {...props} />;
     case 'DEFECT_TRIAGE': return <DefectCard {...props} />;
     case 'AGENT_QUESTION': return <QuestionCard {...props} />;
+    case 'JOIN_REQUEST': return <JoinCard {...props} />;
   }
 }
 
@@ -94,7 +96,8 @@ const kindIcon: Record<InboxKind, UiIconName> = {
   RUN_RECONCILE: 'alert',
   CLOSURE_BLOCKED: 'lock',
   DEFECT_TRIAGE: 'bug',
-  AGENT_QUESTION: 'chat'
+  AGENT_QUESTION: 'chat',
+  JOIN_REQUEST: 'agent'
 };
 
 export interface DecisionTarget {
@@ -305,15 +308,15 @@ export function DecisionPane({
         {current ? (
           <>
             <div className="crumb">
-              {activeWorkspaceId && current.workspaceId !== activeWorkspaceId ? (
+              {current.kind !== 'JOIN_REQUEST' && activeWorkspaceId && current.workspaceId !== activeWorkspaceId ? (
                 <>
                   <span className="cut">{current.workspaceName}</span>
                   <UiIcon name="chev" size={12} />
                 </>
               ) : null}
-              <b>{current.key}</b>
+              <b className="cut">{current.kind === 'JOIN_REQUEST' ? current.title : current.key}</b>
             </div>
-            <a
+            {current.kind !== 'JOIN_REQUEST' ? <a
               className="btn ghost sm"
               href={`/w/${encodeURIComponent(current.workspaceId)}/issues/${encodeURIComponent(current.issueId)}`}
               onClick={(event) => {
@@ -323,7 +326,7 @@ export function DecisionPane({
               }}
             >
               {t('Open issue')}
-            </a>
+            </a> : null}
             {count > 0 && position >= 0 ? (
               <>
                 <span className="pos">{position + 1} / {count}</span>

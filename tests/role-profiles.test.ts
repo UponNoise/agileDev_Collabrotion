@@ -45,6 +45,11 @@ test('service role denial precedes malformed input, legacy-field handling and re
 test('published role reference is generated from the authoritative registry', () => {
   const reference = readFileSync('docs/local-development.md', 'utf8').replaceAll('\r\n', '\n').split('<!-- B23_PROFILE_REFERENCE_START -->\n')[1]?.split('\n<!-- B23_PROFILE_REFERENCE_END -->')[0];
   assert.equal(reference, agentReference());
+  for (const role of ['lead', 'pm', 'worker', 'qa'] as const) {
+    const tools = toolsForRole(role) as readonly string[];
+    assert.equal(tools.includes('agent_list'), role === 'lead' || role === 'pm');
+    for (const name of ['join', 'join_request_decide', 'agent_disable', 'agent_retire']) assert.ok(!tools.includes(name));
+  }
 });
 
 test('default briefs keep 200 defects compact and point to exact scoped blocking evidence', t => {

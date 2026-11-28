@@ -72,6 +72,7 @@ test('human browser pairing is one-use, origin-bound, cookie-only, CSRF-protecte
     assert.match(cookieHeader, /SameSite=Strict/);
     assert.notEqual(login.json().actor.id, owner.actor.id);
     assert.equal(login.json().actor.principalId, owner.actor.id);
+    assert.equal(login.json().actor.channel, 'owner_credential');
     assert.ok(!JSON.stringify(login.json()).includes(cookie.slice(cookie.indexOf('=') + 1)));
     const reused = await app.inject({
       method: 'POST',

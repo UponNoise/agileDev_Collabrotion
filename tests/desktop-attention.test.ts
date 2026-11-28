@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -162,77 +163,167 @@ test('actual desktop adapter guards IPC, cleans up on close, and only explicit t
   assert.equal(handlers.size, 0);
 });
 
-test('actual desktop startup keeps polling unthrottled without granting renderer privileges or showing early', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'agiledev-desktop-start-'));
-  const originalFetch = globalThis.fetch;
-  const globals = globalThis as any;
-  let options: any; let loadedUrl: string | undefined; let shown = false; let created: any;
-  let complete: (value: void) => void;
-  const loaded = new Promise<void>(resolve => { complete = resolve; });
-  const partition = {
-    setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {},
-    webRequest: { onBeforeRequest() {} }, cookies: { set: async () => {} }
-  };
-  const app = Object.assign(new EventEmitter(), {
-    isPackaged: false, setName() {}, setPath() {}, enableSandbox() {}, quit() {},
-    requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve()
-  });
-  class FixtureWindow extends EventEmitter {
-    webContents = Object.assign(new EventEmitter(), {
-      mainFrame: { url: endpoint }, getURL: () => endpoint,
-      setWindowOpenHandler() {}, send() {}
-    });
-    constructor(input: unknown) { super(); options = input; created = this; }
-    isDestroyed() { return false; }
-    isFocused() { return false; }
-    isMinimized() { return false; }
-    show() { shown = true; }
-    async loadURL(url: string) { loadedUrl = url; complete(); }
-  }
-  globals.__agiledevDesktopStartupFixture = {
-    app, BrowserWindow: FixtureWindow,
-    dialog: { showErrorBox: (_title: string, message: string) => { throw new Error(message); } },
-    Menu: { setApplicationMenu() {} }, screen: { getPrimaryDisplay: () => ({ workArea: { width: 1400, height: 900 } }) },
-    session: { fromPartition: (name: string) => { assert.equal(name, 'persist:agiledev'); return partition; } }, shell: {},
-    dataDirectory: () => directory,
-    readDescriptor: () => ({ endpoint, ownerToken: 'automated-owner-test-fixture' }),
-    serviceAvailable: async () => true,
-    execFile: (_file: string, args: string[], _options: unknown, callback: (error: null, stdout: string, stderr: string) => void) => {
-      assert.equal(args.at(-1), 'service-start'); queueMicrotask(() => callback(null, '', ''));
+test('portable desktop imports are present in its application archive inputs', () => {
+  const script = readFileSync('scripts/package-desktop.mjs', 'utf8');
+  const desktopFiles = script.match(/for \(const file of \[([^\]]+)\]\) cpSync\(join\(compiled, file\), join\(app, 'dist', file\)\)/)?.[1];
+  assert.ok(desktopFiles);
+  const staged = [...desktopFiles.matchAll(/'([^']+)'/g)].map(match => match[1]!);
+  assert.ok(staged.includes('desktop.js'));
+  for (const file of staged) {
+    const code = readFileSync(join('dist', file), 'utf8');
+    for (const [, specifier] of code.matchAll(/\bfrom ['"]([^'"]+)['"]/g)) {
+      assert.ok(specifier === 'electron' || specifier!.startsWith('node:') ||
+        (specifier!.startsWith('./') && staged.includes(specifier!.slice(2))), `${file} imports unstaged ${specifier}`);
     }
-  };
-  const exportSource = (names: string[]) => names.map(name => `export const ${name}=globalThis.__agiledevDesktopStartupFixture.${name};`).join('');
-  const hooks = registerHooks({ resolve(specifier, context, next) {
-    const names = specifier === 'electron' ? ['app', 'BrowserWindow', 'dialog', 'Menu', 'screen', 'session', 'shell']
-      : specifier === 'node:child_process' ? ['execFile']
-      : specifier === './service-launcher.js' && context.parentURL?.includes('/desktop.ts') ? ['dataDirectory', 'readDescriptor', 'serviceAvailable'] : null;
-    return names ? { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(exportSource(names))}` } : next(specifier, context);
-  } });
-  globalThis.fetch = (async (url: string) => ({
-    ok: true,
-    headers: { get: () => `agiledev_ui=${'a'.repeat(43)}; Path=/; HttpOnly` },
-    json: async () => String(url).endsWith('/pairing') ? { code: 'automated-pairing-fixture' } : { expiresAt: Date.now() + 60000 }
-  })) as any;
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    await import('../src/desktop.js');
-    await Promise.race([loaded, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Controlled desktop startup did not reach its workspace')), 3000); })]);
-    assert.equal(loadedUrl, endpoint);
-    assert.equal(options.show, false);
-    assert.equal(shown, false);
-    assert.equal(options.webPreferences.backgroundThrottling, false);
-    assert.equal(options.webPreferences.sandbox, true);
-    assert.equal(options.webPreferences.contextIsolation, true);
-    assert.equal(options.webPreferences.nodeIntegration, false);
-    assert.equal(options.webPreferences.webSecurity, true);
-    assert.equal(options.webPreferences.webviewTag, false);
-    assert.equal(existsSync(options.webPreferences.preload), true);
-    assert.equal(options.webPreferences.preload.endsWith('desktop-preload.cjs'), true);
-  } finally {
-    clearTimeout(timeout);
-    created?.emit('closed');
-    hooks.deregister(); globalThis.fetch = originalFetch;
-    delete globals.__agiledevDesktopStartupFixture;
-    rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('desktop startup protects the credential before exposing a workspace session', async t => {
+  const cases = [
+    { name: 'first claim', file: 'none', encryption: true, descriptor: true, decision: 'accept' },
+    { name: 'claimed saved credential', file: 'saved', encryption: true, descriptor: false, decision: 'accept' },
+    { name: 'interrupted claim after descriptor rewrite', file: 'pending', encryption: true, descriptor: false, decision: 'accept' },
+    { name: 'interrupted claim before descriptor rewrite', file: 'pending', encryption: true, descriptor: true, decision: 'accept' },
+    { name: 'rejected old credential', file: 'stale', encryption: true, descriptor: true, decision: 'accept' },
+    { name: 'claim already taken', file: 'stale', encryption: true, descriptor: true, decision: 'already' },
+    { name: 'encryption unavailable', file: 'none', encryption: false, descriptor: true, decision: 'accept' },
+    { name: 'encrypted credential missing', file: 'none', encryption: true, descriptor: false, decision: 'missing' },
+  ] as const;
+  for (const scenario of cases) await t.test(scenario.name, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'agiledev-desktop-start-'));
+    const originalFetch = globalThis.fetch;
+    const globals = globalThis as any;
+    const profile = join(directory, 'desktop');
+    mkdirSync(profile);
+    const file = join(profile, 'owner-credential.bin');
+    const pending = file + '.pending';
+    const bootstrapToken = 'a'.repeat(43);
+    let accepted = scenario.file === 'pending' || scenario.file === 'saved' ? 'b'.repeat(43) : undefined;
+    const encrypted = new Map<string, string>();
+    const digest = (token: string) => createHash('sha256').update(token).digest('hex');
+    const encryptString = (token: string) => {
+      const hash = digest(token);
+      encrypted.set(hash, token);
+      return Buffer.from(hash, 'hex');
+    };
+    const originalBytes = scenario.file === 'none' ? undefined : encryptString(accepted ?? 'c'.repeat(43));
+    if (originalBytes) writeFileSync(scenario.file === 'pending' ? pending : file, originalBytes);
+    const rejected = scenario.decision !== 'accept';
+    let claimed = false;
+    let errorMessage: string | undefined;
+    let options: any; let loadedUrl: string | undefined; let shown = false; let created: any;
+    let complete: (value: void) => void;
+    const loaded = new Promise<void>(resolve => { complete = resolve; });
+    const partition = {
+      setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {},
+      webRequest: { onBeforeRequest() {} }, cookies: { set: async () => {} }
+    };
+    const app = Object.assign(new EventEmitter(), {
+      isPackaged: false, setName() {}, setPath() {}, enableSandbox() {}, quit() {},
+      requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve()
+    });
+    class FixtureWindow extends EventEmitter {
+      webContents = Object.assign(new EventEmitter(), {
+        mainFrame: { url: endpoint }, getURL: () => endpoint,
+        setWindowOpenHandler() {}, send() {}
+      });
+      constructor(input: unknown) { super(); options = input; created = this; }
+      isDestroyed() { return false; }
+      isFocused() { return false; }
+      isMinimized() { return false; }
+      show() { shown = true; }
+      async loadURL(url: string) { loadedUrl = url; complete(); }
+    }
+    globals.__agiledevDesktopStartupFixture = {
+      app, BrowserWindow: FixtureWindow,
+      dialog: { showErrorBox: (_title: string, message: string) => { errorMessage = message; complete(); } },
+      ipcMain: { handle() {}, removeHandler() {} }, nativeImage: { createFromBitmap: () => ({}) },
+      Menu: { setApplicationMenu() {} }, screen: { getPrimaryDisplay: () => ({ workArea: { width: 1400, height: 900 } }) },
+      safeStorage: {
+        isEncryptionAvailable: () => scenario.encryption, encryptString,
+        decryptString: (bytes: Buffer) => encrypted.get(bytes.toString('hex')),
+      },
+      session: { fromPartition: (name: string) => { assert.equal(name, 'persist:agiledev'); return partition; } }, shell: {},
+      dataDirectory: () => directory,
+      readDescriptor: () => ({ endpoint, ownerToken: scenario.descriptor ? bootstrapToken : undefined }),
+      serviceAvailable: async () => true,
+      execFile: (_file: string, args: string[], _options: unknown, callback: (error: null, stdout: string, stderr: string) => void) => {
+        assert.equal(args.at(-1), 'service-start'); queueMicrotask(() => callback(null, '', ''));
+      }
+    };
+    const exportSource = (names: string[]) => names.map(name => `export const ${name}=globalThis.__agiledevDesktopStartupFixture.${name};`).join('');
+    const hooks = registerHooks({ resolve(specifier, context, next) {
+      const names = specifier === 'electron' ? ['app', 'BrowserWindow', 'dialog', 'Menu', 'screen', 'session', 'shell', 'safeStorage', 'ipcMain', 'nativeImage']
+        : specifier === 'node:child_process' ? ['execFile']
+        : specifier === './service-launcher.js' && context.parentURL?.includes('/desktop.ts') ? ['dataDirectory', 'readDescriptor', 'serviceAvailable'] : null;
+      return names ? { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(exportSource(names))}#${encodeURIComponent(scenario.name)}` } : next(specifier, context);
+    } });
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      const token = new Headers(init?.headers).get('authorization')?.slice(7);
+      if (path === '/api/session') {
+        return token === accepted && !!accepted
+          ? Response.json({ actor: { channel: 'desktop' } })
+          : Response.json({ error: { code: 'UNAUTHENTICATED' } }, { status: 401 });
+      }
+      if (path === '/api/owner/claim') {
+        assert.equal(token, bootstrapToken);
+        assert.ok(!claimed);
+        const bytes = readFileSync(pending);
+        const newToken = encrypted.get(bytes.toString('hex'))!;
+        assert.ok(newToken && !bytes.includes(Buffer.from(newToken)));
+        assert.deepEqual(JSON.parse(String(init?.body)), { credentialHash: digest(newToken) });
+        if (scenario.decision === 'already')
+          return Response.json({ error: { code: 'OWNER_ALREADY_CLAIMED', message: 'Fixture' } }, { status: 409 });
+        claimed = true;
+        accepted = newToken;
+        return Response.json({ ok: true });
+      }
+      if (path === '/api/ui/pairing') {
+        assert.equal(token, accepted ?? bootstrapToken);
+        if (scenario.encryption) {
+          assert.ok(!existsSync(pending));
+          assert.equal(encrypted.get(readFileSync(file).toString('hex')), accepted);
+        }
+        return Response.json({ code: 'automated-pairing-fixture' });
+      }
+      assert.equal(path, '/api/ui/login');
+      return Response.json({ expiresAt: Date.now() + 60000 }, {
+        headers: { 'set-cookie': `agiledev_ui=${'a'.repeat(43)}; Path=/; HttpOnly` },
+      });
+    }) as typeof fetch;
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      const source = new URL('../src/desktop.ts', import.meta.url);
+      source.searchParams.set('scenario', scenario.name);
+      await import(source.href);
+      await Promise.race([loaded, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Controlled desktop startup did not reach its workspace')), 3000); })]);
+      if (rejected) {
+        assert.match(errorMessage ?? '', /node dist\/cli\.js owner-reset/);
+        assert.match(errorMessage ?? '', /所有者凭据/);
+        assert.equal(loadedUrl, undefined);
+        if (scenario.decision === 'already') assert.deepEqual(readFileSync(file), originalBytes);
+        return;
+      }
+      assert.equal(errorMessage, undefined);
+      assert.equal(claimed, scenario.name === 'first claim' || scenario.name === 'rejected old credential');
+      assert.equal(loadedUrl, endpoint);
+      assert.equal(options.show, false);
+      assert.equal(shown, false);
+      assert.equal(options.webPreferences.backgroundThrottling, false);
+      assert.equal(options.webPreferences.sandbox, true);
+      assert.equal(options.webPreferences.contextIsolation, true);
+      assert.equal(options.webPreferences.nodeIntegration, false);
+      assert.equal(options.webPreferences.webSecurity, true);
+      assert.equal(options.webPreferences.webviewTag, false);
+      assert.equal(existsSync(options.webPreferences.preload), true);
+      assert.equal(options.webPreferences.preload.endsWith('desktop-preload.cjs'), true);
+    } finally {
+      clearTimeout(timeout);
+      created?.emit('closed');
+      hooks.deregister(); globalThis.fetch = originalFetch;
+      delete globals.__agiledevDesktopStartupFixture;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

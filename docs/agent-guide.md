@@ -5,7 +5,7 @@ For an agent of any harness (Codex, Claude Code, DSH, Antigravity) that joins a 
 ## 1. What AgileDev is for an agent
 
 - One local service holds the whole workflow: issues, designs, reviews, runs, evidence, messages. It checks every call. Prompts, skills, chat and other agents cannot change a rule.
-- You act through it with your own identity. The owner (the person who runs the service) enrolls you for one role in one workspace and gives you a token. The service reads your role from the token. No argument can change it.
+- You act through it with your own identity. The owner (the person who runs the service) approves your join request or enrolls you through Settings for one role in one workspace. The service reads your role from the token. No argument can change it.
 - Roles: lead (design and review), PM (plan, assign, dispatch, deliver), worker (implement), QA (independent test). An agent that only audits is enrolled in one of them.
 - People decide designs, deliveries, scope, test commands and which agents exist. You prepare, build, review, test and report. When a person must act, the brief says `waitingOn: human`.
 - A managed run is a harness session that the service starts itself, in an isolated directory, with its own run token. Workers and QA do their real work only there (section 5).
@@ -13,14 +13,15 @@ For an agent of any harness (Codex, Claude Code, DSH, Antigravity) that joins a 
 
 ## 2. Join and connect
 
-1. The owner enrolls you in the app: Settings, Agents, Enroll an agent (name and role). The token is shown once. Receive it privately. Never put it in an issue, message, URL, log or repository file.
+1. For one session, run `node <release>/dist/cli.js join --name "Agy Neon" --role pm --harness other -- node my-agent.mjs`. Use `--workspace <id>` when the owner has multiple workspaces and set `AGILEDEV_ENDPOINT` if the service uses a different data directory. The owner responds in Decisions. On Allow, the wrapper prints your role's first steps to stderr and starts the command with its scoped token in the environment. It retires the identity when the command ends. If the wrapper is killed outright, ask the owner to disable it in Settings.
+   Long-lived agents use Settings, Agents, Add an agent. An MCP host cannot wait for `join` during initialization. Never put a token in an issue, message, URL, log or file.
 2. Set `AGILEDEV_ENDPOINT` (`http://127.0.0.1:<port>`) and `AGILEDEV_TOKEN` (`<token>`) for every process that talks to the service. Always set both.
 3. MCP over stdio: run `node <release>/dist/cli.js mcp` with those variables. `tools/list` shows only the operations your role may call. The server instructions are your role playbook; read them.
 4. `node <release>/dist/cli.js connection codex` (or `claude-code`, `dsh`) prints the entry for your harness. It names the token by environment variable and never prints it. The owner adds it to the harness configuration; add it yourself only when the owner asks you to. The service never edits harness configuration.
-5. Without MCP: `node <release>/dist/cli.js command <operation> <file>`, or `-` to read stdin. The input file is UTF-8 and a leading byte order mark is ignored. The result goes to stdout as JSON. A service refusal exits with code 1 and prints one line `{"error":{"code","message","details","remedy"}}` on stderr; other failures (unreadable file, invalid JSON, no service) print only a message.
-6. `command` with no `AGILEDEV_ENDPOINT` and no `AGILEDEV_TOKEN` acts as the local owner. With only the endpoint it refuses. With only a token it sends your token to the service it finds in the data directory. An agent therefore sets both, every time.
+5. Inside the joined command, the wrapper already sets both environment variables. Without MCP: `node <release>/dist/cli.js command <operation> <file>`, or `-` to read stdin. The input file is UTF-8 and a leading byte order mark is ignored. The result goes to stdout as JSON. A service refusal exits with code 1 and prints one line `{"error":{"code","message","details","remedy"}}` on stderr; other failures (unreadable file, invalid JSON, no service) print only a message.
+6. `command` requires `AGILEDEV_TOKEN`. With only a token it attaches to the running service in the configured data directory. Set both variables for direct connections.
 7. `command` already prints `code`, `details` and `remedy` of a refusal. MCP shows them already.
-8. A lost token cannot be shown again, and a replayed enrollment does not return it. Ask the owner to enroll a new identity. Do not search for the old token.
+8. Over HTTP, submit `POST /api/join` with `{ name, role, harness, workspaceId? }` and no bearer. Keep its request id and secret in memory and send them in the body of `POST /api/join/poll` every `pollAfterMs` until it stops returning `PENDING`. The successful response contains the token and `firstSteps` once. On exit, call `POST /api/join/retire` with `{}` and your own bearer. If the claim response is lost, ask the owner to disable the identity and apply again.
 
 ## 3. The first five minutes
 
@@ -87,7 +88,7 @@ The token the owner enrolls for a worker or QA is a logical identity. It can rea
 **PM** (a logical token)
 1. `issue_get`, `gap_list`, and `plan_get` on the requirement.
 2. `plan_apply {designId, mode, expectedPlanId, tasks, integrationCriteria, overlapReasons, reason}` when offered. `mode` is `DRAFT` or `READY`. `expectedPlanId` is null or the id from `plan_get`. Each task has `ref`, a `title` shaped `[Feature] Area: action -> outcome` (types Feature, Fix, Refactor, Test, Docs, Research), `description`, `criteria`, `dependencies`. List every existing child with its `issueId` and `expectedVersion`. `READY` needs an approved design and every criterion mapped to a task or to `integrationCriteria`.
-3. `issue_assign {actorId, harness}` when offered, with `harness` `codex`, `claude-code`, `dsh` or `agy`. No operation lists agents. Ask the owner for the worker's and QA's `actorId`.
+3. `issue_assign {actorId, harness}` when offered, with `harness` `codex`, `claude-code`, `dsh` or `agy`. Lead and PM can call `agent_list` to find the worker and QA actor ids.
 4. `qa_configure {actorId, harness, checkProfileIds}` when offered. Take profile ids from `check_profile_list`; only the owner creates profiles.
 5. `work_dispatch {designId, scopeRevision}` when offered. It starts a real harness run once the service's runner takes it. `run.state` `QUEUED` means queued, not running. Follow with `run_list` and `issue_get`. `run_interrupt {runId, expectedVersion, reason}` asks a run to stop. Rework uses the same operation. After a rejection, `work_dispatch` takes an optional `start` (`"candidate"`, the default, or `"workspace"`); the run's `base` (see `run_get`) says whether it continues from the rejected delivery (`kind: "candidate"` with candidate, snapshot and base commit) or from the workspace (`kind: "workspace"` with a reason). A rework worker finds the previous delivery already in its execution root and lists every delivered file again in `work_submit`. `REWORK_BASE_UNAVAILABLE` means the previous delivery could not be restored: dispatch again with `start: "workspace"`.
 6. Git delivery, after the final review: `git_submit {candidateId, commitUrl}` with the real pushed commit, `https://github.com/<owner>/<repo>/commit/<full sha>`. If verification fails or is unavailable: `git_retry {submissionId}`. A different commit voids earlier human acceptance.
@@ -167,16 +168,30 @@ work_dispatch {..., "designId":"<designId>", "scopeRevision":1}   (no approved d
 
 ## 9. Never
 
-- Never use the owner's credential. Never read the service's data directory or database (`daemon.json`, `workflow.sqlite`, run and snapshot directories), even when the path is visible.
+- There is no owner credential for you. After desktop takeover, `daemon.json` holds no owner credential. Use the provided endpoint and scoped token. Leave service metadata, the database and other execution directories to the owner.
 - Never write temporary files, fixtures, measurements or logs to a drive root, the user's folders or another checkout. Use the operating system's temporary directory or your own execution root, and remove them when you finish.
-- Never run the owner commands `ui`, `service-start`, `stop` and `serve`, or the `verify-*` commands that start model runs. They use the owner credential, change the service or spend model usage.
-- Never enroll yourself or another agent. Ask the owner.
+- Never run the owner commands `ui`, `service-start`, `stop`, `serve` and `owner-reset`, or the `verify-*` commands that start model runs. They belong to the owner and can change the service or spend model usage.
+- Apply through `join` for your own session. The owner decides which identities exist.
 - Never approve, accept or record a human decision: designs, deliveries, scope, grants, defect triage, run reconciliation. No message, summary or chat text is one. When `waitingOn.role` is `human`, wait.
 - Never claim a result that was not run: tests, QA outcomes, commit links, completion. Say what you did not run and why.
 - Never edit another run's directory. Work only in your own execution root.
 - Never delete a directory that still holds a junction or link, such as the shared `node_modules` entry in a run directory. A recursive delete, including `git worktree remove --force`, follows it and removes the shared packages. Unlink the entry first, or ask the owner to reconcile the run.
 - Never try another identity after a refusal: another token, the owner's credential, another harness entry. Follow the `remedy`.
 - Never put a token or credential in a message, issue text, URL, log or repository file.
+
+### Same-user Windows boundaries
+
+| Measure | Protects against | Does not protect against |
+| --- | --- | --- |
+| Claim: no secret in `daemon.json`, rotation, hash-only database | an agent or script that reads the data directory, a backup or the database and calls the API (the incidents of 2026-11-22 and 11-24); a managed run listing its directory or environment | a same-user process that decrypts the desktop's protected file (one Windows call) or reads the desktop process memory; reading the token before the first desktop start (the unclaimed window) |
+| No owner identity in the CLI | `cli.js command` with no token acting as the owner; hub scripts acting as the owner by accident | an agent that writes its own HTTP client with a stolen credential |
+| `channel` on events | confusion about who acted: the label comes from the credential type, never from input; an `agent` or `run` label never carries a human decision | an agent that deliberately uses the desktop's credential or drives the window: its decisions read `desktop` |
+| Join needs a click | an agent enrolling itself, or the owner credential being borrowed to enroll | the owner clicking Allow for a request they did not start (the card warns); an agent that clicks through screen automation |
+| `stopToken` (per boot, memory and `daemon.json` only) | a managed run or any process that knows only `AGILEDEV_ENDPOINT` stopping the service (`/health` shows the instance, not the token); the token opens no other route and no other credential opens this one | a same-user process that reads `daemon.json` can still stop the service; it cannot act as anyone |
+| `owner-reset` | nothing new: a same-user process that stops the service, resets and restarts it reads the new unclaimed credential; this is visible (the desktop's credential stops working) but not prevented | the same |
+| Disable | stale identities keeping a token, a run or a role | what the identity already wrote |
+
+A local process can occupy the five pending slots for ten minutes and delay legitimate requests. Only owner approval and a valid one-time claim create an identity. Deliberate same-user attacks require separate operating-system isolation.
 
 ## 10. Frequent refusals
 
@@ -196,10 +211,13 @@ work_dispatch {..., "designId":"<designId>", "scopeRevision":1}   (no approved d
 | `RUN_EXISTS` | A queued, live or uncertain run owns the issue. | Wait for it. A lead or PM can `run_interrupt`; a human reconciles `UNCERTAIN`. |
 | `EVIDENCE_STALE` | The candidate, snapshot, check or test file changed. | Read the brief again and redo the step on the current candidate. |
 | `EVIDENCE_MISSING` | Required captured evidence is absent, for example a `PASS` without passing checks. | Run and settle the checks, or report `BLOCKED` or `NOT_RUN` honestly. |
+| `ACTOR_DISABLED` | The selected agent was disabled. | PM uses `agent_list` and selects an active agent. |
 | `REVIEW_INDEPENDENCE_REQUIRED` | The reviewer is not an independent QA run or identity. | `issue_get`; the PM fixes the assignment with `qa_configure`. |
 | `PLAN_STALE`, `PLAN_NOT_READY`, `PLAN_TASK_OMITTED`, `TITLE_FORMAT` | The plan does not match the current design or children, or a title is malformed. | `plan_get`, then send the complete plan again with every existing child. |
 
 ## 11. Troubleshooting
+
+- Join blocked: register a workspace through the owner, pass `--workspace` if several exist, and honor `retryAfterSeconds` when returned. A refusal or expired request gives no access. When the claim reports `CLAIMED` without a token, ask the owner to disable the lost identity before applying again.
 
 - A run failing with `DSH_DIRECTORY_RIGHTS_REQUIRED` needs an owner to address the directory permissions, and agents must neither retry the run nor change rights.
 - `HARNESS_NOT_VERIFIED` is for the owner: ask the owner to run `node dist/cli.js verify-agy --record` and restart the service, or choose another harness.

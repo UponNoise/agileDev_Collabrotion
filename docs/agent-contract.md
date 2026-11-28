@@ -2,6 +2,8 @@
 
 Status: historical P0 API design proposal (sections 1–6) plus accepted R2 specification (section 10). For the current implemented agent API, tool schemas, error shape, and role profiles, read [the agent guide](agent-guide.md) (authoritative source: `src/contracts.ts`, `src/agent-profiles.ts`, `src/issue-brief.ts`).
 
+Implemented ADC-0009 subset. Lead and PM can call `agent_list` for scoped identities. Human sessions can decide with `join_request_decide` and disable with `agent_disable`. Local applicants use `POST /api/join` and `POST /api/join/poll`, then retire their own joined identity through `POST /api/join/retire`. The join and retire routes are outside the MCP catalog. New events carry a `channel` in event data. The per-boot stop token authorizes only the service stop route.
+
 ## 1. Tool design principles
 
 - Return the smallest useful work packet, legal next actions, and precise blocker reasons.

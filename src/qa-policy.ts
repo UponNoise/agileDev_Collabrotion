@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { inside } from './paths.js';
 import { currentPlan, isAggregate, planChildren, planCoverage } from './planning.js';
+import { isDisabled } from './identities.js';
 import { inScopeChildren, scopeState } from './scope.js';
 
 export function candidateSnapshot(store: Store, issue: Issue) {
@@ -42,7 +43,7 @@ export function validateIntegration(store: Store, issue: Issue) {
   return current;
 }
 export function queueQa(store: Store, issue: Issue) {
-  if (!issue.qaAssignee || !issue.qaHarness || !issue.checkProfileIds?.length) return null;
+  if (!issue.qaAssignee || !issue.qaHarness || !issue.checkProfileIds?.length || isDisabled(store, issue.qaAssignee)) return null;
   const snapshot = candidateSnapshot(store,issue);
   validateIntegration(store,issue);
   if (store.list<Run>('run',issue.workspaceId).some(r => r.issueId === issue.id && ownsIssueExecution(r))) throw new DomainError('RUN_EXISTS','Reconcile live execution before QA dispatch');

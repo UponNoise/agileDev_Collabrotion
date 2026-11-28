@@ -1,9 +1,11 @@
-import { Actor, Design, DomainError, InboxKind, Issue, Run, Workspace, inboxKinds, type AcknowledgedMinor } from './contracts.js';
+import { Actor, Design, DomainError, InboxKind, Issue, Run, Workspace, inboxKinds, type AcknowledgedMinor, type AgentRole, type JoinHarness } from './contracts.js';
 import { scopeState, taskScopeHash } from './scope.js';
 import { canonical, hash, Store } from './store.js';
 import { IssueMessages } from './messages.js';
 import type { DefectRecord, DefectSeverity } from './defect-contracts.js';
 import { briefText } from './issue-brief.js';
+
+import { pendingJoinRequests } from './join.js';
 
 export { inboxKinds } from './contracts.js';
 export type { InboxKind } from './contracts.js';
@@ -23,7 +25,8 @@ export interface InboxPolicy {
 }
 export interface InboxEntry {
   id: string; kind: InboxKind; workspaceId: string; workspaceName: string; issueId: string; key: string; title: string; url: string;
-  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string; defectId?: string; defectVersion?: number };
+  target: { issueVersion: number; revisionHash: string | null; designId?: string; designHash?: string; candidateId?: string | null; digest?: string | null; runId?: string; runVersion?: number; fence?: number; parentId?: string; parentVersion?: number; decisionId?: string | null; messageId?: string; defectId?: string; defectVersion?: number; requestId?: string; requestVersion?: number };
+  join?: { requestId: string; name: string; role: AgentRole; harness: JoinHarness; requestedAt: string; expiresAt: string; existing: Pick<Actor, 'id' | 'name' | 'role'>[] };
   question?: { body: string; senderId: string; senderName: string };
   defect?: { key: string; proposedSeverity: DefectSeverity; reporterId: string | null; reporterName: string | null; summary: string; confirmable: boolean };
   pendingBy: ActorIdentity | null;
@@ -213,10 +216,10 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
   let loadedHistory: History | undefined;
   const history = () => loadedHistory ??= new History(store, workspace);
   const entries: InboxEntry[] = [];
-  const append = (issue: Issue, kind: InboxKind, target: InboxEntry['target'], epoch: Epoch | null, blocking: boolean, nextAction: string, blockers: string[] = [], status: InboxEntry['status'] = 'WAITING') => {
+  const append = (issue: Issue | null, kind: InboxKind, target: InboxEntry['target'], epoch: Epoch | null, blocking: boolean, nextAction: string, blockers: string[] = [], status: InboxEntry['status'] = 'WAITING') => {
     const since = epoch?.at ?? null; const clockSkew = since !== null && Date.parse(since) > now;
-    const title = issue.parentId ? `${store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue.title;
-    const entry: InboxEntry = { id: hash(canonical({ workspaceId: workspace.id, issueId: issue.id, kind, identity: target.runId ?? target.messageId ?? target.defectId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue.id, key: issue.key, title, url: `/w/${workspace.id}/issues/${issue.id}`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, pendingBy: actorIdentity(store, epoch?.actorId), ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew };
+    const title = issue?.parentId ? `${store.get<Issue>('issue', issue.parentId).title}——${issue.title}` : issue?.title ?? '';
+    const entry: InboxEntry = { id: hash(canonical({ workspaceId: workspace.id, issueId: issue?.id ?? '', kind, identity: target.requestId ?? target.runId ?? target.messageId ?? target.defectId ?? target.revisionHash ?? null, pendingSequence: epoch?.sequence ?? null })), kind, workspaceId: workspace.id, workspaceName: workspace.name, issueId: issue?.id ?? '', key: issue?.key ?? '', title, url: issue ? `/w/${workspace.id}/issues/${issue.id}` : `/?workspace=${encodeURIComponent(workspace.id)}&view=decisions`, target, blocking, status, blockers: [...new Set(blockers)], nextAction, pendingSince: since, pendingSequence: epoch?.sequence ?? null, pendingBy: issue ? actorIdentity(store, epoch?.actorId) : null, ageMs: since === null ? null : Math.max(0, now - Date.parse(since)), ageProvenance: since === null ? 'UNAVAILABLE' : 'AUDIT_EVENT', clockSkew };
     entries.push(entry);
     return entry;
   };
@@ -254,12 +257,21 @@ function collect(store: Store, workspace: Workspace, policy: InboxPolicy, now: n
   }
   const byId = new Map(issues.map(issue => [issue.id, issue]));
   if (includeOwnerItems) {
+    for (const request of pendingJoinRequests(store, workspace.id, now)) {
+      const audit = history().for(request.id).find(event => event.operation === 'agent_join_requested');
+      const entry = append(null, 'JOIN_REQUEST', { issueVersion: 0, revisionHash: null, requestId: request.id, requestVersion: request.version }, history().epoch(audit), false, 'join_request_decide');
+      const existing = store.list<Actor>('actor').filter(actor => actor.role !== 'human' && !actor.principalId && !actor.runId && !actor.disabledAt &&
+        actor.workspaceIds.includes(workspace.id) && (actor.role === request.role || actor.name.toLowerCase() === request.name.toLowerCase()))
+        .slice(0, 5).map(({ id, name, role }) => ({ id, name, role }));
+      entry.title = request.name;
+      entry.join = { requestId: request.id, name: request.name, role: request.role, harness: request.harness, requestedAt: request.createdAt, expiresAt: request.expiresAt, existing };
+    }
     for (const question of new IssueMessages(store).ownerQuestions(workspace.id)) {
       const issue = byId.get(question.issueId);
-      if (!issue) continue;
+      const sender = store.get<Actor>('actor', question.sender.principalId);
+      if (!issue || sender.disabledAt) continue;
       const audit = history().for(question.id).find(event => event.operation === 'message_sent' && event.data?.issueId === issue.id);
       const entry = append(issue, 'AGENT_QUESTION', { issueVersion: issue.version, revisionHash: null, messageId: question.id }, history().epoch(audit), false, 'message_send');
-      const sender = store.get<Actor>('actor', question.sender.principalId);
       entry.question = { body: question.body, senderId: sender.id, senderName: sender.name };
     }
     const proposals = store.db.prepare(`
@@ -299,7 +311,7 @@ export function inboxList(store: Store, actor: Actor, query: InboxQuery, policy:
   const counts = (entries: InboxEntry[]) => ({
     total: entries.length,
     blocking: entries.filter(entry => entry.blocking).length,
-    attention: entries.filter(entry => entry.blocking || entry.kind === 'AGENT_QUESTION' || entry.defect?.confirmable === true).length,
+    attention: entries.filter(entry => entry.blocking || entry.kind === 'AGENT_QUESTION' || entry.kind === 'JOIN_REQUEST' || entry.defect?.confirmable === true).length,
     byKind: Object.fromEntries(inboxKinds.map(kind => [kind, entries.filter(entry => entry.kind === kind).length]))
   });
   const filtered = all.filter(entry => query.kind === undefined || entry.kind === query.kind).sort((a, b) => Number(b.blocking) - Number(a.blocking) || Number(a.pendingSince !== null) - Number(b.pendingSince !== null) || (a.pendingSince !== null && b.pendingSince !== null ? Date.parse(a.pendingSince) - Date.parse(b.pendingSince) : 0) || a.workspaceId.localeCompare(b.workspaceId) || a.id.localeCompare(b.id));

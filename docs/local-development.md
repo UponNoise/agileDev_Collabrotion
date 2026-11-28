@@ -4,7 +4,7 @@ Source development requires Node 24.9+ and Git. The current implementation is a 
 
 ## Desktop application
 
-Run `npm run desktop` to build and open the desktop workspace. It starts or attaches to the user-scoped loopback service, then obtains a distinct human session through the existing one-use pairing flow. The renderer has no Node integration, privileged preload, or owner API credential. Opening the application does not approve any design or delivery. Closing the window exits the shell and leaves the service available to MCP clients.
+Run `npm run desktop` to build and open the desktop workspace. It starts or attaches to the user-scoped loopback service, takes over the owner credential using Electron `safeStorage`, and obtains a distinct human session through the one-use pairing flow. The renderer has no Node integration, privileged preload, or owner API credential. Opening the application does not approve any design or delivery. Closing the window exits the shell and leaves the service available to MCP clients.
 
 `npm run package:desktop` compiles current TypeScript and Vite sources into fresh private staging, builds a Windows x64 portable application under a unique `release/build-*` directory, and records the successful package path and app archive hash in ignored `release/latest.json`. Existing root `dist` files are not distribution inputs. It installs production service dependencies in private staging and rebuilds SQLite for the service runtime. The Node archive is fetched from nodejs.org at the exact build Node version, checked against its official SHA-256, and bundled with its license. Electron is pinned separately. The application directory contains `AgileDev.exe` and `resources/service/`; keep that directory intact. No project data or harness credentials belong in the package. Release publication, signing, licensing of this project's own source, fresh-machine installation, and update/removal acceptance remain separate gates.
 
@@ -14,7 +14,7 @@ The packaged MCP/CLI entry uses `resources/service/runtime/node.exe` with `resou
 
 Persistent service startup belongs to the desktop or explicit owner `serve`, `service-start`, and `ui` entries. Ordinary `command`, `connection`, and `mcp` entries only discover and attach; an absent/dead service returns `SERVICE_OWNER_START_REQUIRED` without spawning a process. MCP requires an explicit agent token and never inherits owner authority. Native Codex testing showed that a service born under an MCP host could disappear when that host exited gracefully; an independently owner-prestarted service survived the same host lifecycle. This is why harnesses do not own persistent startup. After a service crash, explicitly restart it through an owner entry before reconnecting. Generated data-directory configurations discover the replacement endpoint without being rewritten.
 
-`service-start` is a bounded launcher that prints only endpoint/PID/instance metadata. The desktop uses it through the bundled Node runtime so Electron does not directly own the long-lived service child. It creates that bootstrap during main-script evaluation, after the single-instance lock and before Chromium launches helper processes. The author attributes the earlier exit hang to inherited Chromium IPC endpoints. Author drills report 157-164 ms desktop exits; Claude's `8177b83` separately reports a clean-environment independent-agent drill with five exits in 138-151 ms. The independent source review verifies startup/error paths and package equivalence; W0-1 preserves that proof but did not locate or audit those native drivers/logs or reproduce their timings. See the implementation status for evidence boundaries. A live/unverifiable lock, foreign descriptor, identity mismatch, or version mismatch prevents unsafe replacement. A transaction in `daemon-control.sqlite` serializes competing launchers; owner restart preserves workflow records and lets the coordinator reconcile uncertain runs. Use `node dist/cli.js stop` (or its packaged equivalent) for owner-authorized graceful shutdown. Browser sessions and agents cannot invoke service shutdown; closing an app window is intended to leave agent work available, independently of desktop process exit. Clipboard writes are limited to the trusted workspace main frame; canonical HTTPS GitHub full-SHA commit evidence opens in the system browser through a narrow main-process handler. Other permissions, popups, and external navigation remain denied.
+`service-start` is a bounded launcher that prints only endpoint/PID/instance metadata. The desktop uses it through the bundled Node runtime so Electron does not directly own the long-lived service child. It creates that bootstrap during main-script evaluation, after the single-instance lock and before Chromium launches helper processes. The author attributes the earlier exit hang to inherited Chromium IPC endpoints. Author drills report 157-164 ms desktop exits; Claude's `8177b83` separately reports a clean-environment independent-agent drill with five exits in 138-151 ms. The independent source review verifies startup/error paths and package equivalence; W0-1 preserves that proof but did not locate or audit those native drivers/logs or reproduce their timings. See the implementation status for evidence boundaries. A live/unverifiable lock, foreign descriptor, identity mismatch, or version mismatch prevents unsafe replacement. A transaction in `daemon-control.sqlite` serializes competing launchers; owner restart preserves workflow records and lets the coordinator reconcile uncertain runs. Use `node dist/cli.js stop` (or its packaged equivalent) for owner-authorized graceful shutdown. `stop` reads a per-boot stop token from `daemon.json`; closing an app window is intended to leave agent work available, independently of desktop process exit. Clipboard writes are limited to the trusted workspace main frame; canonical HTTPS GitHub full-SHA commit evidence opens in the system browser through a narrow main-process handler. Other permissions, popups, and external navigation remain denied.
 
 ### Desktop runtime upgrade checks
 
@@ -36,15 +36,29 @@ node dist/cli.js doctor
 node dist/cli.js serve
 ```
 
+## Owner credential and provenance
+
+For an upgrade, stop the old daemon with that release's CLI, switch versions, and start the new daemon. Open the new desktop personally and check Settings, General, Owner credential. Windows protection is applied during takeover. It rotates the owner credential, invalidates all old logins and pairing codes, and removes the plaintext owner credential from `daemon.json`. If encryption is unavailable, the desktop can still use the file credential and Settings shows **In file**. That installation does not meet AC51.
+
+Existing agent identities, human decision records and audit history stay valid. Review old identities and disable stale ones in Settings, Agents. Use Settings, Test commands for scripts that previously relied on CLI owner approval. Use Settings, General, Open in a browser for browser pairing. Existing endpoint-only readers can continue to read `endpoint`.
+
+To recover after restoring a backup under a different Windows account or computer, stop the daemon and run `node dist/cli.js owner-reset` in the installation folder. Reopen the new desktop to claim a fresh credential. For rollback, reset while stopped, start and stop the new daemon once to publish the unclaimed descriptor, and then start the old release.
+
+| Measure | Protects against | Does not protect against |
+| --- | --- | --- |
+| Claim: no secret in `daemon.json`, rotation, hash-only database | an agent or script that reads the data directory, a backup or the database and calls the API (the incidents of 2026-11-22 and 11-24); a managed run listing its directory or environment | a same-user process that decrypts the desktop's protected file (one Windows call) or reads the desktop process memory; reading the token before the first desktop start (the unclaimed window) |
+| No owner identity in the CLI | `cli.js command` with no token acting as the owner; hub scripts acting as the owner by accident | an agent that writes its own HTTP client with a stolen credential |
+| `channel` on events | confusion about who acted: the label comes from the credential type, never from input; an `agent` or `run` label never carries a human decision | an agent that deliberately uses the desktop's credential or drives the window: its decisions read `desktop` |
+| Join needs a click | an agent enrolling itself, or the owner credential being borrowed to enroll | the owner clicking Allow for a request they did not start (the card warns); an agent that clicks through screen automation |
+| `stopToken` (per boot, memory and `daemon.json` only) | a managed run or any process that knows only `AGILEDEV_ENDPOINT` stopping the service (`/health` shows the instance, not the token); the token opens no other route and no other credential opens this one | a same-user process that reads `daemon.json` can still stop the service; it cannot act as anyone |
+| `owner-reset` | nothing new: a same-user process that stops the service, resets and restarts it reads the new unclaimed credential; this is visible (the desktop's credential stops working) but not prevented | the same |
+| Disable | stale identities keeping a token, a run or a role | what the identity already wrote |
+
+Desktop and browser decisions, confirmed enrollments, agent and managed-run requests, system events, applicants, and unclaimed owner authority are recorded in each new event's data. Audit details display this origin. Earlier events display **Not recorded**.
+
 ## Open the human web workspace
 
-With the daemon running, run this from the same installation/data-directory environment:
-
-```powershell
-node dist/cli.js ui
-```
-
-Open the printed local URL and enter the one-use code. It expires after five minutes. The UI uses an eight-hour HttpOnly SameSite=Strict cookie and a session-bound CSRF value in memory; it never receives the owner API credential. Sign out revokes the browser session. Codes and credentials must stay out of URLs, logs, and public files. A scoped agent cannot create a human pairing code or use the owner credential through MCP.
+Open the desktop app and use Settings, General, Open in a browser. Enter the one-use code at the displayed local address. Before desktop takeover, development installations can still use `node dist/cli.js ui`. It expires after five minutes. The UI uses an eight-hour HttpOnly SameSite=Strict cookie and a session-bound CSRF value in memory; it never receives the owner API credential. Sign out revokes the browser session. Codes and credentials must stay out of URLs, logs, and public files. A scoped agent cannot create a human pairing code or use the owner credential through MCP.
 
 The workspace includes Backlog, Board, Reviews, Runs, and Settings. Register a project directory, create an unstarted requirement, write/submit its design, and review the exact revision/hash with a reason. A requirement's New task action creates its child using the required naming convention. Edit plan changes title/priority/dates without changing artifact approval. Assign worker and Configure QA select scoped identities, harnesses, and approved command profiles; Dispatch worker starts a real configured host run. The web view does not impersonate the product lead or independently pass QA. Those agent gates use their existing scoped connections.
 
@@ -60,7 +74,7 @@ Edit scope changes the requirement description, creates a new scope-bound draft 
 
 Review package lifecycle scripts before enabling any that your npm policy blocks. The SQLite native binary and actual tests were verified on the development Windows machine. Other operating systems and a clean Windows installation remain unverified.
 
-The default endpoint is `http://127.0.0.1:43170`. The user-scoped data directory is `%LOCALAPPDATA%/AgileDev` on Windows, containing the SQLite database, single-daemon lock, and a private owner descriptor. `AGILEDEV_DATA_DIR` and `AGILEDEV_PORT` override those locations. The descriptor contains an owner credential and must never be committed, shared with agents, or copied into a harness configuration.
+The default endpoint is `http://127.0.0.1:43170`. The user-scoped data directory is `%LOCALAPPDATA%/AgileDev` on Windows, containing the SQLite database, single-daemon lock and `daemon.json`. `AGILEDEV_DATA_DIR` and `AGILEDEV_PORT` override those locations. The descriptor identifies the service and contains its private stop token. The unclaimed descriptor also contains the migration credential.
 
 Starting the owner daemon from a packaged Claude Desktop context produced an `EXDEV` rename failure within the default data directory. The daemon falls back to a direct metadata write on `EXDEV` for both the lock and descriptor. The SQLite writer guard still controls lock acquisition. [Windows AppData virtualization](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes) can still give a packaged process a different filesystem view. The default continues to discover existing installations. For shared local discovery across contexts, use the same explicit, private absolute `AGILEDEV_DATA_DIR` visible to the owner and the bridge. For an agent bridge that cannot see the directory, use an explicit owner-started loopback endpoint with a scoped agent token. That connection stays pinned if the daemon port changes.
 
@@ -80,18 +94,11 @@ Keep the service running in one terminal; run commands in another. Stop with Ctr
 
 ## Human decision inbox
 
-The W2c service slice adds a derived human inbox; its web view, batch acceptance, defect-triage entries, and desktop signals remain later packages. Start the owner-managed service first, then use the local owner CLI or an authenticated human browser session. Scoped agent credentials cannot call these commands, and they are absent from the MCP catalogue and lifecycle grants.
-
-```powershell
-'{}' | node dist/cli.js command inbox_list -
-@{ workspaceId = '<workspace-id>'; kind = 'DESIGN_REVIEW'; limit = 20 } | ConvertTo-Json | node dist/cli.js command inbox_list -
-@{ workspaceId = '<workspace-id>' } | ConvertTo-Json | node dist/cli.js command inbox_settings_get -
-@{ workspaceId = '<workspace-id>'; expectedVersion = 0; agingThresholdHours = 48; idempotencyKey = 'set-inbox-aging-48h' } | ConvertTo-Json | node dist/cli.js command inbox_settings_update -
-```
+Open Decisions in the desktop or a paired browser session. Scoped agent credentials cannot call inbox commands.
 
 `inbox_list` accepts optional `workspaceId` and `kind`, `offset` (default 0), and `limit` (default 20, range 1-100). It returns the filtered `entries`, `total`, `nextOffset`, an unfiltered-kind `summary` for the selected workspace scope, per-workspace counts/settings, and `generatedAt`. Omit `workspaceId` for all workspaces readable by the human. Blocking entries precede nonblocking ones; unavailable ages precede known ages within that tier, then the oldest known pending time and stable workspace/entry IDs. Pagination is stable for unchanged state; reload after concurrent changes.
 
-The seven implemented kinds are `DESIGN_REVIEW`, `DELIVERY_ACCEPTANCE`, `SCOPE_DECISION`, `RUN_RECONCILE`, `CLOSURE_BLOCKED`, `AGENT_QUESTION`, and `DEFECT_TRIAGE`. Each entry includes its issue link/key, exact current issue/design/candidate/digest/run/scope context in `target`, blockers, and a next action. Listing never decides or mutates an issue. Current saved acceptance remains a nonblocking `CLOSURE_BLOCKED` entry after Git recovers: its status becomes `READY_TO_COMPLETE` and its action becomes `delivery_complete`. Only that explicit authorized command, or an explicit acceptance whose guards already pass, closes delivery; no duplicate human approval is created by readiness.
+Decision kinds are `DESIGN_REVIEW`, `DELIVERY_ACCEPTANCE`, `SCOPE_DECISION`, `RUN_RECONCILE`, `CLOSURE_BLOCKED`, `AGENT_QUESTION`, `DEFECT_TRIAGE` and `JOIN_REQUEST`. Issue entries carry an issue link and the relevant current bindings. A join request carries its request id and version. Listing never decides or mutates an issue. Current saved acceptance remains a nonblocking `CLOSURE_BLOCKED` entry after Git recovers: its status becomes `READY_TO_COMPLETE` and its action becomes `delivery_complete`. Only that explicit authorized command, or an explicit acceptance whose guards already pass, closes delivery; no duplicate human approval is created by readiness.
 
 Entry identities and first-pending audit epochs survive reads, metadata edits, repeated uncertainty observations, verification retries, and guard recovery. A resubmitted design cycle or a genuinely replaced decision target starts another epoch. `pendingSince`, `pendingSequence`, `ageMs`, and `ageProvenance` disclose available evidence: unknown or malformed historical time is `null` with `UNAVAILABLE` age provenance, rather than the current time or a run's creation time. A known audit sequence can remain present when its timestamp is unavailable. `clockSkew` marks a recorded timestamp ahead of the service clock.
 
@@ -101,28 +108,13 @@ The existing `gap_list` gains advisory `HUMAN_DECISION_AGING` entries for pendin
 
 ## Register a workspace and enroll agents
 
-`command` reads JSON from stdin or from an explicit JSON file. A leading UTF-8 byte order mark is ignored. For a discovered local installation it uses the local owner credential unless `AGILEDEV_TOKEN` is set. Any explicit `AGILEDEV_ENDPOINT` requires an explicit token, including for ordinary commands, so local owner credentials cannot be forwarded accidentally. `mcp` never falls back to the owner credential.
+Register in Settings, Workspace. Use Settings, Agents, Add an agent for long-lived MCP identities. Set their scoped `AGILEDEV_TOKEN` in their environment and use `connection` to generate configuration. For one session:
 
 ```powershell
-$workspace = @{
-  root = (Get-Location).Path
-  name = 'My project'
-  prefix = 'APP'
-  idempotencyKey = 'register-my-project'
-} | ConvertTo-Json | node dist/cli.js command workspace_register - | ConvertFrom-Json
-
-$enrollment = @{
-  workspaceId = $workspace.workspace.id
-  role = 'pm'
-  name = 'Planning agent'
-  idempotencyKey = 'enroll-planning-agent'
-} | ConvertTo-Json | node dist/cli.js command actor_enroll - | ConvertFrom-Json
-
-$env:AGILEDEV_TOKEN = $enrollment.token
-node dist/cli.js connection codex
-node dist/cli.js connection claude-code
-node dist/cli.js connection dsh
+node dist/cli.js join --name 'Planning agent' --role pm --harness other -- node my-agent.mjs
 ```
+
+The owner decides in the desktop. The command receives the token in its environment, and the wrapper retires the identity after the command exits. `command` requires an agent token and reads JSON from stdin or an explicit file, accepting a leading UTF-8 BOM.
 
 Enrollment returns the raw agent credential once. Idempotent replays return the actor but omit the raw credential; issue a new enrollment if the credential was lost. Token hashes are persisted; audit events and command receipts exclude raw credentials. Do not put a token in an issue URL or a public file.
 
@@ -348,7 +340,7 @@ For every mutation, use a unique `idempotencyKey` and current `expectedVersion`;
 
 ## Iteration planning
 
-The seven `iteration_*` commands are available through the normal owner CLI, authenticated HTTP command route, and scoped MCP bridge. Human, lead and PM may mutate records; worker/QA credentials can only read iteration metadata and members in their existing issue read scope. Iterations never grant additional issue access. They are optional planning metadata, with no claim, dispatch, lifecycle or approval authority.
+The seven `iteration_*` commands are available through the authenticated HTTP command route and scoped MCP bridge. Human, lead and PM may mutate records; worker/QA credentials can only read iteration metadata and members in their existing issue read scope. Iterations never grant additional issue access. They are optional planning metadata, with no claim, dispatch, lifecycle or approval authority.
 
 - `iteration_create`: `workspaceId`, `name` (1-120 characters), `goal` (up to 2,000 characters), `startDate`, `endDate`, creation-time IANA `timeZone`, `reason`, `idempotencyKey`; creates `PLANNED` and optionally adopts explicitly bound legacy matches.
 - `iteration_update`: workspace/iteration IDs, `expectedVersion`, optional name/goal/start/end dates, reason and key. Closed records are immutable; creation time zone cannot be changed.
@@ -430,6 +422,6 @@ The owner can read the workspace's wake setting and per-harness mode availabilit
 | --- | --- |
 | worker | `message_send`, `message_list`, `message_wait`, `defect_list`, `defect_get`, `workspace_list`, `issue_get`, `design_get`, `issue_list`, `integration_get`, `artifact_read`, `run_list`, `run_get`, `check_profile_list`, `evidence_get`, `gap_list`, `defect_propose`, `work_heartbeat`, `work_submit` |
 | qa | `message_send`, `message_list`, `message_wait`, `defect_list`, `defect_get`, `workspace_list`, `issue_get`, `design_get`, `issue_list`, `integration_get`, `artifact_read`, `run_list`, `run_get`, `check_profile_list`, `evidence_get`, `gap_list`, `defect_propose`, `qa_check_get`, `qa_check_run`, `qa_report_submit` |
-| pm | `message_send`, `message_list`, `message_wait`, `iteration_create`, `iteration_update`, `iteration_start`, `iteration_close`, `iteration_membership_set`, `iteration_list`, `iteration_get`, `defect_list`, `defect_get`, `workspace_list`, `issue_get`, `design_get`, `issue_list`, `integration_get`, `artifact_read`, `run_list`, `run_get`, `check_profile_list`, `evidence_get`, `gap_list`, `defect_propose`, `connection_list`, `issue_create`, `issue_update`, `plan_apply`, `plan_get`, `scope_get`, `issue_assign`, `grant_list`, `dependency_add`, `dependency_set`, `issue_transition`, `work_dispatch`, `run_interrupt`, `qa_configure`, `git_submit`, `git_retry`, `delivery_complete`, `event_list`, `qa_check_get` |
-| lead | `message_send`, `message_list`, `message_wait`, `iteration_create`, `iteration_update`, `iteration_start`, `iteration_close`, `iteration_membership_set`, `iteration_list`, `iteration_get`, `defect_list`, `defect_get`, `workspace_list`, `issue_get`, `design_get`, `issue_list`, `integration_get`, `artifact_read`, `run_list`, `run_get`, `check_profile_list`, `evidence_get`, `gap_list`, `defect_propose`, `connection_list`, `issue_create`, `issue_update`, `plan_apply`, `plan_get`, `scope_get`, `issue_assign`, `grant_list`, `dependency_add`, `dependency_set`, `issue_transition`, `work_dispatch`, `run_interrupt`, `qa_configure`, `git_submit`, `git_retry`, `delivery_complete`, `event_list`, `design_set`, `design_submit`, `review_submit`, `qa_check_get` |
+| pm | `message_send`, `message_list`, `message_wait`, `iteration_create`, `iteration_update`, `iteration_start`, `iteration_close`, `iteration_membership_set`, `iteration_list`, `iteration_get`, `defect_list`, `defect_get`, `workspace_list`, `issue_get`, `design_get`, `issue_list`, `integration_get`, `artifact_read`, `run_list`, `run_get`, `check_profile_list`, `evidence_get`, `gap_list`, `defect_propose`, `agent_list`, `connection_list`, `issue_create`, `issue_update`, `plan_apply`, `plan_get`, `scope_get`, `issue_assign`, `grant_list`, `dependency_add`, `dependency_set`, `issue_transition`, `work_dispatch`, `run_interrupt`, `qa_configure`, `git_submit`, `git_retry`, `delivery_complete`, `event_list`, `qa_check_get` |
+| lead | `message_send`, `message_list`, `message_wait`, `iteration_create`, `iteration_update`, `iteration_start`, `iteration_close`, `iteration_membership_set`, `iteration_list`, `iteration_get`, `defect_list`, `defect_get`, `workspace_list`, `issue_get`, `design_get`, `issue_list`, `integration_get`, `artifact_read`, `run_list`, `run_get`, `check_profile_list`, `evidence_get`, `gap_list`, `defect_propose`, `agent_list`, `connection_list`, `issue_create`, `issue_update`, `plan_apply`, `plan_get`, `scope_get`, `issue_assign`, `grant_list`, `dependency_add`, `dependency_set`, `issue_transition`, `work_dispatch`, `run_interrupt`, `qa_configure`, `git_submit`, `git_retry`, `delivery_complete`, `event_list`, `design_set`, `design_submit`, `review_submit`, `qa_check_get` |
 <!-- B23_PROFILE_REFERENCE_END -->

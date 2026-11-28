@@ -135,7 +135,7 @@ test('triage attention follows current delivery evidence without hiding any pend
   assert.deepEqual(Object.fromEntries(page.entries.map((entry: any) => [entry.target.defectId, entry.defect.confirmable])), {
     [early]: false, [atAcceptance]: true, [afterClosure]: true, [withoutEvidence]: false, [otherEarly]: false
   });
-  const byKind = { DESIGN_REVIEW: 0, DELIVERY_ACCEPTANCE: 2, CLOSURE_BLOCKED: 0, SCOPE_DECISION: 0, RUN_RECONCILE: 0, AGENT_QUESTION: 0, DEFECT_TRIAGE: 5 };
+  const byKind = { DESIGN_REVIEW: 0, DELIVERY_ACCEPTANCE: 2, CLOSURE_BLOCKED: 0, SCOPE_DECISION: 0, RUN_RECONCILE: 0, AGENT_QUESTION: 0, DEFECT_TRIAGE: 5, JOIN_REQUEST: 0 };
   assert.equal(page.total, 5);
   assert.deepEqual(page.summary, { total: 7, blocking: 2, attention: 4, byKind });
   const workspaceCounts = (workspaceId: string) => {

@@ -1,7 +1,7 @@
 import type { Actor, Design, Harness, InboxKind, Issue, Run } from '../src/contracts';
 import type { DisplayIssue, InboxEntry, IssueData, WorkspaceData } from './api';
 import { listGroup } from './decision-model.ts';
-import { historySentence, resolvePartyNames, statusSentence } from './sentences.ts';
+import { channelSentence, historySentence, resolvePartyNames, statusSentence } from './sentences.ts';
 import type { HistoryEventData, IssueStatusInput, PartyActor, PartyNames, Sentence } from './sentences.ts';
 
 export type StatusIconKind = 'todo' | 'dev' | 'review' | 'you' | 'done' | 'rework' | 'crit' | 'hold' | 'gone';
@@ -86,13 +86,19 @@ export function requirementProgress(
   };
 }
 
-function agentParties(actors: readonly Actor[]): PartyActor[] {
-  return actors.filter(
-    (actor): actor is Actor & { role: PartyActor['role'] } => actor.role !== 'human'
-  );
+export const ROLE_LABEL: Record<Actor['role'], string> = {
+  human: 'Owner', lead: 'Lead', pm: 'PM', worker: 'Developer', qa: 'Independent QA',
+};
+
+export function isActiveAgent(actor: Actor): actor is Actor & { role: PartyActor['role'] } {
+  return actor.role !== 'human' && !actor.disabledAt;
 }
 
-function actorName(actors: readonly Actor[], id?: string | null): string | null {
+function agentParties(actors: readonly Actor[]) {
+  return actors.filter(isActiveAgent);
+}
+
+function actorName(actors: readonly Pick<Actor, 'id' | 'name'>[], id?: string | null): string | null {
   if (!id) return null;
   return actors.find((actor) => actor.id === id)?.name ?? null;
 }
@@ -102,9 +108,10 @@ export function partyNamesForIssue(
   issue: Pick<Issue, 'assignee' | 'qaAssignee'>,
   roleWords: PartyNames
 ): PartyNames {
+  const active = agentParties(actors);
   return resolvePartyNames(
-    agentParties(actors),
-    { dev: actorName(actors, issue.assignee), qa: actorName(actors, issue.qaAssignee) },
+    active,
+    { dev: actorName(active, issue.assignee), qa: actorName(active, issue.qaAssignee) },
     roleWords
   );
 }
@@ -506,10 +513,11 @@ export function moreActionsForIssue(packet: IssueData): MoreAction[] {
 }
 
 export function inferAgentHarness(
-  actor: Pick<Actor, 'id' | 'role'>,
+  actor: Pick<Actor, 'id' | 'role' | 'harness'>,
   connections: readonly WorkspaceData['connections'][number][],
   issues: readonly Pick<Issue, 'assignee' | 'harness' | 'qaAssignee' | 'qaHarness'>[]
-): Harness | null {
+): Harness | 'other' | null {
+  if (actor.harness) return actor.harness;
   const actorConnections = connections
     .filter((connection) => connection.actorId === actor.id)
     .sort((a, b) => Date.parse(b.initializedAt) - Date.parse(a.initializedAt));
@@ -551,7 +559,14 @@ export function decisionActionVerb(kind: InboxKind): string {
       return 'See the report';
     case 'AGENT_QUESTION':
       return 'Answer';
+    case 'JOIN_REQUEST':
+      return 'Review the join request';
   }
+}
+
+export function historyAuditRow(item: IssueData['history'][number], render: (sentence: Sentence) => string) {
+  const channel = (item.data as { channel?: string } | null)?.channel;
+  return `#${item.sequence} ${item.operation} · ${item.actorName} · ${render(channelSentence(channel))} (${item.targetId})`;
 }
 
 export function actorInitials(name: string): string {

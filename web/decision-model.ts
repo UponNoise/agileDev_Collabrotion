@@ -36,6 +36,8 @@ export interface ContentTarget {
   messageId?: string | null;
   defectId?: string | null;
   defectVersion?: number | null;
+  requestId?: string | null;
+  requestVersion?: number | null;
 }
 
 export interface ScopeContent {
@@ -95,6 +97,8 @@ export function contentKey(input: ContentKeyInput): string {
         defect?.observation ?? null
       );
     }
+    case 'JOIN_REQUEST':
+      return key('join', target.requestId ?? null, target.requestVersion ?? null);
     case 'AGENT_QUESTION':
       return key('question', target.messageId ?? null);
     default:

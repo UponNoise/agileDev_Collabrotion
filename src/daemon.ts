@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,9 @@ import { GitVerifier } from './git-verifier.js';
 import { NativeAdapter } from './adapters.js';
 import { loadConsultVerifications } from './consult-verification.js';
 import { loadDispatchVerifications } from './dispatch-verification.js';
-import { processExists, readDescriptor, ServiceError } from './service-launcher.js';
+import { assertServiceStopped, processExists, readDescriptor, ServiceError } from './service-launcher.js';
+
+import { isOwnerClaimed, issueOwnerCredential, resetOwner } from './owner.js';
 
 function publishMetadata(file: string, instance: string, value: object) {
   const temporary = `${file}.${instance}.tmp`;
@@ -25,14 +27,36 @@ function publishMetadata(file: string, instance: string, value: object) {
   } finally { rmSync(temporary, { force: true }); }
 }
 
-export async function serve(dataDir: string) {
+function openDaemonControl(dataDir: string) {
   mkdirSync(dataDir, { recursive: true });
-  const lockFile = join(dataDir, 'daemon.lock');
-  const descriptorFile = join(dataDir, 'daemon.json');
-  const instance = randomUUID();
   const control = new Database(join(dataDir, 'daemon-control.sqlite'));
   control.pragma('busy_timeout = 3000');
   control.exec('CREATE TABLE IF NOT EXISTS daemon (id INTEGER PRIMARY KEY CHECK(id=1), pid INTEGER NOT NULL, instance TEXT NOT NULL)');
+  return control;
+}
+
+export function resetStoppedOwner(dataDir: string) {
+  const control = openDaemonControl(dataDir);
+  try {
+    control.transaction(() => {
+      const held = control.prepare('SELECT pid FROM daemon WHERE id=1').get() as { pid: number } | undefined;
+      assertServiceStopped(dataDir, held?.pid);
+      const store = new Store(join(dataDir, 'workflow.sqlite'));
+      try { resetOwner(store); } finally { store.close(); }
+      for (const name of ['owner-credential.bin', 'owner-credential.bin.pending'])
+        rmSync(join(dataDir, 'desktop', name), { force: true });
+    }).immediate();
+  } finally { control.close(); }
+}
+
+export async function serve(dataDir: string) {
+  const lockFile = join(dataDir, 'daemon.lock');
+  const descriptorFile = join(dataDir, 'daemon.json');
+  const instance = randomUUID();
+  const stopToken = randomBytes(32).toString('base64url');
+  let endpoint: string;
+  const metadata = () => ({ endpoint, pid: process.pid, instance, stopToken });
+  const control = openDaemonControl(dataDir);
   try {
     control.transaction(() => {
       const held = control.prepare('SELECT pid FROM daemon WHERE id=1').get() as { pid: number } | undefined;
@@ -62,7 +86,7 @@ export async function serve(dataDir: string) {
   let app: ReturnType<typeof createServer>;
   try {
     store = new Store(join(dataDir, 'workflow.sqlite'));
-    app = createServer(store, { instance, stop }, {
+    app = createServer(store, { instance, stop, stopToken, ownerClaimed: () => publishMetadata(descriptorFile, instance, metadata()) }, {
       consultAvailable: harness => coordinator?.canConsult(harness) === true,
       dispatchAvailable: harness => coordinator ? coordinator.canDispatch(harness) : harness !== 'agy',
     });
@@ -72,12 +96,10 @@ export async function serve(dataDir: string) {
     const runnerEnabled = process.env.AGILEDEV_RUNNER_ENABLED !== '0';
     const verification = runnerEnabled ? await loadConsultVerifications(dataDir) : null;
     const dispatchVerification = runnerEnabled ? await loadDispatchVerifications(dataDir) : null;
-    const endpoint = await app.listen({ host: '127.0.0.1', port: Number(process.env.AGILEDEV_PORT ?? 43170) });
-    const old = readDescriptor(dataDir);
-    let ownerToken = old?.ownerToken;
-    try { if (!ownerToken || store!.authenticate(ownerToken).role !== 'human') ownerToken = undefined; } catch { ownerToken = undefined; }
-    ownerToken ??= store!.bootstrap().token;
-    publishMetadata(descriptorFile, instance, { endpoint, ownerToken, pid: process.pid, instance });
+    endpoint = await app.listen({ host: '127.0.0.1', port: Number(process.env.AGILEDEV_PORT ?? 43170) });
+    const previous = readDescriptor(dataDir);
+    const ownerToken = isOwnerClaimed(store!) ? undefined : issueOwnerCredential(store!, previous?.ownerToken);
+    publishMetadata(descriptorFile, instance, { ...metadata(), ownerToken });
     verifier = new GitVerifier(store!); verifier.start();
     if (verification && dispatchVerification) {
       const adapter = new NativeAdapter(undefined, verification, { dispatchVerification });

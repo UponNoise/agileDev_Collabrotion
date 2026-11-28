@@ -128,16 +128,16 @@ test('owner launchers share one daemon; bridge disconnect preserves it and a cra
     assert.ok(duplicate);
     assert.match(duplicate.stderr, /live process owns/);
     assert.equal(readDescriptor(directory)!.pid, restarted.pid);
-    const oldInstance = await fetch(`${restarted.endpoint}/api/service/stop`, { method: 'POST', headers: { authorization: `Bearer ${restarted.ownerToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ instance: descriptor.instance }) });
+    const oldInstance = await fetch(`${restarted.endpoint}/api/service/stop`, { method: 'POST', headers: { authorization: `Bearer ${restarted.stopToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ instance: descriptor.instance }) });
     assert.equal(oldInstance.status, 409);
     const agentStop = await fetch(`${restarted.endpoint}/api/service/stop`, { method: 'POST', headers: { authorization: `Bearer ${credentials[0]!.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ instance: restarted.instance }) });
-    assert.equal(agentStop.status, 403);
+    assert.equal(agentStop.status, 401);
     const pairing = await reconnected.request('/api/ui/pairing', {});
     const login = await fetch(`${restarted.endpoint}/api/ui/login`, { method: 'POST', headers: { origin: restarted.endpoint, 'content-type': 'application/json' }, body: JSON.stringify({ code: pairing.code }) });
     const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
     const { csrf } = await login.json() as any;
     const browserStop = await fetch(`${restarted.endpoint}/api/service/stop`, { method: 'POST', headers: { origin: restarted.endpoint, cookie, 'x-csrf-token': csrf, 'content-type': 'application/json' }, body: JSON.stringify({ instance: restarted.instance }) });
-    assert.equal(browserStop.status, 403);
+    assert.equal(browserStop.status, 401);
     await entries[0]!.close();
     assert.equal(await serviceAvailable(restarted, directory), true);
     assert.notEqual((await entries[1]!.callTool({ name: 'issue_get', arguments: { workspaceId: workspace.id, issueId: created.issue.id } })).isError, true);
@@ -178,8 +178,7 @@ test('explicit endpoint commands require an agent token and never forward the lo
     const workspace = (await owner.command('workspace_register', { root: directory, name: 'Explicit endpoint fixture', prefix: 'EP', idempotencyKey: 'workspace' })).workspace;
     const credential = await owner.command('actor_enroll', { workspaceId: workspace.id, role: 'lead', name: 'Endpoint agent', idempotencyKey: 'lead' });
     const input = join(directory, 'input.json'); writeFileSync(input, '{}');
-    const local = await exec(process.execPath, [script, 'command', 'workspace_list', input], { env, windowsHide: true });
-    assert.equal(JSON.parse(local.stdout).workspaces[0].id, workspace.id);
+    await assert.rejects(exec(process.execPath, [script, 'command', 'workspace_list', input], { env, windowsHide: true }), /AGENT_CREDENTIAL_REQUIRED/);
     const scoped = await exec(process.execPath, [script, 'command', 'workspace_list', input], { env: { ...env, AGILEDEV_ENDPOINT: descriptor.endpoint, AGILEDEV_TOKEN: credential.token }, windowsHide: true });
     assert.equal(JSON.parse(scoped.stdout).workspaces[0].id, workspace.id);
     await assert.rejects(exec(process.execPath, [script, 'command', 'workspace_list', input], { env: { ...env, AGILEDEV_ENDPOINT: foreignEndpoint }, windowsHide: true, timeout: 5000 }), (error: any) => {

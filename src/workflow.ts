@@ -22,7 +22,10 @@ import { InboxPolicy, inboxAgingGaps, inboxList, inboxSettings, updateInboxSetti
 import { rejectionContext } from './rejection-context.js';
 import { blockerDetail, briefDefect, briefIssue, briefRun, briefText, isPlanningBlocker, issueStatus, waitingParty, type IssueAction } from './issue-brief.js';
 
-const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','wake_settings_get','defect_list','defect_get','message_list','message_wait']);
+import { decideJoinRequest } from './join.js';
+import { disableAgent, isDisabled, listAgents, requestRunStop } from './identities.js';
+
+const readOps = new Set<string>([...iterationReadOperations,'workspace_list', 'agent_list', 'connection_list', 'issue_get', 'design_get', 'issue_list', 'run_get', 'run_list', 'gap_list', 'event_list','check_profile_list','qa_check_get','evidence_get','ui_workspace','ui_issue','ui_runs','grant_list','plan_get','integration_get','artifact_read','scope_get','inbox_list','inbox_settings_get','wake_settings_get','defect_list','defect_get','message_list','message_wait']);
 function requireRole(actor: Actor, ...allowed: Actor['role'][]) {
   if (!allowed.includes(actor.role)) throw new DomainError('ROLE_DENIED', `Operation requires ${allowed.join(' or ')} authority`, 403);
 }
@@ -77,7 +80,9 @@ export class Workflow {
         if (existing.digest !== digest) throw new DomainError('IDEMPOTENCY_CONFLICT', 'Key was already used with different input');
         return { ...JSON.parse(existing.result), replayed: true };
       }
+      const alreadyDisabled = op === 'agent_disable' && isDisabled(this.store, args.actorId);
       const result = this.mutate(actor, op, args);
+      if (alreadyDisabled) return result;
       const receipt = { ...result };
       delete receipt.token;
       this.store.db.prepare('INSERT INTO receipts(actor_id,key,digest,result) VALUES(?,?,?,?)').run(actor.id, args.idempotencyKey, digest, JSON.stringify(receipt));
@@ -97,6 +102,7 @@ export class Workflow {
     }
     if (op === 'defect_get') return { defect: this.defects().get(actor,a.workspaceId,a.defectId) };
     const workspace = s.workspace(actor, a.workspaceId);
+    if (op === 'agent_list') return listAgents(s, workspace.id, { agentRole: a.agentRole, includeDisabled: a.includeDisabled, limit: a.limit, offset: a.offset });
     if (op === 'inbox_settings_get') return { settings: inboxSettings(s,actor,workspace.id) };
     if (op === 'wake_settings_get') return {
       settings: wakeSettings(s, workspace.id),
@@ -408,7 +414,7 @@ export class Workflow {
       }
     }
     if (!activeRun && !issue.parentId && design?.status === 'APPROVED' && blocking.some(isPlanningBlocker)) offer('plan_apply', { designId: design.id, expectedPlanId: issue.planId ?? null });
-    if (!activeRun && design?.status === 'APPROVED' && blocking.includes('ASSIGNEE_REQUIRED') && this.assignable(issue)) offer('issue_assign');
+    if (!activeRun && design?.status === 'APPROVED' && blocking.some(code => code === 'ASSIGNEE_REQUIRED' || code === 'ASSIGNEE_DISABLED') && this.assignable(issue)) offer('issue_assign');
     if (!activeRun && ready && design && (issue.state === 'NOT_STARTED' || issue.state.endsWith('_REJECTED') || this.integrationIdle(issue))) {
       offer('work_dispatch', { designId: design.id, scopeRevision });
     }
@@ -483,6 +489,7 @@ export class Workflow {
     if (i.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) blocking.push('DESIGN_BINDING_STALE');
     if (this.design(i)?.status !== 'APPROVED') blocking.push('DESIGN_APPROVAL_REQUIRED');
     if (!i.assignee) blocking.push('ASSIGNEE_REQUIRED');
+    else if (isDisabled(this.store, i.assignee)) blocking.push('ASSIGNEE_DISABLED');
     if (admission && i.harness && this.dispatchAvailable && !this.dispatchAvailable(i.harness)) blocking.push('HARNESS_NOT_VERIFIED');
     if (!i.criteria.length) blocking.push('CRITERIA_REQUIRED');
     if (!i.description.trim()) blocking.push('SCOPE_REQUIRED');
@@ -842,6 +849,14 @@ export class Workflow {
     }
     if (op === 'message_send') return new IssueMessages(s, this.now, this.consultAvailable).send(actor, a as MessageSend);
     const w = s.workspace(actor, a.workspaceId);
+    if (op === 'join_request_decide') {
+      requireRole(actor, 'human');
+      return decideJoinRequest(s, actor, { workspaceId: w.id, requestId: a.requestId, expectedVersion: a.expectedVersion, decision: a.decision }, this.now());
+    }
+    if (op === 'agent_disable') {
+      requireRole(actor, 'human');
+      return disableAgent(s, actor, w.id, a.actorId, op, this.now(), a.reason);
+    }
     if (['defect_propose','defect_report','defect_triage','defect_withdraw'].includes(op)) {
       const { idempotencyKey,...input } = a;
       if (op === 'defect_propose') return { defect: this.defects().propose(actor,input as any) };
@@ -883,7 +898,8 @@ export class Workflow {
       if ((run.version ?? 1) !== a.expectedVersion) throw new DomainError('VERSION_CONFLICT', 'Run changed; reload before retrying');
       if (!(liveRunStates as readonly string[]).includes(run.state)) throw new DomainError('INVALID_TRANSITION', 'Run is already terminal');
       if (op === 'run_reconcile' && run.state !== 'UNCERTAIN') throw new DomainError('INVALID_TRANSITION', 'Only uncertain execution requires external reconciliation');
-      if (op === 'run_reconcile') {
+      if (op === 'run_interrupt') return { run: requestRunStop(s, actor, run, a.reason, this.now()) };
+      {
         const checks = s.list<CheckRun>('check',w.id).filter(c => c.runId === run.id && ['RUNNING','UNCERTAIN'].includes(c.state));
         for (const pid of [run.pid,...checks.map(c => c.pid)].filter((p): p is number => !!p)) {
           let alive = true;
@@ -901,16 +917,14 @@ export class Workflow {
           this.save(actor,'candidate_invalidated',issue,{ runId: run.id,reason: a.reason });
         }
         if (issue.lease?.actorId === run.executionActorId) { issue.lease = null; if (issue.state === 'IN_PROGRESS') issue.state = 'NOT_STARTED'; this.save(actor, 'run_reconciled', issue, { runId: run.id, reason: a.reason }); }
-      } else if (run.state === 'QUEUED') { run.state = 'CANCELLED'; run.finishedAt = new Date(this.now()).toISOString(); }
-      else if (run.state !== 'UNCERTAIN') run.state = 'STOPPING';
-      else throw new DomainError('RUN_UNCERTAIN', 'Reconcile external execution before issuing a new stop request');
+      }
       run.stopReason = a.reason; run.version = (run.version ?? 1) + 1;
       s.put('run', run, w.id); s.event(w.id, actor, op, run.id, { state: run.state, reason: a.reason });
       return { run };
     }
     if (op === 'actor_enroll') {
       requireRole(actor, 'human');
-      const enrolled: Actor = { id: randomUUID(), role: a.role, name: a.name, workspaceIds: [w.id], sessionId: randomUUID() };
+      const enrolled: Actor = { id: randomUUID(), role: a.role, name: a.name, workspaceIds: [w.id], sessionId: randomUUID(), joinedVia: 'owner', joinedAt: new Date(this.now()).toISOString() };
       const token = s.token(enrolled);
       s.event(w.id, actor, op, enrolled.id, { role: a.role, name: a.name });
       return { actor: enrolled, token };
@@ -961,6 +975,7 @@ export class Workflow {
       requireRole(actor,'human');
       const grantee = s.get<Actor>('actor',a.granteeId);
       if (!['lead','pm'].includes(grantee.role) || grantee.runId || !grantee.workspaceIds.includes(w.id)) throw new DomainError('GRANTEE_INVALID','Choose a logical lead or PM in this workspace');
+      if (grantee.disabledAt) throw new DomainError('ACTOR_DISABLED', 'This agent was disabled');
       const lifetime = Date.parse(a.expiresAt)-this.now();
       if (lifetime <= 0 || lifetime > 604800000) throw new DomainError('GRANT_EXPIRY_INVALID','A grant must expire in the next seven days');
       if (a.scopeHash !== this.grantScope(i)) throw new DomainError('GRANT_SCOPE_STALE','The issue or its child scope changed after the authorization view was loaded');
@@ -1035,6 +1050,7 @@ export class Workflow {
       if (s.list<Run>('run',w.id).some(r => r.issueId === i.id && r.kind === 'qa' && ownsIssueExecution(r))) throw new DomainError('RUN_EXISTS','Reconcile the current QA run first');
       const reviewer = s.get<Actor>('actor',a.actorId);
       if (reviewer.role !== 'qa' || reviewer.runId || !reviewer.workspaceIds.includes(w.id) || reviewer.id === i.assignee) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED','Select an independent logical QA actor in this workspace');
+      if (reviewer.disabledAt) throw new DomainError('ACTOR_DISABLED', 'This agent was disabled');
       for (const id of a.checkProfileIds) if (s.get<CheckProfile>('check_profile',id).workspaceId !== w.id) throw new DomainError('SCOPE_DENIED','Check profile belongs to another workspace',403);
       if (this.dispatchAvailable && !this.dispatchAvailable(a.harness)) throw new DomainError('HARNESS_NOT_VERIFIED', 'This harness has not been verified on this computer', 409, { harness: a.harness });
       i.qaAssignee = reviewer.id; i.qaHarness = a.harness; i.checkProfileIds = [...new Set<string>(a.checkProfileIds)];
@@ -1139,6 +1155,7 @@ export class Workflow {
       if ((a.actorId === null) !== (a.harness === null)) throw new DomainError('ASSIGNMENT_INVALID','Select a worker and harness together, or clear both');
       const assigned = a.actorId ? s.get<Actor>('actor', a.actorId) : null;
       if (assigned && (assigned.role !== 'worker' || assigned.runId || !assigned.workspaceIds.includes(w.id))) throw new DomainError('SCOPE_DENIED', 'Assignment requires a logical worker in this workspace');
+      if (assigned?.disabledAt) throw new DomainError('ACTOR_DISABLED', 'This agent was disabled');
       if (a.harness !== null && this.dispatchAvailable && !this.dispatchAvailable(a.harness)) throw new DomainError('HARNESS_NOT_VERIFIED', 'This harness has not been verified on this computer', 409, { harness: a.harness });
       i.assignee = assigned?.id ?? null; i.harness = a.harness; i.lease = null;
       return this.save(actor, op, i);
