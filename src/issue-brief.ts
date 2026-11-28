@@ -42,7 +42,8 @@ const remedies: Record<string, [message: string, role: Party, operation?: Operat
   EVIDENCE_MISSING: ['Inspect the required delivery evidence.', 'lead'],
   APPROVAL_STALE: ['Review the current design and delivery.', 'lead'],
   COMMIT_SNAPSHOT_MISMATCH: ['Submit a commit matching the sealed snapshot.', 'pm', 'git_submit'],
-  MULTI_REPOSITORY_CLOSURE_UNSUPPORTED: ['Inspect the repository references before closing.', 'lead', 'evidence_get']
+  MULTI_REPOSITORY_CLOSURE_UNSUPPORTED: ['Inspect the repository references before closing.', 'lead', 'evidence_get'],
+  HARNESS_NOT_VERIFIED: ['Ask the owner to run "node dist/cli.js verify-agy --record", restart the service, or choose another harness.', 'human']
 };
 
 const commandRemedies: Record<string, [action: string, role: Party | 'caller', operation?: Operation]> = {
@@ -65,7 +66,8 @@ const commandRemedies: Record<string, [action: string, role: Party | 'caller', o
   CLOSURE_BLOCKED: ['Read the current brief and clear its closure blockers before completing again.', 'caller', 'issue_get'],
   DECISION_RISKS_STALE: ['Refresh the issue and present the changed risks for a new decision.', 'human', 'issue_get'],
   SERVICE_UNAVAILABLE: ['Ask the owner to inspect the local service and reconnect when available.', 'human'],
-  INTERNAL_ERROR: ['Ask the owner to inspect the local service before retrying.', 'human']
+  INTERNAL_ERROR: ['Ask the owner to inspect the local service before retrying.', 'human'],
+  HARNESS_NOT_VERIFIED: ['Ask the owner to run "node dist/cli.js verify-agy --record", restart the service, or choose another harness.', 'human']
 };
 
 export function commandFailure(code: string, message: string, details?: unknown) {

@@ -4,14 +4,39 @@ import type { HarnessEntry } from './harness.js';
 import { checkDshRunDirectory } from './run-directory.js';
 import { ownerDshPatchArgs } from './adapters.js';
 import { isolationDiagnostic } from './mcp-isolation.js';
+import { consultLauncherIdentity } from './consult-verification.js';
+import { agyCapabilities, dispatchOpen, matchesDispatchVerification, readDispatchVerification } from './dispatch-verification.js';
 
-export type DiagnosticState = 'OK' | 'MISSING' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'KNOWN_LIMITATION' | 'ENFORCED' | 'NOT_GUARANTEED';
+export type DiagnosticState = 'OK' | 'MISSING' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'KNOWN_LIMITATION' | 'ENFORCED' | 'NOT_GUARANTEED' | 'CONFIRMED' | 'UNAVAILABLE';
 export interface Diagnostic { id: string; state: DiagnosticState; detail?: string }
+
+async function agyDiagnostics(entry: HarnessEntry, context: { version?: string; dataDir: string }): Promise<Diagnostic[]> {
+  const record = readDispatchVerification(context.dataDir, 'agy');
+  const fresh = !!record
+    && record.launcher === consultLauncherIdentity(entry)
+    && (context.version !== undefined ? record.version === context.version : await matchesDispatchVerification(entry, record));
+  const detail = record ? 'STALE' : 'NOT_VERIFIED';
+  const dispatch: Diagnostic = !fresh
+    ? { id: 'DISPATCH', state: 'UNKNOWN', detail }
+    : { id: 'DISPATCH', state: dispatchOpen(record) ? 'CONFIRMED' : 'UNAVAILABLE' };
+  const capabilities: Diagnostic[] = agyCapabilities.map(name => {
+    if (!fresh) return { id: `CAPABILITY_${name}`, state: 'UNKNOWN' };
+    const recorded = record.capabilities[name];
+    return { id: `CAPABILITY_${name}`, state: recorded === 'NOT_RUN' ? 'UNKNOWN' : recorded };
+  });
+  let isolation: Diagnostic;
+  if (!fresh) isolation = { id: 'MCP_ISOLATION', state: 'UNKNOWN', detail };
+  else if (record.capabilities.MCP_ISOLATION === 'CONFIRMED') isolation = { id: 'MCP_ISOLATION', state: 'ENFORCED' };
+  else if (record.capabilities.MCP_ISOLATION === 'NOT_RUN') isolation = { id: 'MCP_ISOLATION', state: 'UNKNOWN', detail: 'private home only; loaded servers not observable' };
+  else isolation = { id: 'MCP_ISOLATION', state: 'NOT_GUARANTEED' };
+  return [dispatch, ...capabilities, isolation];
+}
 
 export async function harnessDiagnostics(entry: HarnessEntry, context: {
   version?: string; dataDir: string; platform?: NodeJS.Platform; check?: typeof checkDshRunDirectory;
   helpRunner?: Parameters<typeof isolationDiagnostic>[1]['helpRunner'];
 }): Promise<Diagnostic[]> {
+  if (entry.id === 'agy') return agyDiagnostics(entry, context);
   const isolation = await isolationDiagnostic(entry, { ...context, ownerDshPatchArgs });
   if (entry.id !== 'dsh') return [isolation];
   const { dataDir, version, platform = process.platform, check = checkDshRunDirectory } = context;

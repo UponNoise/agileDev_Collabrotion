@@ -33,7 +33,7 @@ export class Coordinator {
   constructor(private store: Store, private options: RunnerOptions) {
     this.now = options.now ?? Date.now;
     this.adapter = options.adapter ?? new NativeAdapter();
-    this.flow = new Workflow(store, this.now, harness => this.canConsult(harness));
+    this.flow = new Workflow(store, this.now, harness => this.canConsult(harness), harness => this.canDispatch(harness));
     this.concurrency = options.concurrency ?? 2;
     this.executionDependencies = resolveExecutionDependencies(options.executionDependencies);
     this.checks = new CheckExecutor(store);

@@ -58,7 +58,7 @@ async function fixture(t: TestContext) {
   });
   write(owner.actor, 'qa_configure', { ...thread, expectedVersion: current().version, actorId: qa.actor.id, harness: 'claude-code', checkProfileIds: [profile.id] });
   let coordinator: Coordinator | undefined;
-  const app = createServer(store, undefined, harness => coordinator?.canConsult(harness) === true);
+  const app = createServer(store, undefined, { consultAvailable: harness => coordinator?.canConsult(harness) === true });
   const endpoint = await app.listen({ host: '127.0.0.1', port: 0 });
   coordinator = new Coordinator(store, { endpoint, directory: join(root, 'runs'), bridgeScript: resolve('dist/cli.js'), adapter, concurrency: 1, now: () => now });
   t.after(async () => {

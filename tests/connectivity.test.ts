@@ -37,7 +37,7 @@ test('the first MCP tool requests see their host connection metadata', { timeout
   let release!: () => void;
   const entered = new Promise<void>(resolve => { arrived = resolve; });
   const ready = new Promise<void>(resolve => { release = resolve; });
-  const server = createServer(store, undefined, () => true);
+  const server = createServer(store, undefined, { consultAvailable: () => true });
   server.addHook('preHandler', async request => {
     if (request.routeOptions.url === '/api/connection') {
       arrived();

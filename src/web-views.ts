@@ -1,11 +1,12 @@
-import { Actor, CheckRun, Design, Issue, Run, Snapshot, Workspace, liveRunStates } from './contracts.js';
+import { Actor, CheckRun, Design, Harness, Issue, Run, Snapshot, Workspace, harnesses, liveRunStates } from './contracts.js';
 import { Store } from './store.js';
 
 export function workspaceView(
   store: Store,
   workspace: Workspace,
   a: Record<string, any>,
-  display: (issue: Issue) => unknown
+  display: (issue: Issue) => unknown,
+  dispatchHarnesses: Harness[] = [...harnesses]
 ) {
   const cursor = (
     store.db
@@ -64,7 +65,8 @@ export function workspaceView(
     actors: store.list<Actor>('actor').filter((actor) => !actor.runId && actor.workspaceIds.includes(workspace.id)),
     profiles: store.list('check_profile', workspace.id),
     connections: store.list('connection', workspace.id),
-    designs: store.list<Design>('design', workspace.id).map(({ id, issueId, status }) => ({ id, issueId, status }))
+    designs: store.list<Design>('design', workspace.id).map(({ id, issueId, status }) => ({ id, issueId, status })),
+    dispatchHarnesses
   };
 }
 export function issueView(store: Store, issue: Issue, a: Record<string, any>) {

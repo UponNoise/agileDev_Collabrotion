@@ -11,7 +11,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { inside } from './paths.js';
 export { inside } from './paths.js';
-import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Issue, Operation, Plan, QaReport, Run, RunBase, ScopeDecision, Snapshot, Workspace, harnesses, liveRunStates, ownsIssueExecution, runBaseReasons, schemas } from './contracts.js';
+import { Actor, CheckProfile, CheckRun, Design, DomainError, GitAttempt, GitBinding, GitRepositoryEntry, GitSubmission, Grant, Harness, Issue, Operation, Plan, QaReport, Run, RunBase, ScopeDecision, Snapshot, Workspace, harnesses, liveRunStates, ownsIssueExecution, runBaseReasons, schemas } from './contracts.js';
 import { canonical, hash, Store } from './store.js';
 import { acceptanceDigest, candidateSnapshot, integrationManifest, qaChecksPending, queueQa, validateIntegration, validateQaReport } from './qa-policy.js';
 import { githubCommitUrl, inspectGitBinding, normalizeLegacyAttempt, submissionEntries } from './git.js';
@@ -30,7 +30,12 @@ function version(issue: Issue, expected: number) {
   if (issue.version !== expected) throw new DomainError('VERSION_CONFLICT', 'Issue changed; reload before retrying', 409, { currentVersion: issue.version });
 }
 export class Workflow {
-  constructor(readonly store: Store, readonly now = () => Date.now(), private consultAvailable?: ConsultAvailability) {
+  constructor(
+    readonly store: Store,
+    readonly now = () => Date.now(),
+    private consultAvailable?: ConsultAvailability,
+    private dispatchAvailable?: (harness: Harness) => boolean,
+  ) {
     store.db.transaction(() => store.list<Workspace>('workspace').forEach(workspace => this.defects().migrate(workspace.id))).immediate();
   }
   consultRun(actor: Actor) {
@@ -99,7 +104,7 @@ export class Workflow {
     };
     if (op.startsWith('ui_')) {
       requireRole(actor,'human');
-      if (op === 'ui_workspace') return workspaceView(s,workspace,a,issue => this.display(issue));
+      if (op === 'ui_workspace') return workspaceView(s, workspace, a, issue => this.display(issue), harnesses.filter(harness => !this.dispatchAvailable || this.dispatchAvailable(harness)));
       if (op === 'ui_runs') return runsView(s,workspace.id,a);
       const issue = s.issue(actor,workspace.id,a.issueId);
       return { ...this.read(actor,'issue_get',a) as object,...issueView(s,issue,a) };
@@ -478,6 +483,7 @@ export class Workflow {
     if (i.artifactMode !== 'artifact' && root.designBindingId && root.designBindingId !== workspace.gitBindingId) blocking.push('DESIGN_BINDING_STALE');
     if (this.design(i)?.status !== 'APPROVED') blocking.push('DESIGN_APPROVAL_REQUIRED');
     if (!i.assignee) blocking.push('ASSIGNEE_REQUIRED');
+    if (admission && i.harness && this.dispatchAvailable && !this.dispatchAvailable(i.harness)) blocking.push('HARNESS_NOT_VERIFIED');
     if (!i.criteria.length) blocking.push('CRITERIA_REQUIRED');
     if (!i.description.trim()) blocking.push('SCOPE_REQUIRED');
     if (i.state === 'ON_HOLD' || (i.parentId && this.store.get<Issue>('issue', i.parentId).state === 'ON_HOLD')) blocking.push('ON_HOLD');
@@ -1030,6 +1036,7 @@ export class Workflow {
       const reviewer = s.get<Actor>('actor',a.actorId);
       if (reviewer.role !== 'qa' || reviewer.runId || !reviewer.workspaceIds.includes(w.id) || reviewer.id === i.assignee) throw new DomainError('REVIEW_INDEPENDENCE_REQUIRED','Select an independent logical QA actor in this workspace');
       for (const id of a.checkProfileIds) if (s.get<CheckProfile>('check_profile',id).workspaceId !== w.id) throw new DomainError('SCOPE_DENIED','Check profile belongs to another workspace',403);
+      if (this.dispatchAvailable && !this.dispatchAvailable(a.harness)) throw new DomainError('HARNESS_NOT_VERIFIED', 'This harness has not been verified on this computer', 409, { harness: a.harness });
       i.qaAssignee = reviewer.id; i.qaHarness = a.harness; i.checkProfileIds = [...new Set<string>(a.checkProfileIds)];
       const run = i.state === 'QA_TEST' ? queueQa(s,i) : null;
       return { ...this.save(actor,op,i,{ runId: run?.id }), run };
@@ -1132,6 +1139,7 @@ export class Workflow {
       if ((a.actorId === null) !== (a.harness === null)) throw new DomainError('ASSIGNMENT_INVALID','Select a worker and harness together, or clear both');
       const assigned = a.actorId ? s.get<Actor>('actor', a.actorId) : null;
       if (assigned && (assigned.role !== 'worker' || assigned.runId || !assigned.workspaceIds.includes(w.id))) throw new DomainError('SCOPE_DENIED', 'Assignment requires a logical worker in this workspace');
+      if (a.harness !== null && this.dispatchAvailable && !this.dispatchAvailable(a.harness)) throw new DomainError('HARNESS_NOT_VERIFIED', 'This harness has not been verified on this computer', 409, { harness: a.harness });
       i.assignee = assigned?.id ?? null; i.harness = a.harness; i.lease = null;
       return this.save(actor, op, i);
     }

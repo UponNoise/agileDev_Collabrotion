@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
-import { Actor, DomainError } from './contracts.js';
+import { Actor, DomainError, type Harness } from './contracts.js';
 import { Store } from './store.js';
 import { Workflow } from './workflow.js';
 import type { ConsultAvailability } from './consult.js';
@@ -12,11 +12,15 @@ import { dirname,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 declare module 'fastify' { interface FastifyRequest { actor: Actor; browserSession?: string } }
-export function createServer(store: Store, lifecycle?: { instance: string; stop(): Promise<void> }, consultAvailable?: ConsultAvailability) {
+export function createServer(
+  store: Store,
+  lifecycle?: { instance: string; stop(): Promise<void> },
+  options: { consultAvailable?: ConsultAvailability; dispatchAvailable?: (harness: Harness) => boolean } = {}
+) {
   const app = Fastify({ logger: false, bodyLimit: 262144, requestTimeout: 15000 });
   const shutdown = new AbortController();
   app.addHook('preClose', async () => { shutdown.abort(); });
-  const workflow = new Workflow(store, Date.now, consultAvailable);
+  const workflow = new Workflow(store, Date.now, options.consultAvailable, options.dispatchAvailable);
   const sessions = new WebSessions(store);
   app.addHook('onRequest', async (request,reply) => {
     reply.headers({ 'cache-control': 'no-store','referrer-policy': 'no-referrer','x-content-type-options': 'nosniff','x-frame-options': 'DENY','content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" });

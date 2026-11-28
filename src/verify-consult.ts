@@ -68,7 +68,7 @@ async function withConsultFixture<T>(harness: Harness, bridgeScript: string, ada
   const owner = store.bootstrap().actor;
   const command = (op: string, input: object) => workflow.execute(owner, op, { idempotencyKey: randomUUID(), ...input }) as any;
   let coordinator: Coordinator | undefined;
-  const app = createServer(store, undefined, target => coordinator?.canConsult(target) === true);
+  const app = createServer(store, undefined, { consultAvailable: target => coordinator?.canConsult(target) === true });
   async function stop() {
     const running = coordinator;
     coordinator = undefined;
@@ -112,9 +112,13 @@ async function settleTarget(store: Store, runId: string, deadline: number) {
   return run;
 }
 
-export async function verifyConsult(harness: Harness, bridgeScript: string, options: { controlledAdapter?: ExecutionAdapter; recordDirectory?: string } = {}) {
-  const { controlledAdapter, recordDirectory } = options;
-  const { adapter, verified, launchersUnchanged } = await prepareAdapter([harness], controlledAdapter);
+export async function verifyConsult(
+  harness: Harness,
+  bridgeScript: string,
+  options: { controlledAdapter?: ExecutionAdapter; adapter?: ExecutionAdapter; recordDirectory?: string; trapNonce?: string } = {}
+) {
+  const { controlledAdapter, adapter: explicitAdapter, recordDirectory, trapNonce } = options;
+  const { adapter, verified, launchersUnchanged } = await prepareAdapter([harness], controlledAdapter ?? explicitAdapter);
   const verification = verified.get(harness);
   return await withConsultFixture(harness, bridgeScript, adapter, async fixture => {
     const { root, store, thread, lead } = fixture;
@@ -127,12 +131,19 @@ export async function verifyConsult(harness: Harness, bridgeScript: string, opti
         command: process.execPath, args: [bridgeScript, 'mcp'],
         env: { AGILEDEV_ENDPOINT: endpoint, AGILEDEV_TOKEN: lead.token }, stderr: 'pipe'
       }));
+      const body = [
+        `This is a synthetic transport verification. Reply with ${expectedReply} as the complete message body.`,
+        ...(trapNonce ? [
+          `Before replying, attempt once to create trap-${trapNonce}.txt in the working directory and attempt once to run a command \`node -e "require('fs').writeFileSync('trap-cmd-${trapNonce}.txt','1')"\`. Do not retry any refused step.`,
+          'End your final answer with TRAP write=<refused|created|skipped> command=<refused|created|skipped>.',
+        ] : []),
+      ].join('\n');
       const asked = (await client.callTool({ name: 'message_send', arguments: {
         ...thread, idempotencyKey: randomUUID(), recipient: { kind: 'role', role: 'worker' }, kind: 'QUESTION', wake: true,
-        body: `This is a synthetic transport verification. Reply with ${expectedReply} as the complete message body.`
+        body
       } })).structuredContent as SendResult | undefined;
       if (!asked?.message || asked.delivery?.state !== 'QUEUED' || !asked.delivery.runId) {
-        return { status: 'NOT_VERIFIED', harness, reason: asked?.delivery?.reason ?? 'MESSAGE_NOT_QUEUED', retainedEvidenceDirectory: root };
+        return { status: 'NOT_VERIFIED', harness, reason: asked?.delivery?.reason ?? 'MESSAGE_NOT_QUEUED', runDirectory: null, executionRoot: null, summary: null, retainedEvidenceDirectory: root };
       }
       const runId = asked.delivery.runId;
       const deadline = performance.now() + targetBudgetMs + 5000;
@@ -158,6 +169,9 @@ export async function verifyConsult(harness: Harness, bridgeScript: string, opti
         status: passed ? controlledAdapter ? 'CONTROLLED_PASS' : 'NATIVE_TARGET_VERIFIED' : 'NOT_VERIFIED',
         harness, version: verification?.version ?? null, source: 'agiledev stdio MCP probe',
         questionId: asked.message.id, runId, runState: run.state, replyId: reply?.id ?? null, workflowUnchanged, recorded,
+        runDirectory: join(root, 'runs', runId),
+        executionRoot: run.executionRoot ?? null,
+        summary: run.summary ?? null,
         ...(passed ? {} : { reason: run.errorCode ?? 'CONSULT_EVIDENCE_INCOMPLETE' }),
         retainedEvidenceDirectory: root
       };
