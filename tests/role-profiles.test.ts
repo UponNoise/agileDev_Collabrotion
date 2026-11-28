@@ -213,6 +213,8 @@ test('real stdio MCP advertises complete described role profiles and rejects for
       if (heartbeat) assert.match(heartbeat.description ?? '', /EXECUTION_BINDING_REQUIRED for a logical worker\./);
       const submit = tools.find(tool => tool.name === 'work_submit');
       if (submit) assert.match(submit.description ?? '', /EXECUTION_BINDING_REQUIRED for a logical worker\./);
+      const complete = tools.find(tool => tool.name === 'delivery_complete');
+      if (complete) assert.match(complete.description ?? '', /CLOSURE_BLOCKED lists the remaining blockers and changes nothing\./);
       for (const name of ['delivery_decide', 'work_claim', ...(role === 'worker' || role === 'qa' ? ['iteration_get'] : [])]) {
         const result = await client.callTool({ name, arguments: { expectedVersion: -1, iteration: 'legacy' } });
         assert.equal(result.isError, true);
@@ -225,4 +227,25 @@ test('real stdio MCP advertises complete described role profiles and rejects for
       assert.equal((result.structuredContent as any).workspaces[0].id, f.workspace.id);
     } finally { await client.close(); }
   }
+});
+
+test('HTTP delivery_complete refusal returns 409 with blockers and caller issue_get remedy', async t => {
+  const f = fixture(t);
+  const server = createServer(f.store);
+  t.after(() => server.close());
+  const issue = (f.flow.execute(f.human.actor, 'issue_create', { workspaceId: f.workspace.id, title: 'Blocked completion HTTP check', idempotencyKey: randomUUID() }) as any).issue;
+  f.store.put('issue', { ...issue, state: 'USER_ACCEPTANCE', candidate: { id: randomUUID(), workerId: f.agents.worker.actor.id, sessionId: f.agents.worker.actor.sessionId, designId: randomUUID(), files: [], hash: 'h', summary: 's', snapshotId: randomUUID() } }, f.workspace.id);
+  const before = f.unchanged();
+  const response = await server.inject({
+    method: 'POST', url: '/api/command/delivery_complete',
+    headers: { host: '127.0.0.1', authorization: `Bearer ${f.agents.pm.token}` },
+    payload: { workspaceId: f.workspace.id, issueId: issue.id, expectedVersion: issue.version, idempotencyKey: randomUUID() }
+  });
+  assert.equal(response.statusCode, 409);
+  const error = response.json().error;
+  assert.equal(error.code, 'CLOSURE_BLOCKED');
+  assert.ok(Array.isArray(error.details?.blockers) && error.details.blockers.length > 0);
+  assert.equal(error.remedy.role, 'caller');
+  assert.equal(error.remedy.operation, 'issue_get');
+  assert.equal(f.unchanged(), before);
 });

@@ -1009,8 +1009,8 @@ export class Workflow {
         s.put('delivery_approval',approval,w.id); i.acceptedDigest = grant.digest;
       }
       const blockers = this.closureBlockers(i);
-      if (grant && blockers.length) throw new DomainError('CLOSURE_BLOCKED','Delegated completion still requires all delivery guards',409,{ blockers });
-      if (!blockers.length) i.state = 'DONE';
+      if (blockers.length) throw new DomainError('CLOSURE_BLOCKED', 'Completion needs every closure check to pass; nothing was changed', 409, { blockers });
+      i.state = 'DONE';
       return { ...this.save(actor,op,i,{ closureBlocked: blockers,...(grant ? { grantId: grant.id,grantorId: grant.grantorId } : {}) }),closureBlocked: blockers };
     }
     if (op === 'qa_configure') {

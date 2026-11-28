@@ -147,6 +147,7 @@ const specificRejections: Partial<Record<Operation, string>> = {
   qa_configure: 'REVIEW_INDEPENDENCE_REQUIRED if the selected reviewer cannot act independently.',
   git_submit: 'GIT_BINDING_REQUIRED or COMMIT_REPOSITORY_MISMATCH requires the bound remote.',
   git_retry: 'GIT_EVIDENCE_STALE if the current commit mapping changed.',
+  delivery_complete: 'CLOSURE_BLOCKED lists the remaining blockers and changes nothing.',
   message_send: 'MESSAGE_NOT_VISIBLE for hidden references. MESSAGE_INDEPENDENCE_REQUIRED blocks worker–QA messages. MESSAGE_RECIPIENT_UNAVAILABLE requires another recipient.'
 };
 export const operationProfiles = entries;

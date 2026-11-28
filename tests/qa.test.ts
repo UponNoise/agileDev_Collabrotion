@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Store } from '../src/store.js';
+import { Store, canonical } from '../src/store.js';
 import { Workflow } from '../src/workflow.js';
 import { Actor, CheckRun, Issue, QaReport, Run, Snapshot } from '../src/contracts.js';
 import { Coordinator } from '../src/runner.js';
@@ -392,6 +392,21 @@ async function reviewedGitFixture() {
   } catch (error) { await f.close(); throw error; }
 }
 
+function assertBlockedCompletion(store: Store, issueId: string, fn: () => unknown, expectedBlockers: string[]) {
+  const beforeIssue = canonical(store.get<Issue>('issue', issueId));
+  const beforeReceipts = canonical(store.db.prepare('SELECT * FROM receipts ORDER BY rowid').all());
+  const beforeEvents = canonical(store.db.prepare('SELECT * FROM events ORDER BY rowid').all());
+  assert.throws(fn, (error: any) => {
+    assert.equal(error.code, 'CLOSURE_BLOCKED');
+    assert.deepEqual(error.details.blockers, expectedBlockers);
+    return true;
+  });
+  assert.equal(canonical(store.get<Issue>('issue', issueId)), beforeIssue);
+  assert.equal(canonical(store.db.prepare('SELECT * FROM receipts ORDER BY rowid').all()), beforeReceipts);
+  assert.equal(canonical(store.db.prepare('SELECT * FROM events ORDER BY rowid').all()), beforeEvents);
+  assert.equal(store.get<Issue>('issue', issueId).state, 'USER_ACCEPTANCE');
+}
+
 const lastFinish = (f: any, submissionId: string) => JSON.parse((f.store.db.prepare("SELECT data FROM events WHERE workspace_id=? AND operation='git_verification_finished' AND target_id=? ORDER BY sequence DESC LIMIT 1").get(f.workspace.id,submissionId) as { data: string }).data);
 
 test('Git recovery records readiness only; explicit completion closes the saved acceptance without a second approval', { timeout: 20000 },async () => {
@@ -447,9 +462,7 @@ test('a minor defect confirmed after acceptance blocks closure until explicitly 
       gap.issueId === f.issue.id && gap.code === 'HUMAN_DECISION_AGING'));
     f.change('issue_update', f.issue.id, { dueDate: '2026-12-01' });
     assert.equal(inbox().pendingSequence, triageEvent.sequence);
-    const close = f.change('delivery_complete', f.issue.id, {}, f.lead);
-    assert.deepEqual(close.closureBlocked, ['MINOR_ACKNOWLEDGEMENT_REQUIRED']);
-    assert.equal(f.current(f.issue.id).state, 'USER_ACCEPTANCE');
+    assertBlockedCompletion(f.store, f.issue.id, () => f.change('delivery_complete', f.issue.id, {}, f.lead), ['MINOR_ACKNOWLEDGEMENT_REQUIRED']);
     assert.equal(packet().deliveryDigest, accepted.approval.digest);
     const renewed = f.delivery();
     assert.deepEqual(renewed.approval.acknowledgedMinors, [{ id: proposal.id, version: open.defect.version }]);
@@ -466,7 +479,7 @@ test('an existing remote commit with a different complete tree cannot close a re
     assert.throws(() => f.change('git_submit',f.issue.id,{ candidateId: f.current(f.issue.id).candidate!.id,commitUrl: `https://github.com/wrong/repository/commit/${f.sha}` }),(e: any) => e.code === 'COMMIT_REPOSITORY_MISMATCH');
     const git = f.attach(); f.delivery(); verifier.tick(); await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'FAILED');
     assert.equal(f.store.get<GitSubmission>('git_submission',git.id).errorCode,'COMMIT_SNAPSHOT_MISMATCH'); assert.equal(f.current(f.issue.id).state,'USER_ACCEPTANCE'); assert.equal(lastFinish(f,git.id).readyToComplete,false);
-    const result = f.change('delivery_complete',f.issue.id,{},f.lead); assert.deepEqual(result.closureBlocked,['COMMIT_SNAPSHOT_MISMATCH']); assert.equal(result.issue.state,'USER_ACCEPTANCE');
+    assertBlockedCompletion(f.store, f.issue.id, () => f.change('delivery_complete',f.issue.id,{},f.lead), ['COMMIT_SNAPSHOT_MISMATCH']);
   } finally { await verifier.close(); await f.close(); }
 });
 
@@ -481,7 +494,9 @@ test('changing the final commit mapping invalidates acceptance and stale provide
     await until(() => f.store.get<GitSubmission>('git_submission',original.id).state === 'FAILED');
     assert.equal(f.store.get<GitSubmission>('git_submission',original.id).errorCode,'GIT_EVIDENCE_STALE');
     assert.equal(f.current(f.issue.id).state,'USER_ACCEPTANCE'); assert.throws(() => f.delivery('ACCEPT',digest),(e: any) => e.code === 'APPROVAL_STALE');
-    const incomplete = f.change('delivery_complete',f.issue.id,{},f.lead); assert.ok(incomplete.closureBlocked.includes('HUMAN_ACCEPTANCE_REQUIRED'));
+    const expectedBlockers = f.flow.closureBlockers(f.current(f.issue.id));
+    assert.ok(expectedBlockers.includes('HUMAN_ACCEPTANCE_REQUIRED'));
+    assertBlockedCompletion(f.store, f.issue.id, () => f.change('delivery_complete',f.issue.id,{},f.lead), expectedBlockers);
   } finally { await verifier.close(); await f.close(); }
 });
 
@@ -494,5 +509,22 @@ test('a hold keeps verified delivery unready and saved acceptance can complete a
     await until(() => f.store.get<GitSubmission>('git_submission',git.id).state === 'VERIFIED'); assert.equal(f.current(f.issue.id).state,'ON_HOLD'); assert.equal(lastFinish(f,git.id).readyToComplete,false);
     f.change('issue_transition',f.issue.id,{ action: 'resume',reason: 'Resume exact fixture delivery' });
     const result = f.change('delivery_complete',f.issue.id,{},f.lead); assert.equal(result.issue.state,'DONE'); assert.equal(f.store.list('delivery_approval',f.workspace.id).length,1);
+  } finally { await verifier.close(); await f.close(); }
+});
+
+test('a refused completion stores nothing and does not poison a replayed key', { timeout: 20000 }, async () => {
+  const f = await reviewedGitFixture();
+  const verifier = new GitVerifier(f.store, new GitHubProvider(async () => Response.json({ sha: f.sha, tree: { sha: f.tree } }), () => undefined));
+  try {
+    const git = f.attach();
+    f.delivery();
+    const input = { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.current(f.issue.id).version, idempotencyKey: randomUUID() };
+    assertBlockedCompletion(f.store, f.issue.id, () => f.flow.execute(f.lead, 'delivery_complete', input), ['GIT_VERIFICATION_PENDING']);
+    verifier.tick();
+    await until(() => f.store.get<GitSubmission>('git_submission', git.id).state === 'VERIFIED');
+    const closed = f.flow.execute(f.lead, 'delivery_complete', input) as any;
+    assert.equal(closed.replayed, undefined);
+    assert.equal(closed.issue.state, 'DONE');
+    assert.deepEqual(closed.closureBlocked, []);
   } finally { await verifier.close(); await f.close(); }
 });

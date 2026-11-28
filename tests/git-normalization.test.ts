@@ -26,6 +26,21 @@ const seal = (root: string, candidateFiles: string[], destination: string, git: 
   const candidate: Candidate = { id: randomUUID(), workerId, sessionId, designId: 'fixture-design', files, hash: hash(canonical(files)), summary: 'Normalization fixture candidate', executionRoot: root, ...(runId ? { runId } : {}) };
   return { candidate, snapshot: sealSnapshot(candidate, workspaceId, issueId, destination, git) };
 };
+function assertBlockedCompletion(store: Store, issueId: string, fn: () => unknown, expectedBlockers: string[], expectedCode?: string, name?: string) {
+  const beforeIssue = canonical(store.get<Issue>('issue', issueId));
+  const beforeReceipts = canonical(store.db.prepare('SELECT * FROM receipts ORDER BY rowid').all());
+  const beforeEvents = canonical(store.db.prepare('SELECT * FROM events ORDER BY rowid').all());
+  assert.throws(fn, (error: any) => {
+    assert.equal(error.code, 'CLOSURE_BLOCKED', name);
+    assert.deepEqual(error.details.blockers, expectedBlockers, name);
+    if (expectedCode) assert.ok(error.details.blockers.includes(expectedCode), name);
+    return true;
+  });
+  assert.equal(canonical(store.get<Issue>('issue', issueId)), beforeIssue, name);
+  assert.equal(canonical(store.db.prepare('SELECT * FROM receipts ORDER BY rowid').all()), beforeReceipts, name);
+  assert.equal(canonical(store.db.prepare('SELECT * FROM events ORDER BY rowid').all()), beforeEvents, name);
+  assert.equal(store.get<Issue>('issue', issueId).state, 'USER_ACCEPTANCE', name);
+}
 
 test('seal normalization records Git blob SHAs under eol=crlf so the committed tree matches', () => {
   const base = mkdtempSync(join(tmpdir(), 'agiledev-eol-attrs-'));
@@ -181,9 +196,7 @@ test('multi-repository verification requires every entry to verify and reports p
     assert.equal(secondary.evidenceRole, 'reference');
     assert.deepEqual(f.closureBlocked().filter((code: string) => code.startsWith('GIT')), []);
     assert.ok(f.closureBlocked().includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
-    const complete = f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }) as any;
-    assert.ok(complete.closureBlocked.includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
-    assert.equal(complete.issue.state, 'USER_ACCEPTANCE');
+    assertBlockedCompletion(f.store, f.issue.id, () => f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }), f.closureBlocked(), 'MULTI_REPOSITORY_CLOSURE_UNSUPPORTED');
   } finally { await verifier.close(); await f.close(); }
 });
 
@@ -428,9 +441,7 @@ test('legacy fallback never grants closure authority to a mismatched attempt ide
     const f = await legacyClosureFixture(mutate);
     try {
       assert.ok(f.closureBlocked().includes('GIT_EVIDENCE_STALE'));
-      const result = f.closeAttempt();
-      assert.ok(result.closureBlocked.includes('GIT_EVIDENCE_STALE'));
-      assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+      assertBlockedCompletion(f.store, f.issue.id, f.closeAttempt, f.closureBlocked(), 'GIT_EVIDENCE_STALE');
     } finally { await f.close(); }
   }
 });
@@ -440,9 +451,7 @@ test('stale candidate, snapshot, or binding mapping stays blocked', async () => 
     const f = await legacyClosureFixture(mutate);
     try {
       assert.ok(f.closureBlocked().includes('GIT_EVIDENCE_STALE'));
-      const result = f.closeAttempt();
-      assert.ok(result.closureBlocked.includes('GIT_EVIDENCE_STALE'));
-      assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+      assertBlockedCompletion(f.store, f.issue.id, f.closeAttempt, f.closureBlocked(), 'GIT_EVIDENCE_STALE');
     } finally { await f.close(); }
   }
 });
@@ -460,9 +469,7 @@ test('malformed legacy records fail closed without crashing', async () => {
       const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: f.issue.id }) as any;
       assert.equal(view.git.id, f.git.id);
       assert.ok(f.closureBlocked().includes('GIT_EVIDENCE_STALE'));
-      const result = f.closeAttempt();
-      assert.ok(result.closureBlocked.includes('GIT_EVIDENCE_STALE'));
-      assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+      assertBlockedCompletion(f.store, f.issue.id, f.closeAttempt, f.closureBlocked(), 'GIT_EVIDENCE_STALE');
     } finally { await f.close(); }
   }
 });
@@ -480,9 +487,7 @@ test('multi-entry packets keep the closure blocker even with unshaped attempts',
     const blocked = f.closureBlocked();
     assert.ok(blocked.includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
     assert.ok(blocked.includes('GIT_EVIDENCE_STALE'));
-    const result = f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }) as any;
-    assert.ok(result.closureBlocked.includes('MULTI_REPOSITORY_CLOSURE_UNSUPPORTED'));
-    assert.equal(result.issue.state, 'USER_ACCEPTANCE');
+    assertBlockedCompletion(f.store, f.issue.id, () => f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: f.issue.id, expectedVersion: f.store.get<Issue>('issue', f.issue.id).version, idempotencyKey: randomUUID() }), blocked, 'MULTI_REPOSITORY_CLOSURE_UNSUPPORTED');
   } finally { await f.close(); }
 });
 
@@ -617,8 +622,7 @@ test('only genuine legacy shape and exact current proof identities can clear del
         s.put('git_submission', git, f.workspace.id); s.put('git_attempt', attempt, f.workspace.id);
         const view = f.flow.execute(f.owner, 'issue_get', { workspaceId: f.workspace.id, issueId: issue.id }) as any;
         assert.ok(view.closureBlocked.includes('GIT_EVIDENCE_STALE'), `${legacy ? 'legacy' : 'modern'}: ${name}`);
-        const completed = f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: issue.id, expectedVersion: s.get<Issue>('issue', issue.id).version, idempotencyKey: randomUUID() }) as any;
-        assert.equal(completed.issue.state, 'USER_ACCEPTANCE', name);
+        assertBlockedCompletion(s, issue.id, () => f.flow.execute(f.owner, 'delivery_complete', { workspaceId: f.workspace.id, issueId: issue.id, expectedVersion: s.get<Issue>('issue', issue.id).version, idempotencyKey: randomUUID() }), view.closureBlocked, 'GIT_EVIDENCE_STALE', name);
         assert.equal(canonical(s.get('git_attempt', attempt.id)), canonical(attempt), name);
       }
     } finally { await f.close(); }
