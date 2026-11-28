@@ -41,6 +41,7 @@ test('the native adapter gates only DSH SDK launches before generating the patch
     "import { createInterface } from 'node:readline';",
     'const [harness, ...args] = process.argv.slice(2);',
     "if (args.includes('--version')) { console.log('fixture-version'); process.exit(0); }",
+    "if (args.includes('--dump-config')) { console.log('- id: fixture-row'); process.exit(0); }",
     "writeFileSync('started', '');",
     'const emit = value => console.log(JSON.stringify(value));',
     "if (args.includes('sdk')) {",
@@ -174,18 +175,21 @@ test('DSH diagnostics show the rights result, inherited directory and documented
   assert.deepEqual(linux[0], { id: 'RUN_DIRECTORY_RIGHTS', state: 'NOT_APPLICABLE', detail: 'platform linux' });
   assert.equal(linux[1]?.state, 'NOT_APPLICABLE');
   for (const id of ['codex', 'claude-code'] as const) {
-    assert.deepEqual(await harnessDiagnostics({ ...dsh, id }, { dataDir, check }), []);
+    const diagnostics = await harnessDiagnostics({ ...dsh, id }, { dataDir, check, helpRunner: async () => '' });
+    assert.deepEqual(diagnostics.map(entry => entry.id), ['MCP_ISOLATION']);
   }
 });
 
-test('doctor includes diagnostics on every discovered harness', { timeout: 25000 }, t => {
+test('doctor includes diagnostics on every discovered harness', { timeout: 25000 }, async t => {
   const dataDir = mkdtempSync(join(tmpdir(), 'agiledev-directory-doctor-cli-'));
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
   mkdirSync(join(dataDir, 'runs'));
+  const broken = join(dataDir, process.platform === 'win32' ? 'broken.exe' : 'broken');
+  writeFileSync(broken, 'fixture launcher with no executable code');
   const output = execFileSync(process.execPath, [resolve('dist/cli.js'), 'doctor'], {
     env: {
       ...process.env, AGILEDEV_DATA_DIR: dataDir, AGILEDEV_DSH_PATH: process.execPath, AGILEDEV_CODEX_PATH: process.execPath,
-      APPDATA: dataDir, LOCALAPPDATA: dataDir, PATH: '',
+      APPDATA: dataDir, LOCALAPPDATA: dataDir, PATH: '', AGILEDEV_CLAUDE_PATH: broken,
     },
     encoding: 'utf8', timeout: 20000, windowsHide: true,
   });
@@ -193,9 +197,14 @@ test('doctor includes diagnostics on every discovered harness', { timeout: 25000
   for (const entry of report.harnesses) assert.ok(Array.isArray(entry.diagnostics));
   const dsh = report.harnesses.find((entry: HarnessEntry) => entry.id === 'dsh');
   assert.ok(dsh?.available);
+  const unavailable = report.harnesses.find((entry: HarnessEntry) => entry.id === 'claude-code');
+  assert.equal(unavailable?.available, false);
+  assert.deepEqual(unavailable.diagnostics, []);
   const windows = process.platform === 'win32';
+  const rights = await checkDshRunDirectory(join(dataDir, 'runs'));
   assert.deepEqual(dsh.diagnostics.map(({ id, state }: { id: string; state: string }) => ({ id, state })), [
-    { id: 'RUN_DIRECTORY_RIGHTS', state: windows ? 'OK' : 'NOT_APPLICABLE' },
+    { id: 'RUN_DIRECTORY_RIGHTS', state: rights.state },
     { id: 'PIPED_CHILD_PROCESSES', state: windows ? 'UNKNOWN' : 'NOT_APPLICABLE' },
+    { id: 'MCP_ISOLATION', state: 'NOT_GUARANTEED' },
   ]);
 });

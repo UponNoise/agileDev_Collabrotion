@@ -111,6 +111,7 @@ test('DSH SDK defaults to DeepSeek Flash and supports the selected Gemini route 
       "import { writeFileSync } from 'node:fs';",
       "import { createInterface } from 'node:readline';",
       'const args = process.argv.slice(2);',
+      "if (args.includes('--dump-config')) { console.log('- id: fixture-row'); process.exit(0); }",
       "writeFileSync('sdk-args.json', JSON.stringify(args));",
       'const print = value => console.log(JSON.stringify(value));',
       'for await (const line of createInterface({ input: process.stdin })) {',
@@ -120,7 +121,9 @@ test('DSH SDK defaults to DeepSeek Flash and supports the selected Gemini route 
       '  print({ jsonrpc: "2.0", id: request.id, result: {} });',
       '}',
     ].join('\n'));
-    const adapter = new NativeAdapter(() => [{ id: 'dsh', command: process.execPath, args: [script] }]);
+    const adapter = new NativeAdapter(() => [{ id: 'dsh', command: process.execPath, args: [script] }], new Map(), {
+      runDirectoryCheck: async () => ({ state: 'OK', missing: [] }),
+    });
     let settings: RunModelSettings = {};
     const launch = {
       harness: 'dsh' as const, cwd: root, directory: root, prompt: 'Fixture prompt', endpoint: 'http://127.0.0.1:1', token: 'fixture',
@@ -177,6 +180,7 @@ test('fresh consult adapters preserve capability gates and parse all three nativ
       "import { writeFileSync } from 'node:fs';",
       'const [harness, ...args] = process.argv.slice(2);',
       "if (args.includes('--version')) { console.log('controlled-version'); process.exit(0); }",
+      "if (args.includes('--dump-config')) { console.log('- id: fixture-row'); process.exit(0); }",
       'let prompt = ""; for await (const chunk of process.stdin) prompt += String(chunk);',
       'writeFileSync("fixture-invocation.json", JSON.stringify({ args, prompt }));',
       "const emit = value => console.log(JSON.stringify(value));",

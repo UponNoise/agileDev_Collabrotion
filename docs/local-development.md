@@ -251,6 +251,14 @@ Git jobs use detached worktrees from the source's committed HEAD; uncommitted so
 
 Codex uses native `exec --json` with `workspace-write` and per-invocation AgileDev MCP configuration for managed implementation. Only the AgileDev MCP tool group is explicitly approved; API role/scope checks still apply and human-only commands are absent from the agent tool surface. Claude uses its native print/stream-JSON mode with session-only `acceptEdits` and the scoped MCP configuration. DSH uses its SDK profile with approval forwarding for managed implementation and QA; unanswered approval/user-input requests are denied or cancelled until a human UI is implemented. Fresh consults use the separate read-only launch configuration, including the DSH headless profile.
 
+### Managed MCP isolation
+
+- Codex passes `--ignore-user-config` for every managed run. The owner's entire `config.toml` is skipped, including custom model providers, sandbox network settings, trusted projects, shell environment policy, features, plugins and MCP servers. AgileDev passes `windows.sandbox="elevated"` on Windows to keep the sandbox that confines `workspace-write`. An older CLI that rejects the flag fails before starting a model.
+- Claude Code passes `--strict-mcp-config --mcp-config <file>` for every managed run. The generated file lists only AgileDev.
+- DSH dumps the selected profile's composed configuration, including an optional owner overlay. AgileDev disables each other top-level MCP client row by ID in its generated overlay. A manager row, a client row without an ID, or a failed or unreadable dump refuses the launch with `MCP_ISOLATION_UNAVAILABLE`. The built-in `mcp-resources` and `browser-use-playwright-mcp` rows stay enabled where configured. The inspection cannot detect servers registered by other plugins, rows nested inside group rows, or wrapper plugins with other names.
+
+`node dist/cli.js doctor` reports `MCP_ISOLATION` as `ENFORCED`, `NOT_GUARANTEED` or `UNKNOWN`. This checks documented CLI flags and, for DSH, the current SDK and headless compositions. It does not measure the tools visible to a model. Antigravity is covered by ADC-0011.
+
 On Windows, the DSH SDK sandbox needs `WRITE_DAC` and `WRITE_OWNER` on the execution workspace. AgileDev checks the current account's effective rights before starting a DSH worker or QA run. If Windows denies either right, the run fails before the model starts and names the missing rights. The owner can grant their account Full control over the `runs` directory and its subfolders. For example, run this in Command Prompt as the owner:
 
 ```cmd

@@ -197,6 +197,8 @@ Handoff must state implemented behavior, criteria covered, evidence references, 
 
 ## 7. Adapter capability matrix and release status
 
+For Antigravity managed MCP isolation, see ADC-0011.
+
 The matrix below records the original plugin-first proposal. The user's 2026-11-09 accepted delivery amendment replaces mandatory native plugin packages and embedded harness views with a primary desktop application plus verified MCP access from all three harnesses and browser fallback. Native plugins/views are optional shortcuts. Other required capability rows remain mandatory and require current evidence.
 
 | Capability | Codex local | Claude Code | DSH |
@@ -205,6 +207,7 @@ The matrix below records the original plugin-first proposal. The user's 2026-11-
 | Validated active workspace binding | Required; explicit selection fallback | Required; explicit selection fallback | Required; explicit selection fallback |
 | Same workspace visible from another entry | Required | Required | Required |
 | Scoped worker/QA identity | Required | Required | Required |
+| Owner's other MCP servers excluded from managed runs | `--ignore-user-config`, with `windows.sandbox="elevated"` on Windows | `--strict-mcp-config` | Disable top-level client rows identified by `--dump-config` |
 | Native plugin package and installation | Required | Required | Required |
 | Browser dashboard and approval link | Required | Required | Required |
 | Embedded overview/review view | P1 surface probe; P5 result required | P1 surface probe; browser baseline | P1 surface probe; P5 result required |
