@@ -1003,6 +1003,9 @@ test('the changed-content codes are recognized and have sentences', () => {
     assert.equal(isChangedContentCode(code), true);
     assertKnown(errorSentence(code), code);
   }
+  assert.equal(isChangedContentCode('CLOSURE_BLOCKED'), true);
+  assert.equal(renderSentence(errorSentence('CLOSURE_BLOCKED'), 'en'), 'It cannot be completed yet; a closing check is not met');
+  assert.equal(renderSentence(errorSentence('CLOSURE_BLOCKED'), 'zh-CN'), '现在还不能完成，有关闭条件尚未满足');
   assert.equal(isChangedContentCode('INVALID_INPUT'), false);
 });
 
@@ -1289,7 +1292,8 @@ test('history sentences use the recorded event shape', () => {
   assert.equal(historySentence('work_dispatch', { name: 'Dev' })?.key, 'dispatched it to {name}');
   assert.equal(historySentence('work_claim')?.key, 'started');
   assert.equal(historySentence('work_submit')?.key, 'delivered for initial review');
-  assert.equal(historySentence('delivery_complete')?.key, 'completed it');
+  assert.equal(historySentence('delivery_complete', { state: 'DONE' })?.key, 'completed it');
+  assert.equal(historySentence('delivery_complete', { state: 'USER_ACCEPTANCE' }), null);
   assert.equal(historySentence('some_future_operation')?.key, 'some_future_operation');
 
   const machine = [
